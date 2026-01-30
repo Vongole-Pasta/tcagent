@@ -1,0 +1,327 @@
+from infra.db_client import DBClient
+import logging
+import hashlib
+import tree_sitter
+import re
+from core.analysis.strategies.base import BaseFlowStrategy
+
+logger = logging.getLogger(__name__)
+
+class JavaFlowStrategy(BaseFlowStrategy):  # Inherit for helpers if needed, but mainly standalone in provided code
+    def __init__(self, connector: DBClient):
+        super().__init__(connector)
+        # 자바에서 자주 쓰이는 Collection, Map 등의 제네릭 타입을 처리하기 위한 정규식
+        self.generic_pattern = re.compile(r"<.*>")
+
+    def process(self, tree: tree_sitter.Tree, source_code: bytes, file_path: str, scan_id: str = None):
+        root_node = tree.root_node
+        
+        # 1. 패키지 정보 추출
+        package_name = self._get_package_name(root_node, source_code)
+        
+        # 2. 클래스/인터페이스 추출
+        self._traverse_types(root_node, source_code, file_path, package_name, scan_id=scan_id)
+
+    def _get_package_name(self, root_node, source_code):
+        for child in root_node.children:
+            if child.type == "package_declaration":
+                # 예: package com.example.demo;
+                # 'scoped_identifier' 또는 'identifier' 자식 노드를 찾음
+                name_node = child.child_by_field_name("name")
+                if name_node:
+                    return source_code[name_node.start_byte:name_node.end_byte].decode("utf-8")
+        return ""
+
+    def _traverse_types(self, node, source_code: bytes, file_path: str, package_name: str, parent_class_name: str = "", scan_id: str = None):
+        """재귀적으로 클래스 구조를 탐색"""
+        for child in node.children:
+            if child.type in ["class_declaration", "interface_declaration", "enum_declaration", "record_declaration"]:
+                self._process_type_declaration(child, source_code, file_path, package_name, parent_class_name, scan_id)
+            
+            # Inner class 처리를 위해 재귀 탐색은 필요한가? 
+            # -> class_declaration 내부의 class_body 내부를 봐야 함.
+            if child.type == "class_body":
+                self._traverse_types(child, source_code, file_path, package_name, parent_class_name, scan_id)
+
+    def _process_type_declaration(self, node, source_code: bytes, file_path: str, package_name: str, parent_name: str, scan_id: str = None):
+        name_node = node.child_by_field_name("name")
+        if not name_node:
+            return
+            
+        class_name = source_code[name_node.start_byte:name_node.end_byte].decode("utf-8")
+        full_name = f"{package_name}.{class_name}" if package_name else class_name
+        if parent_name:
+            full_name = f"{parent_name}${class_name}" # Inner Class 컨벤션
+
+        # 노드 생성: CLASS (Interface도 CLASS로 통합 관리하되 type 속성으로 구분)
+        type_str = "CLASS"
+        if node.type == "interface_declaration":
+            type_str = "INTERFACE"
+        elif node.type == "enum_declaration":
+             type_str = "ENUM"
+        
+        # DB 저장
+        self._create_type_node(full_name, class_name, package_name, type_str, file_path)
+        
+        # 메서드 추출을 위해 class_body 탐색
+        body_node = node.child_by_field_name("body")
+        if body_node:
+            # Class Level Annotation (Base URL)
+            base_url = self._extract_base_url(node, source_code)
+            self._process_methods(body_node, source_code, full_name, file_path, scan_id, base_url)
+            
+            # Inner Class 재귀 호출
+            self._traverse_types(body_node, source_code, file_path, package_name, full_name, scan_id)
+
+    def _create_type_node(self, full_name, name, package_name, type_str, file_path):
+        query = """
+        MERGE (c:CLASS {fullName: $full_name})
+        SET c.name = $name,
+            c.package = $package_name,
+            c.type = $type_str
+        
+        WITH c
+        MATCH (f:FILE {path: $file_path})
+        MERGE (f)-[:DEFINES]->(c)
+        
+        // 패키지 노드 연결 (Optional)
+        MERGE (p:PACKAGE {fullName: $package_name})
+        ON CREATE SET p.name = split($package_name, '.')[-1]
+        MERGE (c)-[:BELONGS_TO]->(p)
+        """
+        self.connector.execute_query(query, {
+            "full_name": full_name,
+            "name": name,
+            "package_name": package_name,
+            "type_str": type_str,
+            "file_path": file_path
+        })
+
+    def _process_methods(self, class_body_node, source_code: bytes, class_full_name: str, file_path: str, scan_id: str, base_url: str):
+        for child in class_body_node.children:
+            if child.type == "method_declaration" or child.type == "constructor_declaration":
+                self._process_single_method(child, source_code, class_full_name, scan_id, base_url)
+
+    def _extract_base_url(self, node, source_code: bytes):
+        modifiers = node.child_by_field_name("modifiers")
+        if not modifiers:
+            # Fallback for tree-sitter-java: find parsing node by type
+            for child in node.children:
+                if child.type == "modifiers":
+                    modifiers = child
+                    break
+        
+        if not modifiers:
+            return ""
+        
+        for child in modifiers.children:
+            if child.type == "annotation" or child.type == "marker_annotation":
+                name_node = child.child_by_field_name("name")
+                if not name_node:
+                    continue
+                name_text = source_code[name_node.start_byte:name_node.end_byte].decode("utf-8")
+                
+                if "RequestMapping" in name_text:
+                    return self._extract_annotation_value(child, source_code)
+        return ""
+
+    def _extract_annotation_value(self, node, source_code: bytes):
+        args = node.child_by_field_name("arguments")
+        if not args:
+            return ""
+        
+        # 괄호 안의 내용 파싱 (@RequestMapping("/api") -> /api)
+        # arguments 노드의 자식 중 string_literal 찾기
+        for child in args.children:
+            if child.type == "string_literal":
+                return source_code[child.start_byte:child.end_byte].decode("utf-8").strip('"')
+            elif child.type == "element_value_pair":
+                # value="/api" 형태
+                key = child.child_by_field_name("key")
+                value = child.child_by_field_name("value")
+                if key and value:
+                    key_text = source_code[key.start_byte:key.end_byte].decode("utf-8")
+                    if key_text == "value" or key_text == "path":
+                         return source_code[value.start_byte:value.end_byte].decode("utf-8").strip('"')
+        return ""
+
+    def _process_single_method(self, method_node, source_code: bytes, class_full_name: str, scan_id: str, base_url: str):
+        name_node = method_node.child_by_field_name("name")
+        # Constructor의 경우 name이 메서드명과 동일
+        if method_node.type == "constructor_declaration":
+             pass
+        
+        if not name_node:
+            return
+
+        method_name = source_code[name_node.start_byte:name_node.end_byte].decode("utf-8")
+        
+        # 파라미터 리스트 추출 (Signature 생성을 위해)
+        params_node = method_node.child_by_field_name("parameters")
+        param_list = []
+        if params_node:
+            for param in params_node.children:
+                if param.type == "formal_parameter":
+                    # Type + Name
+                    p_type_node = param.child_by_field_name("type")
+                    p_name_node = param.child_by_field_name("name")
+                    if p_type_node and p_name_node:
+                        p_type = source_code[p_type_node.start_byte:p_type_node.end_byte].decode("utf-8")
+                        # 제네릭 제거 (List<String> -> List) - 단순화
+                        p_type_simple = self.generic_pattern.sub("", p_type)
+                        param_list.append(p_type_simple)
+        
+        # Signature: com.example.MyClass.myMethod(String,int)
+        signature = f"{class_full_name}.{method_name}({','.join(param_list)})"
+        
+        # Source Code (Body 전체)
+        # method_declaration 전체 텍스트
+        full_source = source_code[method_node.start_byte:method_node.end_byte].decode("utf-8")
+        
+        # DB 저장
+        # Hashing for Smart Update
+        method_hash = hashlib.sha256(full_source.encode('utf-8')).hexdigest()
+        
+        # Endpoint Extraction
+        endpoint = ""
+        http_method = ""
+        
+        # Extract Method Annotations
+        modifiers = method_node.child_by_field_name("modifiers")
+        if not modifiers:
+             # Fallback
+            for child in method_node.children:
+                if child.type == "modifiers":
+                    modifiers = child
+                    break
+
+        if modifiers:
+            for child in modifiers.children:
+                 if child.type == "annotation" or child.type == "marker_annotation":
+                    name_node = child.child_by_field_name("name")
+                    if not name_node: continue
+                    a_name = source_code[name_node.start_byte:name_node.end_byte].decode("utf-8")
+                    
+                    # Mapping Check
+                    extracted_path = self._extract_annotation_value(child, source_code)
+                    
+                    if "GetMapping" in a_name:
+                        http_method = "GET"
+                        endpoint = self._combine_url(base_url, extracted_path)
+                    elif "PostMapping" in a_name:
+                        http_method = "POST"
+                        endpoint = self._combine_url(base_url, extracted_path)
+                    elif "PutMapping" in a_name:
+                        http_method = "PUT"
+                        endpoint = self._combine_url(base_url, extracted_path)
+                    elif "DeleteMapping" in a_name:
+                        http_method = "DELETE"
+                        endpoint = self._combine_url(base_url, extracted_path)
+                    elif "PatchMapping" in a_name:
+                        http_method = "PATCH"
+                        endpoint = self._combine_url(base_url, extracted_path)
+                    elif "RequestMapping" in a_name:
+                        http_method = "ALL" # or unknown
+                        endpoint = self._combine_url(base_url, extracted_path)
+
+        # DB 저장 (Updated Logic)
+        self._create_method_node(signature, method_name, full_source, class_full_name, ",".join(param_list), method_hash, scan_id, endpoint, http_method)
+        
+        # Call 관계 추출 및 저장 (1단계: 텍스트 기반 호출 추출)
+        # 메서드 바디(Body) 내부 탐색
+        body_node = method_node.child_by_field_name("body")
+        if body_node:
+            calls = {} # Key: (methodName, objectName), Value: count
+            self._extract_method_calls(body_node, source_code, signature, calls)
+            
+            for (target_name, obj_name), count in calls.items():
+                self._create_call_node(signature, target_name, obj_name, count)
+
+    def _combine_url(self, base, path):
+        if not base: base = ""
+        if not path: path = ""
+        base = base.rstrip("/")
+        path = path.lstrip("/")
+        return f"{base}/{path}"
+
+    def _create_method_node(self, signature, name, source, class_full_name, args, method_hash, scan_id, endpoint, http_method):
+        query = """
+        MERGE (m:METHOD {signature: $signature})
+        
+        // Hash Check & Status Update
+        WITH m, $method_hash as new_hash, $scan_id as current_scan_id
+        
+        // Determine Status: If hash matches, AS-IS. Else (New or Changed), TO-BE.
+        SET m.status = CASE 
+            WHEN m.hash = new_hash THEN 'AS-IS' 
+            ELSE 'TO-BE' 
+        END
+        
+        // Update Properties
+        SET m.name = $name,
+            m.source = $source,
+            m.args = $args,
+            m.hash = new_hash,
+            m.last_scan_id = current_scan_id,
+            m.endpoint = $endpoint,
+            m.http_method = $http_method
+        
+        WITH m
+        MATCH (c:CLASS {fullName: $class_full_name})
+        MERGE (c)-[:CONTAINS]->(m)
+        """
+        self.connector.execute_query(query, {
+            "signature": signature,
+            "name": name,
+            "source": source,
+            "class_full_name": class_full_name,
+            "args": args,
+            "method_hash": method_hash,
+            "scan_id": scan_id,
+            "endpoint": endpoint,
+            "http_method": http_method
+        })
+
+    def _extract_method_calls(self, node, source_code: bytes, caller_signature: str, calls: dict):
+        # 재귀적으로 method_invocation 찾기
+        for child in node.children:
+            if child.type == "method_invocation":
+                self._process_invocation(child, source_code, caller_signature, calls)
+            
+            # 재귀 진입 (단, class_declaration 등 중첩 클래스 정의는 제외해야 함)
+            if child.type not in ["class_declaration", "interface_declaration", "method_declaration"]:
+                 self._extract_method_calls(child, source_code, caller_signature, calls)
+
+    def _process_invocation(self, invocation_node, source_code: bytes, caller_signature: str, calls: dict):
+        # 구조: object.methodName(args)
+        # object는 'expression' 필드, methodName은 'name' 필드
+        
+        obj_node = invocation_node.child_by_field_name("object")
+        name_node = invocation_node.child_by_field_name("name")
+        
+        if not name_node:
+            return
+            
+        method_name = source_code[name_node.start_byte:name_node.end_byte].decode("utf-8")
+        
+        obj_name = ""
+        if obj_node:
+            obj_name = source_code[obj_node.start_byte:obj_node.end_byte].decode("utf-8")
+        
+        # Aggregate call count
+        key = (method_name, obj_name)
+        calls[key] = calls.get(key, 0) + 1
+
+    def _create_call_node(self, caller_signature, target_method_name, object_name, count):
+        query = """
+        MATCH (m:METHOD {signature: $caller_signature})
+        CREATE (c:CALL {methodName: $target_method_name, count: $count})
+        SET c.objectName = $object_name
+        MERGE (m)-[:HAS_CALL]->(c)
+        """
+        self.connector.execute_query(query, {
+            "caller_signature": caller_signature,
+            "target_method_name": target_method_name,
+            "object_name": object_name,
+            "count": count
+        })
