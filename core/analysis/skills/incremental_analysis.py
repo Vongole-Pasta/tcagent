@@ -25,77 +25,45 @@ class IncrementalAnalyzer:
         """
         updated_files = []
         
-        # Calculate common root from file paths
-        if files_data:
-            paths = [f['path'] for f in files_data]
-            if len(paths) > 1:
-                # Find common prefix
-                common_parts = []
-                first_parts = paths[0].split('/')
-                for i, part in enumerate(first_parts):
-                    if all(p.split('/')[i] == part if i < len(p.split('/')) else False for p in paths):
-                        common_parts.append(part)
-                    else:
-                        break
-                upload_root = '/'.join(common_parts) if common_parts else ''
-            else:
-                upload_root = os.path.dirname(paths[0])
-        else:
-            upload_root = ''
+        if not files_data:
+            return []
+
+        # [CRITICAL UPDATE]
+        # GraphRag logic normally strips common path (upload_root).
+        # However, for tcagent multi-project support in DB, we must ensure UNIQUE paths.
+        # If we strip common path, different projects will have same paths (e.g. 'src/main/...') and Collide.
+        # So we DISABLE stripping here to simulate distinct folders.
+        # Or, we prepend project name if needed. 
+        # For now, we use the path AS IS from the ZIP, assuming user zipped the project folder.
+        
+        # upload_root logic removed/disabled.
+        upload_root = '' 
         
         for file_data in files_data:
             file_path = file_data['path']
             content = file_data['content']
             
-            # Check Java extension
-            if not file_path.endswith(".java"):
-                continue
-
             logger.info(f"Processing {file_path} from memory")
             
             try:
                 # 1. Create FILE node (without disk file)
                 file_hash = self.ingestor.calculate_file_hash_from_content(content)
-                relative_path = os.path.relpath(file_path, upload_root) if upload_root else file_path
+                # Ensure path is unique by prepending project if it's not already in path
+                # But to follow GraphRag strictly, we just use the path.
+                # If user zips 'src/...', path is 'src/...'.
+                
+                relative_path = file_path # No stripping
                 file_name = os.path.basename(file_path)
                 
-                # Language is Java
-                language = "JAVA"
+                # Determine language
+                ext = os.path.splitext(file_name)[1]
+                language = Config.ALLOWED_EXTENSIONS.get(ext, "UNKNOWN")
                 
-                # 1. Determine Status (Project check & Hash compare)
-                status = "CLEAN"
-                if project:
-                    # Check existing file node
-                    existing_node = self.connector.execute_query(
-                        "MATCH (f:FILE {path: $path, project: $project}) RETURN f.hash as hash",
-                        {"path": relative_path, "project": project}
-                    )
-                    
-                    if existing_node:
-                        # File exists, check hash
-                        old_hash = existing_node[0]['hash']
-                        if old_hash != file_hash:
-                            status = "MODIFIED"
-                        else:
-                            status = "CLEAN"
-                    else:
-                        # File does not exist
-                        # Check if project itself exists (to distinguish New Project vs New File)
-                        proj_check = self.connector.execute_query(
-                            "MATCH (f:FILE {project: $project}) RETURN count(f) as c",
-                            {"project": project}
-                        )
-                        if proj_check and proj_check[0]['c'] > 0:
-                            status = "NEW" # Existing project, new file
-                        else:
-                            status = "CLEAN" # Brand new project -> Initial import is CLEAN
-
                 query = """
                 MERGE (f:FILE {path: $path, project: $project})
                 SET f.name = $name,
                     f.hash = $hash,
-                    f.language = $language,
-                    f.status = $status
+                    f.language = $language
                 """
                 
                 self.connector.execute_query(query, {
@@ -103,11 +71,11 @@ class IncrementalAnalyzer:
                     "name": file_name,
                     "hash": file_hash,
                     "language": language,
-                    "project": project,
-                    "status": status
+                    "project": project
                 })
                 
                 # 2. Architecture Analysis from memory
+                # GraphRag Builders DO NOT ingest project! They rely on file path unique match.
                 self.arch_builder.process_file_from_content(relative_path, content)
                 
                 # 3. Flow Analysis from memory
@@ -119,11 +87,9 @@ class IncrementalAnalyzer:
             except Exception as e:
                 logger.error(f"Failed to process {file_path} from memory: {e}")
         
-        # 4. Global Resolution (Once per batch)
+        # 4. Global Resolution
         if updated_files:
             logger.info("Re-resolving global call topology...")
-            # FlowBuilder has _resolve_calls but it's internal. Should expose or access?
-            # Accessing protected member is fine in Python but maybe I should expose it.
             self.flow_builder._resolve_calls()
             
         return updated_files

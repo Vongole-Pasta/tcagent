@@ -9,19 +9,18 @@ logger = logging.getLogger(__name__)
 class ArchitectureBuilder:
     def __init__(self, connector: DBClient):
         self.connector = connector
+        # self.embedding_service = EmbeddingService()
 
     def process_file_from_content(self, file_path: str, content: bytes):
         """
         신규 방식: 메모리에 있는 파일 내용을 직접 처리 (디스크 I/O 없음)
-        AnalysisFlow에서는 상대 경로를 사용함.
+        
+        Args:
+            file_path: 파일의 상대 경로 (DB 저장용)
+            content: 파일의 바이너리 내용
         """
         self._cleanup_file_data(file_path)
         _, ext = os.path.splitext(file_path)
-        
-        # Only Java
-        if ext != ".java":
-            return
-
         try:
             # 1. 파싱
             parser = ParserFactory.get_parser(ext)
@@ -32,7 +31,8 @@ class ArchitectureBuilder:
             logger.debug(f"Parsing {file_path} from memory with {ext}")
 
             # 2. 쿼리 실행
-            self._analyze_java(language, tree.root_node, content, file_path)
+            if ext == ".java":
+                self._analyze_java(language, tree.root_node, content, file_path)
 
         except Exception as e:
             logger.error(f"Failed to process {file_path} from memory: {e}")
@@ -67,6 +67,7 @@ class ArchitectureBuilder:
             logger.warning(f"Java query error: {e}")
 
     def _create_type_decl(self, name, full_name, file_path, line_number, source_code=""):
+        # embedding = self.embedding_service.get_embedding(source_code)
         embedding = None
         
         query = """

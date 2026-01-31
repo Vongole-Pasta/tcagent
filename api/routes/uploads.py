@@ -10,8 +10,10 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
+from typing import List, Optional
+    
 @router.post("/upload")
-async def upload_files(request: Request, project: str = Form(...), files: List[UploadFile] = File(...)):
+async def upload_files(request: Request, project: Optional[str] = Form(None), files: List[UploadFile] = File(...)):
     """
     소스 파일 또는 ZIP 파일을 업로드하고 분석을 시작합니다.
     - 개별 파일: 메모리에서 직접 분석
@@ -22,10 +24,15 @@ async def upload_files(request: Request, project: str = Form(...), files: List[U
     if not analysis_flow:
         raise HTTPException(status_code=503, detail="Analysis Agent not initialized")
     
-    # Auto-detect project name logic (Simplified)
-    safe_project = "".join(c for c in project if c.isalnum() or c in ('-', '_'))
-    if not safe_project:
-        safe_project = "default"
+    # Project Name Logic
+    # 1. If provided, use it.
+    # 2. If not, wait until we see a Zip file to decide.
+    safe_project = None
+    if project:
+        safe_project = "".join(c for c in project if c.isalnum() or c in ('-', '_'))
+    
+    # If still None, we will set it from the first Zip file found.
+
     
     files_data = [] # [{"path": "relative/path.java", "content": b"..."}]
     
@@ -36,6 +43,11 @@ async def upload_files(request: Request, project: str = Form(...), files: List[U
         
         # Check ZIP
         if file.filename.endswith('.zip'):
+             if not safe_project:
+                 # Default project name from Zip filename
+                 raw_name = os.path.splitext(file.filename)[0]
+                 safe_project = "".join(c for c in raw_name if c.isalnum() or c in ('-', '_'))
+             
              try:
                 zip_content = await file.read()
                 zip_buffer = io.BytesIO(zip_content)
@@ -69,6 +81,9 @@ async def upload_files(request: Request, project: str = Form(...), files: List[U
         raise HTTPException(status_code=400, detail="No valid Java files found")
         
     # Process Files
+    if not safe_project:
+        safe_project = "default_project"
+
     try:
         # Calls IncrementalAnalyzer.process_files_from_memory
         result_files = analysis_flow.incremental_analyzer.process_files_from_memory(files_data, project=safe_project)
@@ -80,7 +95,7 @@ async def upload_files(request: Request, project: str = Form(...), files: List[U
                 """
                 MATCH (f:FILE {path: $path, project: $project})-[:AST|CONTAINS|DEFINES*]->(m:METHOD)
                 WITH DISTINCT m, f
-                RETURN m.name as name, m.signature as sig, elementId(m) as id, f.status as status, f.path as file
+                RETURN m.name as name, m.signature as sig, elementId(m) as id, f.path as file
                 """,
                 {"path": rel_path, "project": safe_project}
             )
@@ -90,7 +105,7 @@ async def upload_files(request: Request, project: str = Form(...), files: List[U
                         "id": m.get('id'),
                         "name": m.get('name'),
                         "file": m.get('file'),
-                        "status": m.get('status', 'CLEAN'),
+                        "status": "Unknown", # f.status Removed
                         "signature": m.get('sig')
                     })
         

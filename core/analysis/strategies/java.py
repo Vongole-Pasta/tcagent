@@ -7,7 +7,7 @@ from core.analysis.strategies.base import BaseFlowStrategy
 
 logger = logging.getLogger(__name__)
 
-class JavaFlowStrategy(BaseFlowStrategy):  # Inherit for helpers if needed, but mainly standalone in provided code
+class JavaFlowStrategy(BaseFlowStrategy):
     def __init__(self, connector: DBClient):
         super().__init__(connector)
         # 자바에서 자주 쓰이는 Collection, Map 등의 제네릭 타입을 처리하기 위한 정규식
@@ -59,6 +59,10 @@ class JavaFlowStrategy(BaseFlowStrategy):  # Inherit for helpers if needed, but 
             type_str = "INTERFACE"
         elif node.type == "enum_declaration":
              type_str = "ENUM"
+        
+        # Docstring (Javadoc) 추출 - 보통 클래스 선언 직전의 comment
+        # tree-sitter에서 comment는 형제 노드로 존재함. (바로 위)
+        # 복잡하므로 일단 생략하거나 간단히 구현.
         
         # DB 저장
         self._create_type_node(full_name, class_name, package_name, type_str, file_path)
@@ -149,6 +153,8 @@ class JavaFlowStrategy(BaseFlowStrategy):  # Inherit for helpers if needed, but 
         name_node = method_node.child_by_field_name("name")
         # Constructor의 경우 name이 메서드명과 동일
         if method_node.type == "constructor_declaration":
+            # 생성자는 이름이 별도로 없고 클래스명과 동일 -> tree-sitter 구조 확인 필요
+            # java parser에서 constructor_declaration의 name 필드는 클래스명을 가리킴
              pass
         
         if not name_node:
@@ -303,6 +309,10 @@ class JavaFlowStrategy(BaseFlowStrategy):  # Inherit for helpers if needed, but 
             return
             
         method_name = source_code[name_node.start_byte:name_node.end_byte].decode("utf-8")
+        
+        # 1. 만약 obj_node가 있다면? (예: memberService.login)
+        # -> 변수 이름을 통해 타입을 유추해야 함. (현재 심볼 테이블 부재로 인해 어려움)
+        # -> 하지만 "변수명"이라도 저장하여 나중에 쿼리로 연결을 시도할 수 있게 함.
         
         obj_name = ""
         if obj_node:
