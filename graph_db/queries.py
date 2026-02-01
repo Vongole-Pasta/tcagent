@@ -56,6 +56,7 @@ class CypherQueries:
     
     DELETE_FILE_NODES = """
     MATCH (f:FILE {path: $file_path})
-    OPTIONAL MATCH (f)-[:AST*]->(n)
-    DETACH DELETE n
+    OPTIONAL MATCH (f)-[:CONTAINS*]->(n)
+    OPTIONAL MATCH (n)-[:HAS_CALL]->(c:CALL)
+    DETACH DELETE n, c
     """

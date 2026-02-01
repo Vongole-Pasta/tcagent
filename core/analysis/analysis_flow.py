@@ -31,13 +31,7 @@ class AnalysisFlow:
              changes = []
         
         # 2. Incremental Update (Graph Sync)
-        # Note: IncrementalAnalyzer.process_changes (disk based) is not implemented in my lean version
-        # because I focused on process_files_from_memory for the /upload endpoint.
-        # If disk scanning is needed, I should implement process_changes in IncrementalAnalyzer.
-        # But for now, returning empty logic or raising error.
-        
-        # TODO: Implement disk-based process_changes if required.
-        logger.warning("Disk-based scan is not fully implemented in this lean version.")
+        # Disk-based analysis is deprecated. Only memory-based analysis is supported via /upload endpoint.
         
         return {
             "changes": changes,

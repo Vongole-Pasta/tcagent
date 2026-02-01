@@ -4,9 +4,7 @@ import uuid
 
 import os
 import logging
-from core.analysis.strategies.python import PythonFlowStrategy
 from core.analysis.strategies.java import JavaFlowStrategy
-from core.analysis.strategies.typescript import TypeScriptFlowStrategy
 from core.analysis.parser_factory import ParserFactory
 
 logger = logging.getLogger(__name__)
@@ -15,12 +13,7 @@ class FlowBuilder:
     def __init__(self, connector: DBClient):
         self.connector = connector
         self.strategies = {
-            ".py": PythonFlowStrategy(connector),
             ".java": JavaFlowStrategy(connector),
-            ".ts": TypeScriptFlowStrategy(connector),
-            ".tsx": TypeScriptFlowStrategy(connector),
-            ".js": TypeScriptFlowStrategy(connector),
-            ".jsx": TypeScriptFlowStrategy(connector),
         }
 
 
@@ -57,9 +50,9 @@ class FlowBuilder:
         MATCH (f:FILE {path: $file_path})
         
         // 1. 메서드 자식 노드 (제어구조, 호출, 파라미터, 반환, 어노테이션)
-        // 메서드는 FILE 또는 TYPE_DECL로부터 [:AST]로 연결될 수 있음
-        OPTIONAL MATCH (f)-[:AST*1..2]->(m:METHOD)
-        OPTIONAL MATCH (m)-[:Contains|HAS_PARAM|HAS_EXIT|ANNOTATED_BY]->(child)
+        // 메서드는 FILE 또는 TYPE_DECL로부터 [:CONTAINS]로 연결될 수 있음
+        OPTIONAL MATCH (f)-[:CONTAINS*1..2]->(m:METHOD)
+        OPTIONAL MATCH (m)-[:Contains|HAS_PARAM|HAS_EXIT|ANNOTATED_BY|HAS_CALL]->(child)
         WHERE child:CONTROL_STRUCTURE OR child:CALL OR child:PARAMETER OR child:RETURN OR child:ANNOTATION
         
         // 1.1 제어 구조에 첨부된 리터럴(Literal)
@@ -88,11 +81,12 @@ class FlowBuilder:
         MATCH (f:FILE {path: $file_path})
         
         // 1. 해당 파일에 속한 메서드 중 last_scan_id가 현재 id와 다른 것 찾기
-        MATCH (f)-[:AST|DEFINES|CONTAINS*1..3]->(m:METHOD)
+        // 1. 해당 파일에 속한 메서드 중 last_scan_id가 현재 id와 다른 것 찾기
+        MATCH (f)-[:CONTAINS*1..3]->(m:METHOD)
         WHERE m.last_scan_id <> $scan_id
         
         // 2. 메서드의 자식 노드들도 같이 삭제 (파라미터, 호출 등)
-        OPTIONAL MATCH (m)-[:Contains|HAS_PARAM|HAS_EXIT|ANNOTATED_BY]->(child)
+        OPTIONAL MATCH (m)-[:Contains|HAS_PARAM|HAS_EXIT|ANNOTATED_BY|HAS_CALL]->(child)
         WHERE child:CONTROL_STRUCTURE OR child:CALL OR child:PARAMETER OR child:RETURN OR child:ANNOTATION
         
         // 3. 자식의 자식 (Literal 등)

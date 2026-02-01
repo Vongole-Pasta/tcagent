@@ -28,14 +28,6 @@ class ParserFactory:
 
     @staticmethod
     def _get_language_name(extension: str):
-        if extension == ".py":
-            return "python"
-        elif extension == ".java":
+        if extension == ".java":
             return "java"
-        elif extension in [".js", ".jsx"]:
-            return "javascript"
-        elif extension == ".ts":
-            return "typescript"
-        elif extension == ".tsx":
-            return "tsx"
         return None

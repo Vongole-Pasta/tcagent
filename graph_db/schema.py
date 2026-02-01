@@ -41,14 +41,11 @@ NODE_SCHEMA = {
 
 RELATIONSHIP_SCHEMA = [
     # Format: StartLabel -> RelationshipType -> EndLabel
-    "TYPE_DECL -> BELONGS_TO -> NAMESPACE_BLOCK",
+    "NAMESPACE_BLOCK -> CONTAINS -> TYPE_DECL",
     "TYPE_DECL -> CONTAINS -> METHOD",
-    "FILE -> AST -> METHOD",
-    "FILE -> AST -> NAMESPACE_BLOCK",
-    "FILE -> AST -> TYPE_DECL",
+    "FILE -> CONTAINS -> NAMESPACE_BLOCK",
+    "FILE -> CONTAINS -> TYPE_DECL",
     "FILE -> CONTAINS -> METHOD",
-    "FILE -> DEFINES -> TYPE_DECL",
-    "FILE -> DEFINES -> METHOD",
     "METHOD -> CALLS -> ExternalCall",
     "METHOD -> CALLS -> METHOD"
 ]
@@ -63,8 +60,5 @@ class NodeLabel:
 
 class EdgeType:
     """Dynamic Enum-like access for Edge Types"""
-    BELONGS_TO = "BELONGS_TO"
     CONTAINS = "CONTAINS"
-    AST = "AST"
-    DEFINES = "DEFINES"
     CALLS = "CALLS"
