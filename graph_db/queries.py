@@ -29,6 +29,12 @@ class CypherQueries:
     WHERE elementId(m) = $method_id OR m.id = $method_id
     RETURN c.name as class_name, c.source as class_source
     """
+
+    GET_METHOD_FILE = """
+    MATCH (m:METHOD)<-[:CONTAINS]-(c:TYPE_DECL)<-[:CONTAINS]-(f:FILE)
+    WHERE elementId(m) = $method_id OR m.id = $method_id
+    RETURN f.path as file_path, f.name as file_name
+    """
     
     # --- Impact Analysis Queries ---
     
@@ -45,18 +51,4 @@ class CypherQueries:
     GET_FILE_HASH = """
     MATCH (f:FILE {path: $file_path})
     RETURN f.hash as hash
-    """
-    
-    UPDATE_FILE_HASH = """
-    MERGE (f:FILE {path: $file_path})
-    SET f.hash = $new_hash
-    """
-    
-    # --- Cleanup Queries ---
-    
-    DELETE_FILE_NODES = """
-    MATCH (f:FILE {path: $file_path})
-    OPTIONAL MATCH (f)-[:CONTAINS*]->(n)
-    OPTIONAL MATCH (n)-[:HAS_CALL]->(c:CALL)
-    DETACH DELETE n, c
     """

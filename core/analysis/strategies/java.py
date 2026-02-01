@@ -86,10 +86,12 @@ class JavaFlowStrategy:
         MATCH (f:FILE {path: $file_path})
         MERGE (f)-[:CONTAINS]->(c)
         
-        // 패키지 노드 연결 (Optional)
+        // 패키지 노드 연결 (Namespace -> File)
         MERGE (p:NAMESPACE_BLOCK {fullName: $package_name})
         ON CREATE SET p.name = split($package_name, '.')[-1]
-        MERGE (p)-[:CONTAINS]->(c)
+        
+        // Ensure Package contains File
+        MERGE (p)-[:CONTAINS]->(f)
         """
         self.connector.execute_query(query, {
             "full_name": full_name,

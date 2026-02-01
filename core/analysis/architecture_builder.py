@@ -102,6 +102,11 @@ class ArchitectureBuilder:
             t.type = $type,
             t.embedding = $embedding
         MERGE (f)-[:CONTAINS]->(t)
+        
+        // Ensure Package -> File link
+        MERGE (p:NAMESPACE_BLOCK {fullName: $package})
+        ON CREATE SET p.name = split($package, '.')[-1]
+        MERGE (p)-[:CONTAINS]->(f)
         """
         try:
             self.connector.execute_query(query, {
@@ -121,7 +126,8 @@ class ArchitectureBuilder:
         MATCH (f:FILE {path: $file_path})
         MERGE (n:NAMESPACE_BLOCK {fullName: $name})
         SET n.name = $name
-        MERGE (f)-[:CONTAINS]->(n)
+        // Link Package -> File
+        MERGE (n)-[:CONTAINS]->(f)
         """
         try:
             self.connector.execute_query(query, {
@@ -138,7 +144,7 @@ class ArchitectureBuilder:
         query = """
         MATCH (f:FILE {path: $file_path})
         OPTIONAL MATCH (f)-[:CONTAINS]->(n)
-        WHERE n:TYPE_DECL OR n:NAMESPACE_BLOCK
+        WHERE n:TYPE_DECL
         DETACH DELETE n
         """
         try:

@@ -41,11 +41,9 @@ NODE_SCHEMA = {
 
 RELATIONSHIP_SCHEMA = [
     # Format: StartLabel -> RelationshipType -> EndLabel
-    "NAMESPACE_BLOCK -> CONTAINS -> TYPE_DECL",
-    "TYPE_DECL -> CONTAINS -> METHOD",
-    "FILE -> CONTAINS -> NAMESPACE_BLOCK",
+    "NAMESPACE_BLOCK -> CONTAINS -> FILE",
     "FILE -> CONTAINS -> TYPE_DECL",
-    "FILE -> CONTAINS -> METHOD",
+    "TYPE_DECL -> CONTAINS -> METHOD",
     "METHOD -> CALLS -> ExternalCall",
     "METHOD -> CALLS -> METHOD"
 ]
