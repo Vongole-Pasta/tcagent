@@ -3,13 +3,12 @@ import logging
 import hashlib
 import tree_sitter
 import re
-from core.analysis.strategies.base import BaseFlowStrategy
 
 logger = logging.getLogger(__name__)
 
-class JavaFlowStrategy(BaseFlowStrategy):
+class JavaFlowStrategy:
     def __init__(self, connector: DBClient):
-        super().__init__(connector)
+        self.connector = connector
         # 자바에서 자주 쓰이는 Collection, Map 등의 제네릭 타입을 처리하기 위한 정규식
         self.generic_pattern = re.compile(r"<.*>")
 
@@ -283,6 +282,7 @@ class JavaFlowStrategy(BaseFlowStrategy):
             "class_full_name": class_full_name,
             "args": args,
             "method_hash": method_hash,
+            "scan_id": scan_id,
             "scan_id": scan_id,
             "endpoint": endpoint,
             "http_method": http_method

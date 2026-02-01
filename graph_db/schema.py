@@ -1,45 +1,84 @@
-from enum import Enum
+"""
+Graph Database Schema Definition
+Auto-generated from GrahpRag Database Inspection
+"""
 
-class NodeLabel(Enum):
-    """
-    그래프 DB에서 사용하는 노드 라벨(Label) 상수를 정의합니다.
-    (예: FILE, METHOD, CLASS 등)
-    """
+NODE_SCHEMA = {
+    "FILE": [
+        "hash",
+        "language",
+        "name",
+        "path",
+        "project",
+        "status"
+    ],
+    "TYPE_DECL": [
+        "fullName",
+        "name",
+        "package", # Added
+        "type"     # Added
+        # "source" Removed
+        # "lineNumber" Removed
+    ],
+    "METHOD": [
+        "args",
+        "endpoint",
+        "hash",
+        "http_method",
+        "last_scan_id",
+        "lineNumber",
+        "name",
+        "signature",
+        "source",
+        "status"
+    ],
+    "NAMESPACE_BLOCK": [
+        "fullName",
+        "name"
+    ],
+    "CLASS": [
+        "fullName",
+        "name",
+        "package",
+        "type"
+    ],
+    "PACKAGE": [
+        "fullName",
+        "name"
+    ],
+    "ExternalCall": [
+        "name"
+    ]
+}
+
+RELATIONSHIP_SCHEMA = [
+    # Format: StartLabel -> RelationshipType -> EndLabel
+    "CLASS -> BELONGS_TO -> PACKAGE",
+    "CLASS -> CONTAINS -> METHOD",
+    "FILE -> AST -> METHOD",
+    "FILE -> AST -> NAMESPACE_BLOCK",
+    "FILE -> AST -> TYPE_DECL",
+    "FILE -> CONTAINS -> METHOD",
+    "FILE -> DEFINES -> CLASS",
+    "FILE -> DEFINES -> METHOD",
+    "METHOD -> CALLS -> ExternalCall",
+    "METHOD -> CALLS -> METHOD"
+]
+
+class NodeLabel:
+    """Dynamic Enum-like access for Node Labels"""
     FILE = "FILE"
-    METHOD = "METHOD"
-    CLASS = "CLASS"
-    INTERFACE = "INTERFACE"
-    PACKAGE = "PACKAGE"  # For Java
-    MODULE = "MODULE"    # For Python (if needed)
-    
-    # Internal structure
-    CONTROL_STRUCTURE = "CONTROL_STRUCTURE"
-    CALL = "CALL"
-    PARAMETER = "PARAMETER"
-    RETURN = "RETURN"
-    ANNOTATION = "ANNOTATION"
-    LITERAL = "LITERAL"
-    
-    # External
-    EXTERNAL_CALL = "ExternalCall"
-    
-    # Unified Types for Architecture
     TYPE_DECL = "TYPE_DECL"
-    MEMBER = "MEMBER"
+    METHOD = "METHOD"
     NAMESPACE_BLOCK = "NAMESPACE_BLOCK"
+    CLASS = "CLASS"
+    PACKAGE = "PACKAGE"
+    EXTERNAL_CALL = "ExternalCall"
 
-class EdgeType(Enum):
-    """
-    그래프 DB에서 사용하는 엣지 타입(Relationship Type) 상수를 정의합니다.
-    (예: CALLS, CONTAINS, AST 등)
-    """
-    AST = "AST"
-    CALLS = "CALLS"
+class EdgeType:
+    """Dynamic Enum-like access for Edge Types"""
+    BELONGS_TO = "BELONGS_TO"
     CONTAINS = "CONTAINS"
-    INHERITS = "INHERITS"
-    IMPORTS = "IMPORTS"
-    
-    # Detailed Flow
-    HAS_PARAM = "HAS_PARAM"
-    HAS_EXIT = "HAS_EXIT"
-    ANNOTATED_BY = "ANNOTATED_BY"
+    AST = "AST"
+    DEFINES = "DEFINES"
+    CALLS = "CALLS"

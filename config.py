@@ -15,5 +15,6 @@ class Config:
     
     # JAVA ONLY
     ALLOWED_EXTENSIONS = {
+        ".py": "python",
         ".java": "java",
     }
