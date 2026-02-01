@@ -25,7 +25,7 @@ class CypherQueries:
     """
     
     GET_CLASS_CONTEXT = """
-    MATCH (m:METHOD)<-[:CONTAINS]-(c:CLASS)
+    MATCH (m:METHOD)<-[:CONTAINS]-(c:TYPE_DECL)
     WHERE elementId(m) = $method_id OR m.id = $method_id
     RETURN c.name as class_name, c.source as class_source
     """
@@ -56,6 +56,7 @@ class CypherQueries:
     
     DELETE_FILE_NODES = """
     MATCH (f:FILE {path: $file_path})
-    OPTIONAL MATCH (f)-[:AST*]->(n)
-    DETACH DELETE n
+    OPTIONAL MATCH (f)-[:CONTAINS*]->(n)
+    OPTIONAL MATCH (n)-[:HAS_CALL]->(c:CALL)
+    DETACH DELETE n, c
     """

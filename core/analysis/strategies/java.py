@@ -3,13 +3,12 @@ import logging
 import hashlib
 import tree_sitter
 import re
-from core.analysis.strategies.base import BaseFlowStrategy
 
 logger = logging.getLogger(__name__)
 
-class JavaFlowStrategy(BaseFlowStrategy):  # Inherit for helpers if needed, but mainly standalone in provided code
+class JavaFlowStrategy:
     def __init__(self, connector: DBClient):
-        super().__init__(connector)
+        self.connector = connector
         # 자바에서 자주 쓰이는 Collection, Map 등의 제네릭 타입을 처리하기 위한 정규식
         self.generic_pattern = re.compile(r"<.*>")
 
@@ -25,11 +24,10 @@ class JavaFlowStrategy(BaseFlowStrategy):  # Inherit for helpers if needed, but 
     def _get_package_name(self, root_node, source_code):
         for child in root_node.children:
             if child.type == "package_declaration":
-                # 예: package com.example.demo;
-                # 'scoped_identifier' 또는 'identifier' 자식 노드를 찾음
-                name_node = child.child_by_field_name("name")
-                if name_node:
-                    return source_code[name_node.start_byte:name_node.end_byte].decode("utf-8")
+                # package_declaration children: (scoped_identifier) or (identifier)
+                for grandchild in child.children:
+                    if grandchild.type in ["scoped_identifier", "identifier"]:
+                        return source_code[grandchild.start_byte:grandchild.end_byte].decode("utf-8")
         return ""
 
     def _traverse_types(self, node, source_code: bytes, file_path: str, package_name: str, parent_class_name: str = "", scan_id: str = None):
@@ -60,6 +58,10 @@ class JavaFlowStrategy(BaseFlowStrategy):  # Inherit for helpers if needed, but 
         elif node.type == "enum_declaration":
              type_str = "ENUM"
         
+        # Docstring (Javadoc) 추출 - 보통 클래스 선언 직전의 comment
+        # tree-sitter에서 comment는 형제 노드로 존재함. (바로 위)
+        # 복잡하므로 일단 생략하거나 간단히 구현.
+        
         # DB 저장
         self._create_type_node(full_name, class_name, package_name, type_str, file_path)
         
@@ -75,19 +77,19 @@ class JavaFlowStrategy(BaseFlowStrategy):  # Inherit for helpers if needed, but 
 
     def _create_type_node(self, full_name, name, package_name, type_str, file_path):
         query = """
-        MERGE (c:CLASS {fullName: $full_name})
+        MERGE (c:TYPE_DECL {fullName: $full_name})
         SET c.name = $name,
             c.package = $package_name,
             c.type = $type_str
         
         WITH c
         MATCH (f:FILE {path: $file_path})
-        MERGE (f)-[:DEFINES]->(c)
+        MERGE (f)-[:CONTAINS]->(c)
         
         // 패키지 노드 연결 (Optional)
-        MERGE (p:PACKAGE {fullName: $package_name})
+        MERGE (p:NAMESPACE_BLOCK {fullName: $package_name})
         ON CREATE SET p.name = split($package_name, '.')[-1]
-        MERGE (c)-[:BELONGS_TO]->(p)
+        MERGE (p)-[:CONTAINS]->(c)
         """
         self.connector.execute_query(query, {
             "full_name": full_name,
@@ -149,6 +151,8 @@ class JavaFlowStrategy(BaseFlowStrategy):  # Inherit for helpers if needed, but 
         name_node = method_node.child_by_field_name("name")
         # Constructor의 경우 name이 메서드명과 동일
         if method_node.type == "constructor_declaration":
+            # 생성자는 이름이 별도로 없고 클래스명과 동일 -> tree-sitter 구조 확인 필요
+            # java parser에서 constructor_declaration의 name 필드는 클래스명을 가리킴
              pass
         
         if not name_node:
@@ -267,7 +271,7 @@ class JavaFlowStrategy(BaseFlowStrategy):  # Inherit for helpers if needed, but 
             m.http_method = $http_method
         
         WITH m
-        MATCH (c:CLASS {fullName: $class_full_name})
+        MATCH (c:TYPE_DECL {fullName: $class_full_name})
         MERGE (c)-[:CONTAINS]->(m)
         """
         self.connector.execute_query(query, {
@@ -277,6 +281,7 @@ class JavaFlowStrategy(BaseFlowStrategy):  # Inherit for helpers if needed, but 
             "class_full_name": class_full_name,
             "args": args,
             "method_hash": method_hash,
+            "scan_id": scan_id,
             "scan_id": scan_id,
             "endpoint": endpoint,
             "http_method": http_method
@@ -303,6 +308,10 @@ class JavaFlowStrategy(BaseFlowStrategy):  # Inherit for helpers if needed, but 
             return
             
         method_name = source_code[name_node.start_byte:name_node.end_byte].decode("utf-8")
+        
+        # 1. 만약 obj_node가 있다면? (예: memberService.login)
+        # -> 변수 이름을 통해 타입을 유추해야 함. (현재 심볼 테이블 부재로 인해 어려움)
+        # -> 하지만 "변수명"이라도 저장하여 나중에 쿼리로 연결을 시도할 수 있게 함.
         
         obj_name = ""
         if obj_node:

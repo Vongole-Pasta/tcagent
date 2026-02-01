@@ -12,5 +12,6 @@ dependencies = [
     "python-dotenv>=1.2.1",
     "python-multipart>=0.0.22",
     "tree-sitter-languages>=1.10.2",
+    "tree-sitter<0.22.0",
     "uvicorn>=0.40.0",
 ]

@@ -28,7 +28,6 @@ class ParserFactory:
 
     @staticmethod
     def _get_language_name(extension: str):
-        # Java Only
         if extension == ".java":
             return "java"
         return None

@@ -2,14 +2,14 @@ from abc import ABC, abstractmethod
 import logging
 import json
 import hashlib
-# from app.infra.embedding import EmbeddingService # Dictionary removed for lean migration
+from infra.embedding import EmbeddingService
 
 logger = logging.getLogger(__name__)
 
 class BaseFlowStrategy(ABC):
     def __init__(self, connector):
         self.connector = connector
-        # self.embedding_service = EmbeddingService()
+        self.embedding_service = EmbeddingService()
 
     @abstractmethod
     def process(self, tree, source_code, file_path):
@@ -18,8 +18,16 @@ class BaseFlowStrategy(ABC):
     def _create_method(self, name, signature, file_path, line_number, source_code="", owner_full_name=None):
         body_hash = hashlib.sha256(source_code.encode('utf-8')).hexdigest()
         
-        # Embedding logic removed for lean migration
+        # Cost Optimization: Check existing embedding
         embedding = None
+        existing_info = self._get_existing_method_embedding(file_path, signature)
+        
+        if existing_info and existing_info.get("bodyHash") == body_hash and existing_info.get("embedding"):
+            # 기존과 소스가 같고 임베딩이 있으면 재사용
+            embedding = existing_info["embedding"]
+        else:
+            # 변경되었거나 없으면 API 호출
+            embedding = self.embedding_service.get_embedding(source_code)
         
         query = """
         MATCH (f:FILE {path: $file_path})
@@ -66,7 +74,17 @@ class BaseFlowStrategy(ABC):
              logger.error(f"DB Error (Method): {e}")
 
     def _get_existing_method_embedding(self, file_path, signature):
-        # Stubbed
+        query = """
+        MATCH (f:FILE {path: $file_path})-[:Contains]->(m:METHOD {signature: $signature})
+        RETURN m.bodyHash as bodyHash, m.embedding as embedding
+        LIMIT 1
+        """
+        try:
+            results = self.connector.execute_query(query, {"file_path": file_path, "signature": signature})
+            if results:
+                return results[0]
+        except Exception as e:
+            logger.error(f"DB Error (GetMethod): {e}")
         return None
 
     def _create_control_structure(self, type_name, file_path, line_number, condition=None, parent_method_name=None):

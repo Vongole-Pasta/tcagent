@@ -15,6 +15,8 @@ class IncrementalAnalyzer:
         self.arch_builder = ArchitectureBuilder(connector)
         self.flow_builder = FlowBuilder(connector)
 
+
+
     def process_files_from_memory(self, files_data: list[dict], project: str = None):
         """
         메모리에 있는 파일들을 직접 처리 (디스크 I/O 없음)
@@ -47,10 +49,6 @@ class IncrementalAnalyzer:
             file_path = file_data['path']
             content = file_data['content']
             
-            # Check Java extension
-            if not file_path.endswith(".java"):
-                continue
-
             logger.info(f"Processing {file_path} from memory")
             
             try:
@@ -59,11 +57,13 @@ class IncrementalAnalyzer:
                 relative_path = os.path.relpath(file_path, upload_root) if upload_root else file_path
                 file_name = os.path.basename(file_path)
                 
-                # Language is Java
-                language = "JAVA"
+                # Determine language
+                ext = os.path.splitext(file_name)[1]
+                language = Config.ALLOWED_EXTENSIONS.get(ext, "UNKNOWN")
                 
                 # 1. Determine Status (Project check & Hash compare)
-                status = "CLEAN"
+                status = "TO-BE" # Default to TO-BE (New/Changed)
+                
                 if project:
                     # Check existing file node
                     existing_node = self.connector.execute_query(
@@ -74,21 +74,13 @@ class IncrementalAnalyzer:
                     if existing_node:
                         # File exists, check hash
                         old_hash = existing_node[0]['hash']
-                        if old_hash != file_hash:
-                            status = "MODIFIED"
+                        if old_hash == file_hash:
+                            status = "AS-IS"
                         else:
-                            status = "CLEAN"
+                            status = "TO-BE"
                     else:
-                        # File does not exist
-                        # Check if project itself exists (to distinguish New Project vs New File)
-                        proj_check = self.connector.execute_query(
-                            "MATCH (f:FILE {project: $project}) RETURN count(f) as c",
-                            {"project": project}
-                        )
-                        if proj_check and proj_check[0]['c'] > 0:
-                            status = "NEW" # Existing project, new file
-                        else:
-                            status = "CLEAN" # Brand new project -> Initial import is CLEAN
+                        # File does not exist -> TO-BE
+                        status = "TO-BE"
 
                 query = """
                 MERGE (f:FILE {path: $path, project: $project})
@@ -119,11 +111,9 @@ class IncrementalAnalyzer:
             except Exception as e:
                 logger.error(f"Failed to process {file_path} from memory: {e}")
         
-        # 4. Global Resolution (Once per batch)
+        # 4. Global Resolution
         if updated_files:
             logger.info("Re-resolving global call topology...")
-            # FlowBuilder has _resolve_calls but it's internal. Should expose or access?
-            # Accessing protected member is fine in Python but maybe I should expose it.
             self.flow_builder._resolve_calls()
             
         return updated_files
