@@ -15,10 +15,8 @@ NODE_SCHEMA = {
     "TYPE_DECL": [
         "fullName",
         "name",
-        "package", # Added
-        "type"     # Added
-        # "source" Removed
-        # "lineNumber" Removed
+        "package",
+        "type"     
     ],
     "METHOD": [
         "args",
@@ -36,16 +34,6 @@ NODE_SCHEMA = {
         "fullName",
         "name"
     ],
-    "CLASS": [
-        "fullName",
-        "name",
-        "package",
-        "type"
-    ],
-    "PACKAGE": [
-        "fullName",
-        "name"
-    ],
     "ExternalCall": [
         "name"
     ]
@@ -53,13 +41,13 @@ NODE_SCHEMA = {
 
 RELATIONSHIP_SCHEMA = [
     # Format: StartLabel -> RelationshipType -> EndLabel
-    "CLASS -> BELONGS_TO -> PACKAGE",
-    "CLASS -> CONTAINS -> METHOD",
+    "TYPE_DECL -> BELONGS_TO -> NAMESPACE_BLOCK",
+    "TYPE_DECL -> CONTAINS -> METHOD",
     "FILE -> AST -> METHOD",
     "FILE -> AST -> NAMESPACE_BLOCK",
     "FILE -> AST -> TYPE_DECL",
     "FILE -> CONTAINS -> METHOD",
-    "FILE -> DEFINES -> CLASS",
+    "FILE -> DEFINES -> TYPE_DECL",
     "FILE -> DEFINES -> METHOD",
     "METHOD -> CALLS -> ExternalCall",
     "METHOD -> CALLS -> METHOD"
@@ -71,8 +59,6 @@ class NodeLabel:
     TYPE_DECL = "TYPE_DECL"
     METHOD = "METHOD"
     NAMESPACE_BLOCK = "NAMESPACE_BLOCK"
-    CLASS = "CLASS"
-    PACKAGE = "PACKAGE"
     EXTERNAL_CALL = "ExternalCall"
 
 class EdgeType:

@@ -24,11 +24,10 @@ class JavaFlowStrategy:
     def _get_package_name(self, root_node, source_code):
         for child in root_node.children:
             if child.type == "package_declaration":
-                # 예: package com.example.demo;
-                # 'scoped_identifier' 또는 'identifier' 자식 노드를 찾음
-                name_node = child.child_by_field_name("name")
-                if name_node:
-                    return source_code[name_node.start_byte:name_node.end_byte].decode("utf-8")
+                # package_declaration children: (scoped_identifier) or (identifier)
+                for grandchild in child.children:
+                    if grandchild.type in ["scoped_identifier", "identifier"]:
+                        return source_code[grandchild.start_byte:grandchild.end_byte].decode("utf-8")
         return ""
 
     def _traverse_types(self, node, source_code: bytes, file_path: str, package_name: str, parent_class_name: str = "", scan_id: str = None):
@@ -78,7 +77,7 @@ class JavaFlowStrategy:
 
     def _create_type_node(self, full_name, name, package_name, type_str, file_path):
         query = """
-        MERGE (c:CLASS {fullName: $full_name})
+        MERGE (c:TYPE_DECL {fullName: $full_name})
         SET c.name = $name,
             c.package = $package_name,
             c.type = $type_str
@@ -88,7 +87,7 @@ class JavaFlowStrategy:
         MERGE (f)-[:DEFINES]->(c)
         
         // 패키지 노드 연결 (Optional)
-        MERGE (p:PACKAGE {fullName: $package_name})
+        MERGE (p:NAMESPACE_BLOCK {fullName: $package_name})
         ON CREATE SET p.name = split($package_name, '.')[-1]
         MERGE (c)-[:BELONGS_TO]->(p)
         """
@@ -272,7 +271,7 @@ class JavaFlowStrategy:
             m.http_method = $http_method
         
         WITH m
-        MATCH (c:CLASS {fullName: $class_full_name})
+        MATCH (c:TYPE_DECL {fullName: $class_full_name})
         MERGE (c)-[:CONTAINS]->(m)
         """
         self.connector.execute_query(query, {

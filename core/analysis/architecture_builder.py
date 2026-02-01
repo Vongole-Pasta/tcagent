@@ -110,7 +110,10 @@ class ArchitectureBuilder:
     def _analyze_java(self, language, node, source, file_path):
         query_str = """
         (package_declaration
-            (scoped_identifier) @package.name
+            [
+                (scoped_identifier)
+                (identifier)
+            ] @package.name
         )
         (class_declaration
             name: (identifier) @class.name

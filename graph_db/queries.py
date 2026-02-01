@@ -25,7 +25,7 @@ class CypherQueries:
     """
     
     GET_CLASS_CONTEXT = """
-    MATCH (m:METHOD)<-[:CONTAINS]-(c:CLASS)
+    MATCH (m:METHOD)<-[:CONTAINS]-(c:TYPE_DECL)
     WHERE elementId(m) = $method_id OR m.id = $method_id
     RETURN c.name as class_name, c.source as class_source
     """

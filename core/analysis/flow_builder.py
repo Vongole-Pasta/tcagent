@@ -1,7 +1,7 @@
 from infra.db_client import DBClient
 import hashlib
 import uuid
-from config import Config
+
 import os
 import logging
 from core.analysis.strategies.python import PythonFlowStrategy
@@ -23,35 +23,7 @@ class FlowBuilder:
             ".jsx": TypeScriptFlowStrategy(connector),
         }
 
-    def process_file(self, file_path: str):
-        """기존 방식: 디스크에 저장된 파일을 읽어서 처리"""
-        # self._cleanup_file_flow_data(file_path) # Moved to inside conditionals
-        absolute_path = os.path.join(Config.TARGET_DIR, file_path)
-        _, ext = os.path.splitext(file_path)
-        
-        strategy = self.strategies.get(ext)
-        if not strategy:
-            # logger.warning(f"No strategy found for {file_path}")
-            return
 
-        try:
-            parser = ParserFactory.get_parser(ext)
-            with open(absolute_path, "rb") as f:
-                source_code = f.read()
-            tree = parser.parse(source_code)
-            
-            if ext == ".java":
-                # Java: Smart Update (Upsert + Prune)
-                scan_id = str(uuid.uuid4())
-                strategy.process(tree, source_code, file_path, scan_id)
-                self._prune_nodes(file_path, scan_id)
-            else:
-                # Others: Classic Reset (Delete + Create)
-                self._cleanup_file_flow_data(file_path)
-                strategy.process(tree, source_code, file_path)
-
-        except Exception as e:
-            logger.error(f"Failed to process flow for {file_path}: {e}")
 
     def process_file_from_content(self, file_path: str, content: bytes):
         """신규 방식: 메모리에 있는 파일 내용을 직접 처리"""
@@ -134,14 +106,7 @@ class FlowBuilder:
         except Exception as e:
             logger.error(f"Pruning Error ({file_path}): {e}")
 
-    def extract_and_load(self):
-        query = "MATCH (f:FILE) RETURN f.path AS path"
-        results = self.connector.execute_query(query)
-        logger.info(f"Analyzing flow for {len(results)} files.")
-        for record in results:
-            self.process_file(record["path"])
-        
-        self._resolve_calls()
+
 
     def _resolve_calls(self):
         """
@@ -165,7 +130,7 @@ class FlowBuilder:
         WHERE c.objectName IS NOT NULL AND c.objectName <> ''
         
         MATCH (target:METHOD {name: c.methodName})
-        MATCH (target)<-[:CONTAINS]-(targetClass:CLASS)
+        MATCH (target)<-[:CONTAINS]-(targetClass:TYPE_DECL)
         
         // objectName이 Class 이름과 일치하는지 확인 (예: MemberService vs memberService)
         WHERE toLower(targetClass.name) = toLower(c.objectName)
@@ -184,9 +149,9 @@ class FlowBuilder:
         MATCH (source:METHOD)-[:HAS_CALL]->(c:CALL)
         WHERE c.objectName IS NULL OR c.objectName = ''
         
-        MATCH (source)<-[:CONTAINS]-(sourceClass:CLASS)
+        MATCH (source)<-[:CONTAINS]-(sourceClass:TYPE_DECL)
         MATCH (target:METHOD {name: c.methodName})
-        MATCH (target)<-[:CONTAINS]-(targetClass:CLASS)
+        MATCH (target)<-[:CONTAINS]-(targetClass:TYPE_DECL)
         
         WHERE sourceClass = targetClass
         
