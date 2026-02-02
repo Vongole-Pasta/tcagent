@@ -43,10 +43,10 @@ class ArchitectureBuilder:
 
 
 
-        # Create Namespace from directory
-        dir_name = os.path.dirname(file_path).replace("/", ".")
-        if dir_name:
-             self._create_namespace(dir_name, file_path)
+        # Create Namespace from directory - Removed in optimization
+        # dir_name = os.path.dirname(file_path).replace("/", ".")
+        # if dir_name:
+        #      self._create_namespace(dir_name, file_path)
 
     def _analyze_java(self, language, node, source, file_path):
         query_str = """
@@ -68,7 +68,7 @@ class ArchitectureBuilder:
             for n, name in captures:
                 if name == "package.name":
                     package_name = source[n.start_byte:n.end_byte].decode("utf8")
-                    self._create_namespace(package_name, file_path)
+                    # self._create_namespace(package_name, file_path) # Removed
 
             for n, name in captures:
                 if name == "class.name":
@@ -96,17 +96,15 @@ class ArchitectureBuilder:
         
         query = """
         MATCH (f:FILE {path: $file_path})
-        MERGE (t:TYPE_DECL {fullName: $full_name})
+        MERGE (t:TYPE {fullName: $full_name})
         SET t.name = $name,
-            t.package = $package,
             t.type = $type,
             t.embedding = $embedding
-        MERGE (f)-[:CONTAINS]->(t)
         
-        // Ensure Package -> File link
-        MERGE (p:NAMESPACE_BLOCK {fullName: $package})
-        ON CREATE SET p.name = split($package, '.')[-1]
-        MERGE (p)-[:CONTAINS]->(f)
+        // Update File with Package info (Redundant but safe to ensure)
+        SET f.package = $package
+
+        MERGE (f)-[:CONTAINS]->(t)
         """
         try:
             self.connector.execute_query(query, {
@@ -121,21 +119,8 @@ class ArchitectureBuilder:
         except Exception as e:
              logger.error(f"DB Error: {e}")
 
-    def _create_namespace(self, name, file_path):
-        query = """
-        MATCH (f:FILE {path: $file_path})
-        MERGE (n:NAMESPACE_BLOCK {fullName: $name})
-        SET n.name = $name
-        // Link Package -> File
-        MERGE (n)-[:CONTAINS]->(f)
-        """
-        try:
-            self.connector.execute_query(query, {
-                "file_path": file_path,
-                "name": name
-            })
-        except Exception as e:
-             logger.error(f"DB Error: {e}")
+    # _create_namespace removed as part of schema optimization.
+    pass
 
 
 
@@ -144,7 +129,7 @@ class ArchitectureBuilder:
         query = """
         MATCH (f:FILE {path: $file_path})
         OPTIONAL MATCH (f)-[:CONTAINS]->(n)
-        WHERE n:TYPE_DECL
+        WHERE n:TYPE
         DETACH DELETE n
         """
         try:

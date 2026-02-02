@@ -25,13 +25,13 @@ class CypherQueries:
     """
     
     GET_CLASS_CONTEXT = """
-    MATCH (m:METHOD)<-[:CONTAINS]-(c:TYPE_DECL)
+    MATCH (m:METHOD)<-[:CONTAINS]-(c:TYPE)
     WHERE elementId(m) = $method_id OR m.id = $method_id
     RETURN c.name as class_name, c.source as class_source
     """
 
     GET_METHOD_FILE = """
-    MATCH (m:METHOD)<-[:CONTAINS]-(c:TYPE_DECL)<-[:CONTAINS]-(f:FILE)
+    MATCH (m:METHOD)<-[:CONTAINS]-(c:TYPE)<-[:CONTAINS]-(f:FILE)
     WHERE elementId(m) = $method_id OR m.id = $method_id
     RETURN f.path as file_path, f.name as file_name
     """
