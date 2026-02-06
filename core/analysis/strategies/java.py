@@ -77,19 +77,17 @@ class JavaFlowStrategy:
 
     def _create_type_node(self, full_name, name, package_name, type_str, file_path):
         query = """
-        MERGE (c:TYPE_DECL {fullName: $full_name})
+        MERGE (c:TYPE {fullName: $full_name})
         SET c.name = $name,
-            c.package = $package_name,
             c.type = $type_str
         
         WITH c
         MATCH (f:FILE {path: $file_path})
-        MERGE (f)-[:CONTAINS]->(c)
         
-        // 패키지 노드 연결 (Optional)
-        MERGE (p:NAMESPACE_BLOCK {fullName: $package_name})
-        ON CREATE SET p.name = split($package_name, '.')[-1]
-        MERGE (p)-[:CONTAINS]->(c)
+        // Update File with package info
+        SET f.package = $package_name
+        
+        MERGE (f)-[:CONTAINS]->(c)
         """
         self.connector.execute_query(query, {
             "full_name": full_name,
@@ -271,7 +269,7 @@ class JavaFlowStrategy:
             m.http_method = $http_method
         
         WITH m
-        MATCH (c:TYPE_DECL {fullName: $class_full_name})
+        MATCH (c:TYPE {fullName: $class_full_name})
         MERGE (c)-[:CONTAINS]->(m)
         """
         self.connector.execute_query(query, {

@@ -124,7 +124,7 @@ class FlowBuilder:
         WHERE c.objectName IS NOT NULL AND c.objectName <> ''
         
         MATCH (target:METHOD {name: c.methodName})
-        MATCH (target)<-[:CONTAINS]-(targetClass:TYPE_DECL)
+        MATCH (target)<-[:CONTAINS]-(targetClass:TYPE)
         
         // objectName이 Class 이름과 일치하는지 확인 (예: MemberService vs memberService)
         WHERE toLower(targetClass.name) = toLower(c.objectName)
@@ -143,9 +143,9 @@ class FlowBuilder:
         MATCH (source:METHOD)-[:HAS_CALL]->(c:CALL)
         WHERE c.objectName IS NULL OR c.objectName = ''
         
-        MATCH (source)<-[:CONTAINS]-(sourceClass:TYPE_DECL)
+        MATCH (source)<-[:CONTAINS]-(sourceClass:TYPE)
         MATCH (target:METHOD {name: c.methodName})
-        MATCH (target)<-[:CONTAINS]-(targetClass:TYPE_DECL)
+        MATCH (target)<-[:CONTAINS]-(targetClass:TYPE)
         
         WHERE sourceClass = targetClass
         

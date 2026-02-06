@@ -10,12 +10,11 @@ NODE_SCHEMA = {
         "name",
         "path",
         "project",
-        "status"
+        "package"
     ],
-    "TYPE_DECL": [
+    "TYPE": [
         "fullName",
         "name",
-        "package",
         "type"     
     ],
     "METHOD": [
@@ -24,15 +23,10 @@ NODE_SCHEMA = {
         "hash",
         "http_method",
         "last_scan_id",
-        "lineNumber",
         "name",
         "signature",
         "source",
         "status"
-    ],
-    "NAMESPACE_BLOCK": [
-        "fullName",
-        "name"
     ],
     "ExternalCall": [
         "name"
@@ -41,11 +35,8 @@ NODE_SCHEMA = {
 
 RELATIONSHIP_SCHEMA = [
     # Format: StartLabel -> RelationshipType -> EndLabel
-    "NAMESPACE_BLOCK -> CONTAINS -> TYPE_DECL",
-    "TYPE_DECL -> CONTAINS -> METHOD",
-    "FILE -> CONTAINS -> NAMESPACE_BLOCK",
-    "FILE -> CONTAINS -> TYPE_DECL",
-    "FILE -> CONTAINS -> METHOD",
+    "FILE -> CONTAINS -> TYPE",
+    "TYPE -> CONTAINS -> METHOD",
     "METHOD -> CALLS -> ExternalCall",
     "METHOD -> CALLS -> METHOD"
 ]
@@ -53,9 +44,8 @@ RELATIONSHIP_SCHEMA = [
 class NodeLabel:
     """Dynamic Enum-like access for Node Labels"""
     FILE = "FILE"
-    TYPE_DECL = "TYPE_DECL"
+    TYPE = "TYPE"
     METHOD = "METHOD"
-    NAMESPACE_BLOCK = "NAMESPACE_BLOCK"
     EXTERNAL_CALL = "ExternalCall"
 
 class EdgeType:

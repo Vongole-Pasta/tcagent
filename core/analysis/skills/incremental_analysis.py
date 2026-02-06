@@ -86,8 +86,7 @@ class IncrementalAnalyzer:
                 MERGE (f:FILE {path: $path, project: $project})
                 SET f.name = $name,
                     f.hash = $hash,
-                    f.language = $language,
-                    f.status = $status
+                    f.language = $language
                 """
                 
                 self.connector.execute_query(query, {
@@ -95,8 +94,7 @@ class IncrementalAnalyzer:
                     "name": file_name,
                     "hash": file_hash,
                     "language": language,
-                    "project": project,
-                    "status": status
+                    "project": project
                 })
                 
                 # 2. Architecture Analysis from memory
