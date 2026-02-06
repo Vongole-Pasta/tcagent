@@ -1,0 +1,111 @@
+from fastapi import APIRouter, HTTPException, Request
+from graph_db.queries import CypherQueries
+from typing import Dict, Any
+
+router = APIRouter(prefix="/graph", tags=["graph"])
+
+def process_path_result(results):
+    """
+    Helper to convert Neo4j path results into cytoscape/react-flow friendly Nodes & Edges
+    """
+    nodes = {}
+    edges = []
+    
+    for row in results:
+        path = row.get('path')
+        if not path:
+            continue
+            
+        # Extract nodes and relationships from path
+        # A path is a sequence of Node, Relationship, Node...
+        for node in path.nodes:
+            # element_id is the new standard ID in Neo4j 5
+            node_id = node.element_id
+            if node_id not in nodes:
+                # Basic info
+                node_data = {
+                    "id": node_id,
+                    "labels": list(node.labels),
+                    "name": node.get('name', 'Unknown'),
+                    "signature": node.get('signature', ''),
+                    "endpoint": node.get('endpoint'),
+                    "http_method": node.get('http_method'),
+                    "type": "ENDPOINT" if node.get('endpoint') else "METHOD"
+                }
+                nodes[node_id] = node_data
+        
+        for rel in path.relationships:
+            edges.append({
+                "id": rel.element_id,
+                "source": rel.start_node.element_id,
+                "target": rel.end_node.element_id,
+                "type": rel.type
+            })
+            
+    return {
+        "nodes": list(nodes.values()),
+        "edges": edges
+    }
+
+@router.get("/upstream/{method_id}")
+async def get_upstream_graph(method_id: str, request: Request):
+    """
+    Get graph of upstream callers (Who calls me?)
+    """
+    analysis_flow = getattr(request.app.state, "analysis_flow", None)
+    if not analysis_flow:
+        raise HTTPException(status_code=503, detail="Analysis Agent not initialized")
+
+    try:
+        results = analysis_flow.connector.execute_query(
+            CypherQueries.GET_UPSTREAM_IMPACT, 
+            {"method_id": method_id}
+        )
+        return process_path_result(results)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/downstream/{method_id}")
+async def get_downstream_graph(method_id: str, request: Request):
+    """
+    Get graph of downstream callees (Who do I call?)
+    """
+    analysis_flow = getattr(request.app.state, "analysis_flow", None)
+    if not analysis_flow:
+        raise HTTPException(status_code=503, detail="Analysis Agent not initialized")
+
+    try:
+        results = analysis_flow.connector.execute_query(
+            CypherQueries.GET_DOWNSTREAM_FLOW, 
+            {"method_id": method_id}
+        )
+        return process_path_result(results)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/node/{method_id}")
+async def get_node_details(method_id: str, request: Request):
+    """
+    Get detailed information for a specific node (Source code, etc.)
+    """
+    analysis_flow = getattr(request.app.state, "analysis_flow", None)
+    if not analysis_flow:
+        raise HTTPException(status_code=503, detail="Analysis Agent not initialized")
+
+    try:
+        results = analysis_flow.connector.execute_query(
+            CypherQueries.GET_METHOD_CONTEXT, 
+            {"method_id": method_id}
+        )
+        
+        if not results:
+            raise HTTPException(status_code=404, detail="Node not found")
+            
+        node = results[0]
+        return {
+            "name": node.get("name"),
+            "signature": node.get("signature"),
+            "source": node.get("source"),
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))

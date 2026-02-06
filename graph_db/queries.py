@@ -45,6 +45,35 @@ class CypherQueries:
     ORDER BY distance ASC
     LIMIT $limit
     """
+
+    # --- New Frontend Support Queries ---
+
+    GET_ALL_METHODS = """
+    MATCH (m:METHOD)
+    RETURN elementId(m) as id, m.name as name, m.signature as signature, m.endpoint as endpoint, m.http_method as http_method
+    ORDER BY m.name
+    """
+    
+    GET_ALL_ENDPOINTS = """
+    MATCH (m:METHOD)
+    WHERE m.endpoint IS NOT NULL
+    RETURN elementId(m) as id, m.name as name, m.endpoint as endpoint, m.http_method as http_method
+    ORDER BY m.endpoint
+    """
+
+    GET_UPSTREAM_IMPACT = """
+    MATCH path = (source:METHOD)-[:CALLS*0..]->(target:METHOD)
+    WHERE (elementId(target) = $method_id OR target.id = $method_id)
+    RETURN path
+    LIMIT 100
+    """
+
+    GET_DOWNSTREAM_FLOW = """
+    MATCH path = (source:METHOD)-[:CALLS*0..]->(target:METHOD)
+    WHERE (elementId(source) = $method_id OR source.id = $method_id)
+    RETURN path
+    LIMIT 100
+    """
     
     # --- Change Detection Helpers ---
     
