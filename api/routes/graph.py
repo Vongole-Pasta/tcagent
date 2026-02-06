@@ -9,7 +9,7 @@ def process_path_result(results):
     Helper to convert Neo4j path results into cytoscape/react-flow friendly Nodes & Edges
     """
     nodes = {}
-    edges = []
+    edges = {}
     
     for row in results:
         path = row.get('path')
@@ -35,16 +35,18 @@ def process_path_result(results):
                 nodes[node_id] = node_data
         
         for rel in path.relationships:
-            edges.append({
-                "id": rel.element_id,
-                "source": rel.start_node.element_id,
-                "target": rel.end_node.element_id,
-                "type": rel.type
-            })
+            rel_id = rel.element_id
+            if rel_id not in edges:
+                edges[rel_id] = {
+                    "id": rel_id,
+                    "source": rel.start_node.element_id,
+                    "target": rel.end_node.element_id,
+                    "type": rel.type
+                }
             
     return {
         "nodes": list(nodes.values()),
-        "edges": edges
+        "edges": list(edges.values())
     }
 
 @router.get("/upstream/{method_id}")
