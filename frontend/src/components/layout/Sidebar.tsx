@@ -40,6 +40,11 @@ export function Sidebar() {
             (n.endpoint && n.endpoint.toLowerCase().includes(search.toLowerCase()));
 
         if (!matchesSearch) return false;
+
+        // If 'METHOD' tab is selected, show ALL methods (including endpoints)
+        if (filterType === 'METHOD') return true;
+
+        // If 'ENDPOINT' tab is selected, show only endpoints
         return n.type === filterType;
     });
 

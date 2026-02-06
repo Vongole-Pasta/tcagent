@@ -8,7 +8,7 @@ import { Activity, Box, Globe, MousePointerClick } from 'lucide-react';
 export function Dashboard() {
     const { projectNodes } = useStore();
 
-    const totalMethods = projectNodes.filter(n => n.type === 'METHOD').length;
+    const totalMethods = projectNodes.length; // All nodes are methods, some have endpoints
     const totalEndpoints = projectNodes.filter(n => n.type === 'ENDPOINT').length;
 
     return (
