@@ -3,7 +3,8 @@
 import React from 'react';
 import { useStore } from '@/store/useStore';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
-import { Activity, Box, Globe, MousePointerClick } from 'lucide-react';
+import { Button } from '@/components/ui/button';
+import { Activity, Box, Globe, MousePointerClick, Sparkles } from 'lucide-react';
 
 export function Dashboard() {
     const { projectNodes } = useStore();
@@ -64,6 +65,23 @@ export function Dashboard() {
                             </p>
                         </CardContent>
                     </Card>
+                </div>
+
+                {/* Actions */}
+                <div className="flex items-center justify-between p-6 bg-gradient-to-r from-blue-50 to-indigo-50 rounded-lg border border-blue-100 shadow-sm">
+                    <div>
+                        <h3 className="text-lg font-semibold text-blue-900">Generate Integration Tests</h3>
+                        <p className="text-sm text-blue-700 mt-1">
+                            Automatically generate comprehensive integration tests based on the current graph analysis.
+                        </p>
+                    </div>
+                    <Button
+                        size="lg"
+                        className="bg-blue-600 hover:bg-blue-700 shadow-md transition-all hover:scale-105"
+                    >
+                        <Sparkles className="mr-2 h-4 w-4" />
+                        Generate Tests
+                    </Button>
                 </div>
 
                 {/* Guide / Empty State Helper */}
