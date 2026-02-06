@@ -130,13 +130,13 @@ export function Sidebar() {
                                             <span className="truncate block font-medium">
                                                 {node.name}
                                             </span>
-                                            {node.status && (
-                                                <span
-                                                    className={`w-2 h-2 rounded-full shrink-0 ${node.status === 'DIRTY' ? 'bg-red-500' :
-                                                        node.status === 'VERIFIED' ? 'bg-green-500' : 'bg-gray-400'
-                                                        }`}
-                                                    title={node.status}
-                                                />
+                                            {(node.status === 'TO-BE' || node.status === 'TOBE') && (
+                                                <Badge
+                                                    variant="default"
+                                                    className="text-[10px] h-5 px-1.5 bg-blue-600 hover:bg-blue-700 pointer-events-none"
+                                                >
+                                                    UPDATE
+                                                </Badge>
                                             )}
                                         </div>
                                         {node.endpoint && (

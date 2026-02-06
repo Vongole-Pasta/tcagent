@@ -36,16 +36,14 @@ async def get_project_nodes(project_id: str, request: Request, type: Optional[st
             
             # Identify effective status for endpoints
             if statuses:
-                # Priority: DIRTY > (others)
-                if "DIRTY" in statuses:
-                    status = "DIRTY"
-                elif "VERIFIED" in statuses: 
-                    # Only if ALL are verified? Or if any is verified? 
-                    # Usually DIRTY trumps all. If not dirty, map to something else or None.
-                    # For now simplistically: if any dirty, it's dirty.
-                    status = "VERIFIED" if all(s == "VERIFIED" for s in statuses if s) else None
-                # Basic check: if any non-null status exists and not dirty, maybe show it?
-                # Let's stick to simple "DIRTY" propagation for now.
+                # Normalize check for variations
+                normalized = [s.upper().replace("-", "") for s in statuses if s]
+                
+                # Priority: TO-BE (Modified) > AS-IS (Stable)
+                if "TOBE" in normalized:
+                    status = "TO-BE"
+                elif "ASIS" in normalized:
+                    status = "AS-IS"
             
             nodes.append({
                 "id": r.get("id"),

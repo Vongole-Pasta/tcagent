@@ -32,6 +32,11 @@ def debug_graph():
         empty_endpoints = result.single()['count']
         print(f"METHOD nodes with empty endpoint: {empty_endpoints}")
         
+        # Check Status Values
+        result = session.run("MATCH (m:METHOD) WHERE m.status IS NOT NULL RETURN DISTINCT m.status as status")
+        statuses = [r["status"] for r in result]
+        print(f"Distinct Statuses found: {statuses}")
+
     driver.close()
 
 if __name__ == "__main__":
