@@ -30,13 +30,31 @@ async def get_project_nodes(project_id: str, request: Request, type: Optional[st
         
         nodes = []
         for r in results:
+            # Determine status
+            status = r.get("status") # Direct status (Methods)
+            statuses = r.get("statuses") # Aggregated status list (Endpoints)
+            
+            # Identify effective status for endpoints
+            if statuses:
+                # Priority: DIRTY > (others)
+                if "DIRTY" in statuses:
+                    status = "DIRTY"
+                elif "VERIFIED" in statuses: 
+                    # Only if ALL are verified? Or if any is verified? 
+                    # Usually DIRTY trumps all. If not dirty, map to something else or None.
+                    # For now simplistically: if any dirty, it's dirty.
+                    status = "VERIFIED" if all(s == "VERIFIED" for s in statuses if s) else None
+                # Basic check: if any non-null status exists and not dirty, maybe show it?
+                # Let's stick to simple "DIRTY" propagation for now.
+            
             nodes.append({
                 "id": r.get("id"),
                 "name": r.get("name"),
                 "signature": r.get("signature"),
                 "endpoint": r.get("endpoint"),
                 "http_method": r.get("http_method"),
-                "type": "ENDPOINT" if r.get("endpoint") else "METHOD"
+                "type": "ENDPOINT" if r.get("endpoint") else "METHOD",
+                "status": status
             })
             
         return {"nodes": nodes}

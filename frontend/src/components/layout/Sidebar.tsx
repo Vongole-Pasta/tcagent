@@ -121,21 +121,31 @@ export function Sidebar() {
                             )}
 
                             <div className="flex-1 min-w-0">
-                                <div className="flex items-center gap-2 mb-0.5">
-                                    <span className="font-medium truncate block">
-                                        {node.name}
+                                <div className="flex items-center gap-2">
+                                    <span className="font-mono text-xs text-muted-foreground mr-1">
+                                        {node.type === 'ENDPOINT' ? 'API' : 'M'}
                                     </span>
-                                </div>
-                                {node.type === 'ENDPOINT' && (
-                                    <div className="flex items-center gap-2">
-                                        <Badge variant="outline" className="text-[10px] h-4 px-1">
-                                            {node.http_method || 'API'}
-                                        </Badge>
-                                        <div className="text-xs text-muted-foreground truncate font-mono">
-                                            {node.endpoint}
+                                    <div className="flex flex-col flex-1 min-w-0">
+                                        <div className="flex items-center gap-2">
+                                            <span className="truncate block font-medium">
+                                                {node.name}
+                                            </span>
+                                            {node.status && (
+                                                <span
+                                                    className={`w-2 h-2 rounded-full shrink-0 ${node.status === 'DIRTY' ? 'bg-red-500' :
+                                                        node.status === 'VERIFIED' ? 'bg-green-500' : 'bg-gray-400'
+                                                        }`}
+                                                    title={node.status}
+                                                />
+                                            )}
                                         </div>
+                                        {node.endpoint && (
+                                            <span className="text-[10px] text-muted-foreground truncate block">
+                                                {node.http_method} {node.endpoint}
+                                            </span>
+                                        )}
                                     </div>
-                                )}
+                                </div>
                             </div>
                         </div>
                     ))}

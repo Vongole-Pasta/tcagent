@@ -50,14 +50,16 @@ class CypherQueries:
 
     GET_ALL_METHODS = """
     MATCH (m:METHOD)
-    RETURN elementId(m) as id, m.name as name, m.signature as signature, m.endpoint as endpoint, m.http_method as http_method
+    RETURN elementId(m) as id, m.name as name, m.signature as signature, m.endpoint as endpoint, m.http_method as http_method, m.status as status
     ORDER BY m.name
     """
     
     GET_ALL_ENDPOINTS = """
     MATCH (m:METHOD)
     WHERE m.endpoint IS NOT NULL
-    RETURN elementId(m) as id, m.name as name, m.endpoint as endpoint, m.http_method as http_method
+    OPTIONAL MATCH (m)-[:CALLS*0..]->(d:METHOD)
+    WITH m, collect(DISTINCT d.status) as statuses
+    RETURN elementId(m) as id, m.name as name, m.endpoint as endpoint, m.http_method as http_method, statuses
     ORDER BY m.endpoint
     """
 

@@ -8,6 +8,7 @@ interface MethodNode {
     endpoint?: string;
     http_method?: string;
     type: 'METHOD' | 'ENDPOINT';
+    status?: string | null;
 }
 
 interface GraphData {

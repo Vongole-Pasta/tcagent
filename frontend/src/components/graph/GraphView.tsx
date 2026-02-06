@@ -21,10 +21,10 @@ import { useStore } from '@/store/useStore';
 const nodeWidth = 200;
 const nodeHeight = 60;
 
-const getLayoutedElements = (nodes: Node[], edges: Edge[]) => {
+const getLayoutedElements = (nodes: Node[], edges: Edge[], direction = 'TB') => {
     const dagreGraph = new dagre.graphlib.Graph();
     dagreGraph.setDefaultEdgeLabel(() => ({}));
-    dagreGraph.setGraph({ rankdir: 'LR' }); // Left to Right layout
+    dagreGraph.setGraph({ rankdir: direction }); // Use the passed direction
 
     nodes.forEach((node) => {
         dagreGraph.setNode(node.id, { width: nodeWidth, height: nodeHeight });
@@ -57,13 +57,20 @@ const getLayoutedElements = (nodes: Node[], edges: Edge[]) => {
 };
 
 function InnerGraphView() { // Renamed from GraphView
-    const { graphData, isLoading, fetchNodeDetail } = useStore();
+    const { graphData, isLoading, fetchNodeDetail, selectedNodeId, projectNodes } = useStore();
     const [nodes, setNodes, onNodesChange] = useNodesState<Node>([]);
     const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([]);
     const { fitView } = useReactFlow(); // Added useReactFlow hook
 
     useEffect(() => {
         if (graphData.nodes.length > 0) {
+            // Determine layout direction based on selected node type
+            const selectedNode = projectNodes.find(n => n.id === selectedNodeId);
+            // User feedback: "Bottom-Up" means Me at Bottom, Callers at Top. 
+            // Since edges are Caller->Me, 'TB' layout achieves this (Source Top, Target Bottom).
+            // So we use 'TB' for BOTH Upstream and Downstream.
+            const direction = 'TB';
+
             // Map API data to React Flow format if not already
             const rfNodes: Node[] = graphData.nodes.map(n => ({
                 id: n.id,
@@ -94,7 +101,8 @@ function InnerGraphView() { // Renamed from GraphView
 
             const { nodes: layoutedNodes, edges: layoutedEdges } = getLayoutedElements(
                 rfNodes,
-                rfEdges
+                rfEdges,
+                direction // Pass the determined direction
             );
 
             setNodes(layoutedNodes);
@@ -108,7 +116,7 @@ function InnerGraphView() { // Renamed from GraphView
             setNodes([]);
             setEdges([]);
         }
-    }, [graphData, setNodes, setEdges, fitView]); // Added fitView to dependencies
+    }, [graphData, setNodes, setEdges, fitView, selectedNodeId, projectNodes]); // Added fitView, selectedNodeId, projectNodes to dependencies
 
     const onNodeClick = useCallback((event: any, node: Node) => {
         fetchNodeDetail(node.id);
