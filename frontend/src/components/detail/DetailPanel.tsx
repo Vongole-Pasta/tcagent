@@ -4,7 +4,7 @@ import React from 'react';
 import { useStore } from '@/store/useStore';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism';
-import { ScrollArea } from '@/components/ui/scroll-area';
+
 
 export function DetailPanel() {
     const { selectedNodeDetail, selectedNodeId } = useStore();
@@ -26,8 +26,8 @@ export function DetailPanel() {
     }
 
     return (
-        <div className="h-full flex flex-col bg-background">
-            <div className="p-4 border-b">
+        <div className="h-full flex flex-col bg-background min-h-0 overflow-hidden">
+            <div className="p-4 border-b shrink-0">
                 <h2 className="font-semibold text-lg">{selectedNodeDetail.name}</h2>
                 {selectedNodeDetail.signature && (
                     <code className="text-xs text-muted-foreground bg-muted p-1 rounded mt-1 block break-all">
@@ -35,7 +35,8 @@ export function DetailPanel() {
                     </code>
                 )}
             </div>
-            <ScrollArea className="flex-1">
+            {/* Using native div for robust scrolling */}
+            <div className="flex-1 overflow-auto min-h-0 w-full">
                 <div className="p-0">
                     {selectedNodeDetail.source ? (
                         <SyntaxHighlighter
@@ -52,7 +53,7 @@ export function DetailPanel() {
                         </div>
                     )}
                 </div>
-            </ScrollArea>
+            </div>
         </div>
     );
 }
