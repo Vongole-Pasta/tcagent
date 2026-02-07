@@ -8,9 +8,10 @@ NODE_SCHEMA = {
         "hash",
         "language",
         "name",
+        "package",
         "path",
         "project",
-        "package"
+        "status"
     ],
     "TYPE": [
         "fullName",

@@ -72,8 +72,21 @@ class ArchitectureBuilder:
 
             for n, name in captures:
                 if name == "class.name":
+                    # Filter out Inner Classes (handled by FlowBuilder)
+                    # class_declaration's parent should be the program (root) or package_declaration (if inside?) 
+                    # Actually in tree-sitter-java, top-level classes are children of the root (program).
+                    # Inner classes are children of class_body.
+                    parent_type = n.parent.parent.type if n.parent else ""
+                    if parent_type == "class_body":
+                         logger.debug(f"Skipping inner class in ArchitectureBuilder: {name}")
+                         continue
+
                     class_name = source[n.start_byte:n.end_byte].decode("utf8")
-                    full_name = f"{package_name}.{class_name}" if package_name else class_name
+                    
+                    # Sync with JavaFlowStrategy: Package + FileName(no_ext) + ClassName
+                    file_name_no_ext = os.path.splitext(os.path.basename(file_path))[0]
+                    full_name = f"{package_name}.{file_name_no_ext}.{class_name}" if package_name else f"{file_name_no_ext}.{class_name}"
+                    
                     logger.info(f"[JAVA] Found class: {class_name}")
                     # class_source = source[n.start_byte:n.end_byte].decode("utf8") # Removed source
                     self._create_type_decl(class_name, full_name, file_path, package_name=package_name, type_str="CLASS")

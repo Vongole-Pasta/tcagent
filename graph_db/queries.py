@@ -45,10 +45,77 @@ class CypherQueries:
     ORDER BY distance ASC
     LIMIT $limit
     """
+
+    # --- New Frontend Support Queries ---
+
+    GET_ALL_METHODS = """
+    MATCH (m:METHOD)
+    RETURN elementId(m) as id, m.name as name, m.signature as signature, m.endpoint as endpoint, m.http_method as http_method, m.status as status
+    ORDER BY m.name
+    """
+    
+    GET_ALL_ENDPOINTS = """
+    MATCH (m:METHOD)
+    WHERE m.endpoint IS NOT NULL
+    OPTIONAL MATCH (m)-[:CALLS*0..]->(d:METHOD)
+    WITH m, collect(DISTINCT d.status) as statuses
+    RETURN elementId(m) as id, m.name as name, m.endpoint as endpoint, m.http_method as http_method, statuses
+    ORDER BY m.endpoint
+    """
+
+    GET_UPSTREAM_IMPACT = """
+    MATCH path = (source:METHOD)-[:CALLS*0..]->(target:METHOD)
+    WHERE (elementId(target) = $method_id OR target.id = $method_id)
+    RETURN path
+    LIMIT 100
+    """
+
+    GET_DOWNSTREAM_FLOW = """
+    MATCH path = (source:METHOD)-[:CALLS*0..]->(target:METHOD)
+    WHERE (elementId(source) = $method_id OR source.id = $method_id)
+    RETURN path
+    LIMIT 100
+    """
     
     # --- Change Detection Helpers ---
     
     GET_FILE_HASH = """
     MATCH (f:FILE {path: $file_path})
     RETURN f.hash as hash
+    """
+
+    # --- Status Management Queries ---
+    
+    DELETE_PROJECT_DELETED_NODES = """
+    MATCH (f:FILE {project: $project})
+    
+    // 1. Delete DELETED descendants (Methods, Types)
+    WITH f
+    OPTIONAL MATCH (f)-[:CONTAINS*]->(n)
+    WHERE n.status = 'DELETED' AND NOT n:FILE
+    DETACH DELETE n
+    
+    // 2. Delete DELETED Files
+    WITH f
+    WHERE f.status = 'DELETED'
+    DETACH DELETE f
+    """
+    
+    GET_PROJECT_FILES_HASH = """
+    MATCH (f:FILE)
+    WHERE f.project = $project
+    RETURN f.path as path, f.hash as hash
+    """
+    
+    MARK_FILE_DELETED_AND_ISOLATE = """
+    MATCH (f:FILE {path: $path, project: $project})
+    SET f.status = 'DELETED'
+    WITH f
+    # Mark all children (Classes, Methods) as DELETED
+    MATCH (f)-[:CONTAINS*0..]->(node)
+    SET node.status = 'DELETED'
+    WITH node
+    # Remove only CALLS relationships to isolate from flow
+    OPTIONAL MATCH (node)-[r:CALLS]-()
+    DELETE r
     """

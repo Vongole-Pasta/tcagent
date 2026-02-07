@@ -3,6 +3,7 @@ import logging
 import hashlib
 import tree_sitter
 import re
+import os
 
 logger = logging.getLogger(__name__)
 
@@ -47,7 +48,11 @@ class JavaFlowStrategy:
             return
             
         class_name = source_code[name_node.start_byte:name_node.end_byte].decode("utf-8")
-        full_name = f"{package_name}.{class_name}" if package_name else class_name
+        
+        # Unique TYPE Identity: Package + FileName(no_ext) + ClassName
+        file_name_no_ext = os.path.splitext(os.path.basename(file_path))[0]
+        full_name = f"{package_name}.{file_name_no_ext}.{class_name}" if package_name else f"{file_name_no_ext}.{class_name}"
+        
         if parent_name:
             full_name = f"{parent_name}${class_name}" # Inner Class 컨벤션
 
@@ -100,7 +105,7 @@ class JavaFlowStrategy:
     def _process_methods(self, class_body_node, source_code: bytes, class_full_name: str, file_path: str, scan_id: str, base_url: str):
         for child in class_body_node.children:
             if child.type == "method_declaration" or child.type == "constructor_declaration":
-                self._process_single_method(child, source_code, class_full_name, scan_id, base_url)
+                self._process_single_method(child, source_code, class_full_name, scan_id, base_url, file_path)
 
     def _extract_base_url(self, node, source_code: bytes):
         modifiers = node.child_by_field_name("modifiers")
@@ -145,9 +150,9 @@ class JavaFlowStrategy:
                          return source_code[value.start_byte:value.end_byte].decode("utf-8").strip('"')
         return ""
 
-    def _process_single_method(self, method_node, source_code: bytes, class_full_name: str, scan_id: str, base_url: str):
+    def _process_single_method(self, method_node, source_code: bytes, class_full_name: str, scan_id: str, base_url: str, file_path: str):
         name_node = method_node.child_by_field_name("name")
-        # Constructor의 경우 name이 메서드명과 동일
+        # structor의 경우 name이 메서드명과 동일
         if method_node.type == "constructor_declaration":
             # 생성자는 이름이 별도로 없고 클래스명과 동일 -> tree-sitter 구조 확인 필요
             # java parser에서 constructor_declaration의 name 필드는 클래스명을 가리킴
@@ -250,23 +255,23 @@ class JavaFlowStrategy:
         query = """
         MERGE (m:METHOD {signature: $signature})
         
-        // Hash Check & Status Update
-        WITH m, $method_hash as new_hash, $scan_id as current_scan_id
-        
-        // Determine Status: If hash matches, AS-IS. Else (New or Changed), TO-BE.
-        SET m.status = CASE 
-            WHEN m.hash = new_hash THEN 'AS-IS' 
-            ELSE 'TO-BE' 
-        END
+        ON CREATE SET 
+            m.status = 'NEW'
+            
+        ON MATCH SET 
+            m.status = CASE 
+                WHEN m.hash = $method_hash THEN 'AS-IS' 
+                ELSE 'MODIFIED' 
+            END
         
         // Update Properties
         SET m.name = $name,
-            m.source = $source,
-            m.args = $args,
-            m.hash = new_hash,
-            m.last_scan_id = current_scan_id,
-            m.endpoint = $endpoint,
-            m.http_method = $http_method
+        m.source = $source,
+        m.args = $args,
+        m.hash = $method_hash,
+        m.last_scan_id = $scan_id,
+        m.endpoint = $endpoint,
+        m.http_method = $http_method
         
         WITH m
         MATCH (c:TYPE {fullName: $class_full_name})
@@ -279,7 +284,6 @@ class JavaFlowStrategy:
             "class_full_name": class_full_name,
             "args": args,
             "method_hash": method_hash,
-            "scan_id": scan_id,
             "scan_id": scan_id,
             "endpoint": endpoint,
             "http_method": http_method
