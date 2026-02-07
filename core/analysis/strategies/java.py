@@ -3,6 +3,7 @@ import logging
 import hashlib
 import tree_sitter
 import re
+import os
 
 logger = logging.getLogger(__name__)
 
@@ -47,7 +48,11 @@ class JavaFlowStrategy:
             return
             
         class_name = source_code[name_node.start_byte:name_node.end_byte].decode("utf-8")
-        full_name = f"{package_name}.{class_name}" if package_name else class_name
+        
+        # Unique TYPE Identity: Package + FileName(no_ext) + ClassName
+        file_name_no_ext = os.path.splitext(os.path.basename(file_path))[0]
+        full_name = f"{package_name}.{file_name_no_ext}.{class_name}" if package_name else f"{file_name_no_ext}.{class_name}"
+        
         if parent_name:
             full_name = f"{parent_name}${class_name}" # Inner Class 컨벤션
 
@@ -147,7 +152,7 @@ class JavaFlowStrategy:
 
     def _process_single_method(self, method_node, source_code: bytes, class_full_name: str, scan_id: str, base_url: str, file_path: str):
         name_node = method_node.child_by_field_name("name")
-        # Constructor의 경우 name이 메서드명과 동일
+        # structor의 경우 name이 메서드명과 동일
         if method_node.type == "constructor_declaration":
             # 생성자는 이름이 별도로 없고 클래스명과 동일 -> tree-sitter 구조 확인 필요
             # java parser에서 constructor_declaration의 name 필드는 클래스명을 가리킴
@@ -227,7 +232,7 @@ class JavaFlowStrategy:
                         endpoint = self._combine_url(base_url, extracted_path)
 
         # DB 저장 (Updated Logic)
-        self._create_method_node(signature, method_name, full_source, class_full_name, ",".join(param_list), method_hash, scan_id, endpoint, http_method, file_path)
+        self._create_method_node(signature, method_name, full_source, class_full_name, ",".join(param_list), method_hash, scan_id, endpoint, http_method)
         
         # Call 관계 추출 및 저장 (1단계: 텍스트 기반 호출 추출)
         # 메서드 바디(Body) 내부 탐색
@@ -246,7 +251,7 @@ class JavaFlowStrategy:
         path = path.lstrip("/")
         return f"{base}/{path}"
 
-    def _create_method_node(self, signature, name, source, class_full_name, args, method_hash, scan_id, endpoint, http_method, file_path):
+    def _create_method_node(self, signature, name, source, class_full_name, args, method_hash, scan_id, endpoint, http_method):
         query = """
         MERGE (m:METHOD {signature: $signature})
         
@@ -261,13 +266,12 @@ class JavaFlowStrategy:
         
         // Update Properties
         SET m.name = $name,
-            m.source = $source,
-            m.args = $args,
-            m.hash = $method_hash,
-            m.last_scan_id = $scan_id,
-            m.endpoint = $endpoint,
-            m.http_method = $http_method,
-            m.file_path = $file_path
+        m.source = $source,
+        m.args = $args,
+        m.hash = $method_hash,
+        m.last_scan_id = $scan_id,
+        m.endpoint = $endpoint,
+        m.http_method = $http_method
         
         WITH m
         MATCH (c:TYPE {fullName: $class_full_name})
@@ -282,8 +286,7 @@ class JavaFlowStrategy:
             "method_hash": method_hash,
             "scan_id": scan_id,
             "endpoint": endpoint,
-            "http_method": http_method,
-            "file_path": file_path
+            "http_method": http_method
         })
 
     def _extract_method_calls(self, node, source_code: bytes, caller_signature: str, calls: dict):

@@ -36,41 +36,10 @@ class FlowBuilder:
                 scan_id = str(uuid.uuid4())
                 strategy.process(tree, content, file_path, scan_id)
                 self._prune_nodes(file_path, scan_id)
-            else:
-                # Others: Classic Reset (Delete + Create)
-                self._cleanup_file_flow_data(file_path)
-                strategy.process(tree, content, file_path)
+            # Removed unreachable else block for non-Java files as strategy list only contains Java
 
         except Exception as e:
             logger.error(f"Failed to process flow for {file_path} from memory: {e}")
-
-    def _cleanup_file_flow_data(self, file_path):
-        """파일 재분석 전 기존 Flow 데이터 삭제 (중복 방지)"""
-        query = """
-        MATCH (f:FILE {path: $file_path})
-        
-        // 1. 메서드 자식 노드 (제어구조, 호출, 파라미터, 반환, 어노테이션)
-        // 메서드는 FILE 또는 TYPE_DECL로부터 [:CONTAINS]로 연결될 수 있음
-        OPTIONAL MATCH (f)-[:CONTAINS*1..2]->(m:METHOD)
-        OPTIONAL MATCH (m)-[:Contains|HAS_PARAM|HAS_EXIT|ANNOTATED_BY|HAS_CALL]->(child)
-        WHERE child:CONTROL_STRUCTURE OR child:CALL OR child:PARAMETER OR child:RETURN OR child:ANNOTATION
-        
-        // 1.1 제어 구조에 첨부된 리터럴(Literal)
-        OPTIONAL MATCH (child)-[:CONTAINS]->(lit:LITERAL)
-        DETACH DELETE m, child, lit
-        
-        // 2. 파일 자식 노드 (최상위 제어구조, 호출) - Contains 또는 AST로 연결? 
-        // FlowBuilder는 파일 레벨의 제어/호출에 대해 Contains를 사용함.
-        WITH f
-        OPTIONAL MATCH (f)-[:Contains]->(child_direct)
-        WHERE child_direct:CONTROL_STRUCTURE OR child_direct:CALL
-        OPTIONAL MATCH (child_direct)-[:CONTAINS]->(lit_direct:LITERAL)
-        DETACH DELETE child_direct, lit_direct
-        """
-        try:
-            self.connector.execute_query(query, {"file_path": file_path})
-        except Exception as e:
-            logger.error(f"Cleanup Error ({file_path}): {e}")
 
     def _prune_nodes(self, file_path, scan_id):
         """
@@ -81,8 +50,8 @@ class FlowBuilder:
         query = """
         MATCH (f:FILE {path: $file_path})
         MATCH (f)-[:CONTAINS*1..3]->(m:METHOD)
-        // Only prune methods that explicitly belong to this file (avoid shared Type collision)
-        WHERE m.file_path = $file_path AND m.last_scan_id <> $scan_id
+        
+        WHERE m.last_scan_id <> $scan_id
         
         // Mark as DELETED
         SET m.status = 'DELETED'

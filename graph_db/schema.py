@@ -21,7 +21,6 @@ NODE_SCHEMA = {
     "METHOD": [
         "args",
         "endpoint",
-        "file_path",
         "hash",
         "http_method",
         "last_scan_id",
