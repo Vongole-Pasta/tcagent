@@ -53,12 +53,62 @@ export function Sidebar() {
         return n.type === filterType;
     });
 
+    const sortedNodes = [...filteredNodes].sort((a, b) => {
+        const getScore = (s?: string | null) => {
+            if (s === 'DELETED') return 3;
+            if (s === 'NEW') return 2;
+            if (s === 'MODIFIED' || s === 'TO-BE' || s === 'TOBE') return 1;
+            return 0;
+        };
+        const scoreA = getScore(a.status);
+        const scoreB = getScore(b.status);
+
+        if (scoreA !== scoreB) return scoreB - scoreA; // Higher priority first
+        return a.name.localeCompare(b.name);
+    });
+
     const handleNodeClick = (node: any) => {
+        // ... (same as before)
         if (node.type === 'ENDPOINT') {
             fetchDownstreamGraph(node.id);
         } else {
             fetchUpstreamGraph(node.id);
         }
+    };
+
+    const getStatusBadge = (status?: string | null) => {
+        if (!status || status === 'AS-IS') return null;
+
+        let label = '';
+        let colorClass = '';
+
+        switch (status) {
+            case 'NEW':
+                label = 'NEW';
+                colorClass = 'bg-green-500 hover:bg-green-600';
+                break;
+            case 'MODIFIED':
+            case 'TO-BE':
+            case 'TOBE':
+                label = 'MODIFIED';
+                colorClass = 'bg-blue-500 hover:bg-blue-600';
+                break;
+            case 'DELETED':
+                label = 'DELETED';
+                colorClass = 'bg-red-500 hover:bg-red-600';
+                break;
+            default:
+                return null;
+        }
+
+        return (
+            <Badge
+                variant="default"
+                className={cn("text-[10px] h-5 px-1.5 pointer-events-none", colorClass)}
+            >
+                {label}
+            </Badge>
+        );
     };
 
     return (
@@ -118,12 +168,12 @@ export function Sidebar() {
             {/* List */}
             <ScrollArea className="flex-1 h-full">
                 <div className="p-2 space-y-1 pb-4">
-                    {filteredNodes.length === 0 && (
+                    {sortedNodes.length === 0 && (
                         <div className="p-4 text-center text-sm text-muted-foreground">
                             No items found.
                         </div>
                     )}
-                    {filteredNodes.map((node) => (
+                    {sortedNodes.map((node) => (
                         <div
                             key={node.id}
                             onClick={() => handleNodeClick(node)}
@@ -131,7 +181,8 @@ export function Sidebar() {
                                 "flex items-center gap-3 p-3 rounded-md cursor-pointer transition-colors text-sm border border-transparent",
                                 selectedNodeId === node.id
                                     ? "bg-accent text-accent-foreground border-border shadow-sm"
-                                    : "hover:bg-muted/60"
+                                    : "hover:bg-muted/60",
+                                node.status === 'DELETED' && "opacity-60 grayscale"
                             )}
                         >
                             {node.type === 'ENDPOINT' ? (
@@ -146,18 +197,12 @@ export function Sidebar() {
                                         {node.type === 'ENDPOINT' ? 'API' : 'M'}
                                     </span>
                                     <div className="flex flex-col flex-1 min-w-0">
+
                                         <div className="flex items-center gap-2">
                                             <span className="truncate block font-medium">
                                                 {node.name}
                                             </span>
-                                            {(node.status === 'TO-BE' || node.status === 'TOBE') && (
-                                                <Badge
-                                                    variant="default"
-                                                    className="text-[10px] h-5 px-1.5 bg-blue-600 hover:bg-blue-700 pointer-events-none"
-                                                >
-                                                    UPDATE
-                                                </Badge>
-                                            )}
+                                            {getStatusBadge(node.status)}
                                         </div>
                                         {node.endpoint && (
                                             <span className="text-[10px] text-muted-foreground truncate block">

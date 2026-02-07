@@ -163,6 +163,7 @@ export const useStore = create<AppState>((set, get) => ({
 
             // Refresh list after upload
             await get().fetchProjectNodes(currentProject || 'default');
+            await get().fetchProjects();
             set({ uploadSuccess: true });
         } catch (err: any) {
             set({ error: err.message });

@@ -75,28 +75,32 @@ class FlowBuilder:
     def _prune_nodes(self, file_path, scan_id):
         """
         Smart Update 후처리:
-        이번 스캔(scan_id)에서 갱신되지 않은(즉, 소스에서 삭제된) 노드를 제거합니다.
+        갱신되지 않은 메서드를 'DELETED' 상태로 변경하고, 호출 관계(Flow)를 끊습니다.
+        (노드 자체와 구조적 자식들은 유지하여 소스 확인 가능하게 함)
         """
         query = """
         MATCH (f:FILE {path: $file_path})
-        
-        // 1. 해당 파일에 속한 메서드 중 last_scan_id가 현재 id와 다른 것 찾기
-        // 1. 해당 파일에 속한 메서드 중 last_scan_id가 현재 id와 다른 것 찾기
         MATCH (f)-[:CONTAINS*1..3]->(m:METHOD)
-        WHERE m.last_scan_id <> $scan_id
+        // Only prune methods that explicitly belong to this file (avoid shared Type collision)
+        WHERE m.file_path = $file_path AND m.last_scan_id <> $scan_id
         
-        // 2. 메서드의 자식 노드들도 같이 삭제 (파라미터, 호출 등)
-        OPTIONAL MATCH (m)-[:Contains|HAS_PARAM|HAS_EXIT|ANNOTATED_BY|HAS_CALL]->(child)
-        WHERE child:CONTROL_STRUCTURE OR child:CALL OR child:PARAMETER OR child:RETURN OR child:ANNOTATION
+        // Mark as DELETED
+        SET m.status = 'DELETED'
         
-        // 3. 자식의 자식 (Literal 등)
-        OPTIONAL MATCH (child)-[:CONTAINS]->(lit:LITERAL)
+        WITH m
+        // Remove Flow Relationships (Isolation)
+        // Outgoing/Incoming calls are removed so it doesn't affect flow analysis
+        OPTIONAL MATCH (m)-[r:CALLS]-()
+        DELETE r
         
-        DETACH DELETE m, child, lit
+        WITH m
+        // Remove internal AST calls (orphaned references)
+        OPTIONAL MATCH (m)-[r:HAS_CALL]->()
+        DELETE r
         """
         try:
             self.connector.execute_query(query, {"file_path": file_path, "scan_id": scan_id})
-            logger.info(f"Pruned stale nodes for {file_path} (ScanID: {scan_id})")
+            logger.info(f"Marked stale methods as DELETED for {file_path} (ScanID: {scan_id})")
         except Exception as e:
             logger.error(f"Pruning Error ({file_path}): {e}")
 

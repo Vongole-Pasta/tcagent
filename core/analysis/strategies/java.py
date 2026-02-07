@@ -100,7 +100,7 @@ class JavaFlowStrategy:
     def _process_methods(self, class_body_node, source_code: bytes, class_full_name: str, file_path: str, scan_id: str, base_url: str):
         for child in class_body_node.children:
             if child.type == "method_declaration" or child.type == "constructor_declaration":
-                self._process_single_method(child, source_code, class_full_name, scan_id, base_url)
+                self._process_single_method(child, source_code, class_full_name, scan_id, base_url, file_path)
 
     def _extract_base_url(self, node, source_code: bytes):
         modifiers = node.child_by_field_name("modifiers")
@@ -145,7 +145,7 @@ class JavaFlowStrategy:
                          return source_code[value.start_byte:value.end_byte].decode("utf-8").strip('"')
         return ""
 
-    def _process_single_method(self, method_node, source_code: bytes, class_full_name: str, scan_id: str, base_url: str):
+    def _process_single_method(self, method_node, source_code: bytes, class_full_name: str, scan_id: str, base_url: str, file_path: str):
         name_node = method_node.child_by_field_name("name")
         # Constructor의 경우 name이 메서드명과 동일
         if method_node.type == "constructor_declaration":
@@ -227,7 +227,7 @@ class JavaFlowStrategy:
                         endpoint = self._combine_url(base_url, extracted_path)
 
         # DB 저장 (Updated Logic)
-        self._create_method_node(signature, method_name, full_source, class_full_name, ",".join(param_list), method_hash, scan_id, endpoint, http_method)
+        self._create_method_node(signature, method_name, full_source, class_full_name, ",".join(param_list), method_hash, scan_id, endpoint, http_method, file_path)
         
         # Call 관계 추출 및 저장 (1단계: 텍스트 기반 호출 추출)
         # 메서드 바디(Body) 내부 탐색
@@ -246,27 +246,30 @@ class JavaFlowStrategy:
         path = path.lstrip("/")
         return f"{base}/{path}"
 
-    def _create_method_node(self, signature, name, source, class_full_name, args, method_hash, scan_id, endpoint, http_method):
+    def _create_method_node(self, signature, name, source, class_full_name, args, method_hash, scan_id, endpoint, http_method, file_path):
         query = """
         MERGE (m:METHOD {signature: $signature})
         
-        // Hash Check & Status Update
-        WITH m, $method_hash as new_hash, $scan_id as current_scan_id
-        
-        // Determine Status: If hash matches, AS-IS. Else (New or Changed), TO-BE.
-        SET m.status = CASE 
-            WHEN m.hash = new_hash THEN 'AS-IS' 
-            ELSE 'TO-BE' 
-        END
+        ON CREATE SET 
+            m.status = 'NEW',
+            m.first_seen = datetime()
+            
+        ON MATCH SET 
+            m.status = CASE 
+                WHEN m.hash = $method_hash THEN 'AS-IS' 
+                ELSE 'MODIFIED' 
+            END
         
         // Update Properties
         SET m.name = $name,
             m.source = $source,
             m.args = $args,
-            m.hash = new_hash,
-            m.last_scan_id = current_scan_id,
+            m.hash = $method_hash,
+            m.last_scan_id = $scan_id,
             m.endpoint = $endpoint,
-            m.http_method = $http_method
+            m.http_method = $http_method,
+            m.last_seen = datetime(),
+            m.file_path = $file_path
         
         WITH m
         MATCH (c:TYPE {fullName: $class_full_name})
@@ -280,9 +283,9 @@ class JavaFlowStrategy:
             "args": args,
             "method_hash": method_hash,
             "scan_id": scan_id,
-            "scan_id": scan_id,
             "endpoint": endpoint,
-            "http_method": http_method
+            "http_method": http_method,
+            "file_path": file_path
         })
 
     def _extract_method_calls(self, node, source_code: bytes, caller_signature: str, calls: dict):
