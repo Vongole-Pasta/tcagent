@@ -19,7 +19,11 @@ export function Sidebar() {
         uploadFiles,
         selectedNodeId,
         fetchUpstreamGraph,
-        fetchDownstreamGraph
+        fetchDownstreamGraph,
+        projects,
+        fetchProjects,
+        selectedProject,
+        selectProject
     } = useStore();
 
     const [search, setSearch] = useState('');
@@ -27,7 +31,8 @@ export function Sidebar() {
 
     useEffect(() => {
         fetchProjectNodes();
-    }, [fetchProjectNodes]);
+        fetchProjects();
+    }, [fetchProjectNodes, fetchProjects]);
 
     const onDrop = (acceptedFiles: File[]) => {
         uploadFiles(acceptedFiles);
@@ -58,6 +63,21 @@ export function Sidebar() {
 
     return (
         <div className="w-full border-r h-full flex flex-col bg-background overflow-hidden relative">
+            {/* Project Selector */}
+            <div className="p-4 border-b shrink-0 space-y-2">
+                <label className="text-xs font-semibold text-muted-foreground">Target Project</label>
+                <select
+                    className="flex h-9 w-full items-center justify-between rounded-md border border-input bg-transparent px-3 py-2 text-sm shadow-sm ring-offset-background placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
+                    value={selectedProject || ''}
+                    onChange={(e) => selectProject(e.target.value || null)}
+                >
+                    <option value="">+ New Project (Auto-detect)</option>
+                    {projects.map(p => (
+                        <option key={p} value={p}>{p}</option>
+                    ))}
+                </select>
+            </div>
+
             {/* Upload Area */}
             <div className="p-4 border-b shrink-0">
                 <div

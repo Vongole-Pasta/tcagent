@@ -32,6 +32,11 @@ interface AppState {
     fetchNodeDetail: (nodeId: string) => Promise<void>;
     uploadFiles: (files: File[]) => Promise<void>;
     clearSelection: () => void;
+
+    projects: string[];
+    selectedProject: string | null;
+    fetchProjects: () => Promise<void>;
+    selectProject: (projectId: string | null) => void;
 }
 
 const API_BASE = 'http://localhost:8000'; // Make sure this matches your backend
@@ -43,6 +48,33 @@ export const useStore = create<AppState>((set, get) => ({
     selectedNodeDetail: null,
     isLoading: false,
     error: null,
+
+    // Project Management
+    projects: [],
+    selectedProject: null,
+
+    fetchProjects: async () => {
+        try {
+            const res = await fetch(`${API_BASE}/projects`);
+            if (res.ok) {
+                const data = await res.json();
+                set({ projects: data.projects });
+            }
+        } catch (err) {
+            console.error(err);
+        }
+    },
+
+    selectProject: (projectId) => {
+        set({ selectedProject: projectId });
+        // Optionally fetch nodes for this project immediately?
+        // The user might want to click "Search" or similar, but auto-fetch is nice.
+        if (projectId) {
+            get().fetchProjectNodes(projectId);
+        } else {
+            set({ projectNodes: [] });
+        }
+    },
 
     fetchProjectNodes: async (projectId = 'default') => {
         set({ isLoading: true, error: null });
@@ -113,6 +145,11 @@ export const useStore = create<AppState>((set, get) => ({
         try {
             const formData = new FormData();
             files.forEach(f => formData.append('files', f));
+
+            const currentProject = get().selectedProject;
+            if (currentProject) {
+                formData.append('project', currentProject);
+            }
 
             const res = await fetch(`${API_BASE}/upload`, {
                 method: 'POST',

@@ -4,6 +4,24 @@ from typing import List, Dict, Any, Optional
 
 router = APIRouter(prefix="/projects", tags=["projects"])
 
+@router.get("/")
+async def get_all_projects(request: Request):
+    """
+    Get a list of all available projects.
+    """
+    analysis_flow = getattr(request.app.state, "analysis_flow", None)
+    if not analysis_flow:
+        raise HTTPException(status_code=503, detail="Analysis Agent not initialized")
+
+    try:
+        # Fetch distinct projects from FILE nodes
+        query = "MATCH (f:FILE) RETURN DISTINCT f.project as project"
+        results = analysis_flow.connector.execute_query(query)
+        projects = [r["project"] for r in results if r.get("project")]
+        return {"projects": projects}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 @router.get("/{project_id}/nodes")
 async def get_project_nodes(project_id: str, request: Request, type: Optional[str] = None):
     """
