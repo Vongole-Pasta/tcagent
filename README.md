@@ -10,36 +10,48 @@
 ## 🚀 시작하기 (Getting Started)
 
 ### 1. 데이터베이스 준비 (Neo4j)
-Neo4j 인스턴스가 실행 중이어야 합니다. (Docker 또는 Desktop 권장)
-
-```bash
-# Docker 실행 예시
-docker run -d --name neo4j \
-  -p 7474:7474 -p 7687:7687 \
-  -e NEO4J_AUTH=neo4j/password \
-  neo4j:latest
-```
+Neo4j 인스턴스가 실행 중이어야 합니다.
 
 ### 2. 프로젝트 설정 (Configuration)
-프로젝트 루트에 `.env` 파일을 생성하고 접속 정보를 입력하세요.
+이 프로젝트는 **로컬 개발환경(dev)**과 **운영 환경(prd)**을 구분하여 설정 파일을 관리합니다.
 
+#### 환경 설정 파일 준비
+프로젝트 루트에 다음 두 파일을 생성해야 합니다.
+
+**1) 로컬 개발용 (.env.dev)**
+개인 로컬 Neo4j 설정을 입력하세요.
 ```ini
+# .env.dev
 NEO4J_URI=bolt://localhost:7687
 NEO4J_USER=neo4j
 NEO4J_PASSWORD=password
-APP_ENV=dev
+```
+
+**2) 운영/클라우드용 (.env.prd)**
+팀원들과 공유된 클라우드 Neo4j 설정을 입력하세요.
+```ini
+# .env.prd
+NEO4J_URI=bolt://<cloud-neo4j-uri>:7687
+NEO4J_USER=neo4j
+NEO4J_PASSWORD=<secure-password>
 ```
 
 ### 3. 백엔드 실행 (Backend)
 FastAPI 서버를 실행합니다.
 
 ```bash
-# 1. 의존성 동기화
+# 1. 의존성 및 가상환경 동기화 (최초 1회 실행)
 uv sync
 
-# 2. 서버 시작 (http://localhost:8000)
-uv run uvicorn api.main:app --reload
+# 2. 서버 실행
+# 개발 환경 (로컬 DB 사용, 기본값)
+APP_ENV=dev uv run uvicorn api.main:app --reload
+
+# 운영 환경 (클라우드 DB 사용)
+APP_ENV=prd uv run uvicorn api.main:app --reload
 ```
+> **Tip**: `APP_ENV` 변수를 생략하면 기본적으로 `dev` 환경으로 실행됩니다.
+
 - Swagger UI 문서: [http://localhost:8000/docs](http://localhost:8000/docs)
 
 ### 4. 프론트엔드 실행 (Frontend)
