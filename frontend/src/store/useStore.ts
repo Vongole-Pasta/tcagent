@@ -37,6 +37,9 @@ interface AppState {
     selectedProject: string | null;
     fetchProjects: () => Promise<void>;
     selectProject: (projectId: string | null) => void;
+
+    uploadSuccess: boolean;
+    setUploadSuccess: (v: boolean) => void;
 }
 
 const API_BASE = 'http://localhost:8000'; // Make sure this matches your backend
@@ -141,7 +144,7 @@ export const useStore = create<AppState>((set, get) => ({
     },
 
     uploadFiles: async (files) => {
-        set({ isLoading: true, error: null });
+        set({ isLoading: true, error: null, uploadSuccess: false });
         try {
             const formData = new FormData();
             files.forEach(f => formData.append('files', f));
@@ -159,7 +162,8 @@ export const useStore = create<AppState>((set, get) => ({
             if (!res.ok) throw new Error('Upload failed');
 
             // Refresh list after upload
-            await get().fetchProjectNodes();
+            await get().fetchProjectNodes(currentProject || 'default');
+            set({ uploadSuccess: true });
         } catch (err: any) {
             set({ error: err.message });
         } finally {
@@ -168,4 +172,7 @@ export const useStore = create<AppState>((set, get) => ({
     },
 
     clearSelection: () => set({ selectedNodeId: null, selectedNodeDetail: null, graphData: { nodes: [], edges: [] } }),
+
+    uploadSuccess: false,
+    setUploadSuccess: (v: boolean) => set({ uploadSuccess: v }),
 }));

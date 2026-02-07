@@ -12,12 +12,23 @@ import {
   ResizablePanel,
   ResizablePanelGroup,
 } from "@/components/ui/resizable";
+import { LoadingOverlay } from "@/components/ui/loading-overlay";
+import { SuccessDialog } from "@/components/ui/success-dialog";
+import { LoadingOverlay } from "@/components/ui/loading-overlay";
+import { SuccessDialog } from "@/components/ui/success-dialog";
+
+
+import { LoadingOverlay } from "@/components/ui/loading-overlay";
+import { SuccessDialog } from "@/components/ui/success-dialog";
 
 export default function Home() {
-  const { selectedNodeId, clearSelection } = useStore();
+  const { selectedNodeId, clearSelection, isLoading } = useStore(); // Added isLoading
 
   return (
-    <main className="h-screen w-screen overflow-hidden flex bg-background text-foreground">
+    <main className="h-screen w-screen overflow-hidden flex bg-background text-foreground relative">
+      {isLoading && <LoadingOverlay />}
+      <SuccessDialog />
+
       {/* Left Sidebar - Fixed Width */}
       <aside className="w-[300px] flex-shrink-0 border-r bg-muted/10 h-full overflow-hidden">
         <Sidebar />
