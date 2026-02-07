@@ -251,8 +251,7 @@ class JavaFlowStrategy:
         MERGE (m:METHOD {signature: $signature})
         
         ON CREATE SET 
-            m.status = 'NEW',
-            m.first_seen = datetime()
+            m.status = 'NEW'
             
         ON MATCH SET 
             m.status = CASE 
@@ -268,7 +267,6 @@ class JavaFlowStrategy:
             m.last_scan_id = $scan_id,
             m.endpoint = $endpoint,
             m.http_method = $http_method,
-            m.last_seen = datetime(),
             m.file_path = $file_path
         
         WITH m

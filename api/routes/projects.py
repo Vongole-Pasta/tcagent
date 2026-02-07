@@ -55,11 +55,15 @@ async def get_project_nodes(project_id: str, request: Request, type: Optional[st
             # Identify effective status for endpoints
             if statuses:
                 # Normalize check for variations
-                normalized = [s.upper().replace("-", "") for s in statuses if s]
+                normalized = set(s.upper().replace("-", "") for s in statuses if s)
                 
-                # Priority: TO-BE (Modified) > AS-IS (Stable)
-                if "TOBE" in normalized:
-                    status = "TO-BE"
+                # Priority: DELETED > NEW > MODIFIED > AS-IS
+                if "DELETED" in normalized:
+                    status = "DELETED"
+                elif "NEW" in normalized:
+                    status = "NEW"
+                elif "MODIFIED" in normalized or "TOBE" in normalized:
+                    status = "MODIFIED"
                 elif "ASIS" in normalized:
                     status = "AS-IS"
             
