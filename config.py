@@ -1,7 +1,20 @@
 import os
 from dotenv import load_dotenv
 
-load_dotenv()
+# Load environment variables based on APP_ENV (default: dev)
+import sys
+
+app_env = os.getenv("APP_ENV", "dev")
+#app_env = os.getenv("APP_ENV", "prd")
+env_file = f".env.{app_env}"
+
+# Fallback to .env if specific file doesn't exist, or just load it
+if os.path.exists(env_file):
+    print(f"Loading configuration from {env_file}")
+    load_dotenv(env_file)
+else:
+    print(f"Warning: {env_file} not found. Loading default .env")
+    load_dotenv()
 
 class Config:
     NEO4J_URI = os.getenv("NEO4J_URI", "bolt://localhost:7687")
