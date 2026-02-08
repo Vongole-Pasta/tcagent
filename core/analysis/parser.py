@@ -3,10 +3,10 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-class ParserFactory:
+class Factory:
     @staticmethod
     def get_parser(extension: str):
-        lang_name = ParserFactory._get_language_name(extension)
+        lang_name = Factory._get_language_name(extension)
         if not lang_name:
             raise ValueError(f"Unsupported extension: {extension}")
         try:
@@ -17,7 +17,7 @@ class ParserFactory:
 
     @staticmethod
     def get_language(extension: str):
-        lang_name = ParserFactory._get_language_name(extension)
+        lang_name = Factory._get_language_name(extension)
         if not lang_name:
             raise ValueError(f"Unsupported extension: {extension}")
         try:

@@ -1,30 +1,46 @@
 import logging
 import os
 from infra.db_client import DBClient
-from infra.code_loader import CodeLoader
-from core.analysis.architecture_builder import ArchitectureBuilder
-from core.analysis.flow_builder import FlowBuilder
+from .loader import Loader
+from .architecture import Builder as ArchitectureBuilder
+from .flow import Builder as FlowBuilder
 from config import Config
 from graph_db.queries import CypherQueries
 
 logger = logging.getLogger(__name__)
 
-class IncrementalAnalyzer:
+
+class Analyzer:
+    """
+    [분석 조정자 (Orchestrator)]
+    전체 파일 분석 프로세스를 관리하고 조정하는 핵심 클래스입니다.
+    파일의 변경 사항(생성, 수정, 삭제)을 감지하고, 적절한 빌더(Builder)를 호출하여 그래프 DB를 업데이트합니다.
+    """
     def __init__(self, connector: DBClient):
         self.connector = connector
-        self.ingestor = CodeLoader(connector)
+        self.ingestor = Loader(connector)
         self.arch_builder = ArchitectureBuilder(connector)
         self.flow_builder = FlowBuilder(connector)
 
     def process_files_from_memory(self, files_data: list[dict], project: str = None):
         """
-        메모리에 있는 파일들을 직접 처리 (디스크 I/O 없음)
+        [메모리 파일 처리 파이프라인]
+        사용자가 업로드한 파일 목록(files_data)을 받아 분석을 수행합니다.
+        디스크 I/O 없이 메모리 상에서 직접 처리하여 속도를 최적화했습니다.
         
-        Lifecycle:
-        1. Cleanup: 이전에 'DELETED' 상태였던 노드 영구 삭제 (Ghost Node Cleanup)
-        2. Snapshot: 현재 DB의 파일 상태 조회
-        3. Processing: 업로드된 파일 분석 (NEW, MODIFIED, AS-IS)
-        4. Deletion: 업로드되지 않은 파일 처리 (DELETED marking + Isolation)
+        Process Lifecycle:
+        1. Cleanup: 이전에 'DELETED'로 마킹된 유령 노드들을 DB에서 영구 삭제합니다.
+        2. Snapshot: 현재 DB에 저장된 파일 목록과 해시값을 조회하여 기준점을 잡습니다.
+        3. Processing: 업로드된 파일의 해시를 비교하여 상태(NEW, MODIFIED, AS-IS)를 결정하고 분석합니다.
+        4. Deletion: 업로드 목록에 없는 기존 파일은 'DELETED'로 마킹하고 그래프에서 격리합니다.
+        5. Global Resolution: 변경 사항이 있다면 전체 호출 관계(Call Graph)를 재계산하여 연결성을 복구합니다.
+        
+        Args:
+            files_data (list[dict]): {'path': str, 'content': bytes} 형태의 파일 목록
+            project (str): 프로젝트 식별자 (기본값: "default")
+            
+        Returns:
+            list: 업데이트된 파일들의 경로 목록 (Frontend 갱신용)
         """
         updated_files = []
         project = project or "default"

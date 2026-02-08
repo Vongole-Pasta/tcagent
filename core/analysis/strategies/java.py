@@ -7,22 +7,39 @@ import os
 
 logger = logging.getLogger(__name__)
 
+
 class JavaFlowStrategy:
+    """
+    [Java 플로우 분석 전략]
+    Java 소스 코드를 Tree-sitter로 파싱하여 구조와 호출 관계를 추출하는 클래스입니다.
+    Spring Framework의 어노테이션(RequestMapping)을 인식하여 API 엔드포인트 정보도 함께 추출합니다.
+    """
     def __init__(self, connector: DBClient):
         self.connector = connector
         # 자바에서 자주 쓰이는 Collection, Map 등의 제네릭 타입을 처리하기 위한 정규식
         self.generic_pattern = re.compile(r"<.*>")
 
     def process(self, tree: tree_sitter.Tree, source_code: bytes, file_path: str, scan_id: str = None):
+        """
+        [분석 실행 진입점]
+        Tree-sitter 파싱 트리를 순회하며 패키지, 클래스, 메서드 정보를 추출합니다.
+        
+        Args:
+            tree (tree_sitter.Tree): 파싱된 구문 트리
+            source_code (bytes): 원본 소스 코드
+            file_path (str): 파일 경로
+            scan_id (str): 이번 분석 세션의 고유 아이디 (삭제된 노드 식별용)
+        """
         root_node = tree.root_node
         
         # 1. 패키지 정보 추출
         package_name = self._get_package_name(root_node, source_code)
         
-        # 2. 클래스/인터페이스 추출
+        # 2. 클래스/인터페이스 추출 (재귀 탐색)
         self._traverse_types(root_node, source_code, file_path, package_name, scan_id=scan_id)
 
     def _get_package_name(self, root_node, source_code):
+        """[패키지명 추출] AST 루트에서 package 선언을 찾아 패키지명을 반환합니다."""
         for child in root_node.children:
             if child.type == "package_declaration":
                 # package_declaration children: (scoped_identifier) or (identifier)
@@ -32,7 +49,7 @@ class JavaFlowStrategy:
         return ""
 
     def _traverse_types(self, node, source_code: bytes, file_path: str, package_name: str, parent_class_name: str = "", scan_id: str = None):
-        """재귀적으로 클래스 구조를 탐색"""
+        """[타입 재귀 탐색] 클래스, 인터페이스, Enum, Record 등 타입 선언을 찾아 처리합니다."""
         for child in node.children:
             if child.type in ["class_declaration", "interface_declaration", "enum_declaration", "record_declaration"]:
                 self._process_type_declaration(child, source_code, file_path, package_name, parent_class_name, scan_id)
@@ -43,6 +60,11 @@ class JavaFlowStrategy:
                 self._traverse_types(child, source_code, file_path, package_name, parent_class_name, scan_id)
 
     def _process_type_declaration(self, node, source_code: bytes, file_path: str, package_name: str, parent_name: str, scan_id: str = None):
+        """
+        [단일 타입 처리]
+        발견된 타입을 DB에 TYPE 노드로 저장하고, 내부의 메서드를 추출합니다.
+        Inner Class의 경우 부모 클래스 이름($ 구분자)을 포함하여 이름을 생성합니다.
+        """
         name_node = node.child_by_field_name("name")
         if not name_node:
             return
@@ -251,7 +273,18 @@ class JavaFlowStrategy:
         path = path.lstrip("/")
         return f"{base}/{path}"
 
+
     def _create_method_node(self, signature, name, source, class_full_name, args, method_hash, scan_id, endpoint, http_method):
+        """
+        [메서드 노드 생성 및 연결]
+        추출된 메서드 정보를 그래프 DB에 'METHOD' 노드로 생성(MERGE)합니다.
+        
+        동작 방식:
+        1. 노드 생성/매칭 (Signature 기준)
+        2. 상태 업데이트 (NEW: 생성됨, AS-IS: 변경없음, MODIFIED: 내용변경됨)
+        3. 속성 설정 (소스코드, 인자, 해시, 엔드포인트 정보 등)
+        4. 부모 클래스(TYPE)와 'CONTAINS' 관계로 연결
+        """
         query = """
         MERGE (m:METHOD {signature: $signature})
         

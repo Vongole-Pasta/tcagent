@@ -5,21 +5,33 @@ import uuid
 import os
 import logging
 from core.analysis.strategies.java import JavaFlowStrategy
-from core.analysis.parser_factory import ParserFactory
+from .parser import Factory
 
 logger = logging.getLogger(__name__)
 
-class FlowBuilder:
+
+class Builder:
+    """
+    [플로우 빌더]
+    메서드 레벨의 상세 분석(Flow Analysis)을 담당합니다.
+    각 파일의 메서드를 추출(Method Node)하고, 메서드 간의 호출 관계(Call Relationship)를 연결합니다.
+    언어별 전략(Strategy) 패턴을 사용하여 확장성을 가집니다.
+    """
     def __init__(self, connector: DBClient):
         self.connector = connector
         self.strategies = {
             ".java": JavaFlowStrategy(connector),
         }
 
-
-
     def process_file_from_content(self, file_path: str, content: bytes):
-        """신규 방식: 메모리에 있는 파일 내용을 직접 처리"""
+        """
+        [메모리 기반 플로우 분석]
+        파일 내용을 파싱하여 메서드 정의와 호출 관계를 추출합니다.
+        
+        Args:
+            file_path (str): 파일 경로
+            content (bytes): 파일 내용
+        """
         # self._cleanup_file_flow_data(file_path) # Moved to inside conditionals
         _, ext = os.path.splitext(file_path)
         
@@ -28,11 +40,13 @@ class FlowBuilder:
             return
 
         try:
-            parser = ParserFactory.get_parser(ext)
+            parser = Factory.get_parser(ext)
             tree = parser.parse(content)
             
             if ext == ".java":
-                # Java: Smart Update (Upsert + Prune)
+                # [Java 스마트 업데이트]
+                # 전체 삭제 후 재생성이 아니라, 변경된 부분만 갱신(Upsert)하고
+                # 없어진 메서드만 가지치기(Prune)하는 방식입니다.
                 scan_id = str(uuid.uuid4())
                 strategy.process(tree, content, file_path, scan_id)
                 self._prune_nodes(file_path, scan_id)
@@ -43,9 +57,10 @@ class FlowBuilder:
 
     def _prune_nodes(self, file_path, scan_id):
         """
-        Smart Update 후처리:
-        갱신되지 않은 메서드를 'DELETED' 상태로 변경하고, 호출 관계(Flow)를 끊습니다.
-        (노드 자체와 구조적 자식들은 유지하여 소스 확인 가능하게 함)
+        [메서드 가지치기 (Pruning)]
+        Smart Update의 후처리 단계입니다.
+        이번 스캔(scan_id)에서 발견되지 않은 메서드는 소스 코드에서 삭제된 것으로 간주합니다.
+        해당 메서드를 'DELETED'로 마킹하고, 다른 메서드와의 호출 관계(Flow)를 끊어냅니다.
         """
         query = """
         MATCH (f:FILE {path: $file_path})
@@ -57,13 +72,12 @@ class FlowBuilder:
         SET m.status = 'DELETED'
         
         WITH m
-        // Remove Flow Relationships (Isolation)
-        // Outgoing/Incoming calls are removed so it doesn't affect flow analysis
+        // [격리] 다른 메서드와의 호출 관계 제거 (분석 방해 방지)
         OPTIONAL MATCH (m)-[r:CALLS]-()
         DELETE r
         
         WITH m
-        // Remove internal AST calls (orphaned references)
+        // [정리] 내부 AST 호출 노드 제거
         OPTIONAL MATCH (m)-[r:HAS_CALL]->()
         DELETE r
         """
@@ -73,19 +87,18 @@ class FlowBuilder:
         except Exception as e:
             logger.error(f"Pruning Error ({file_path}): {e}")
 
-
-
     def _resolve_calls(self):
         """
-        토폴로지 최적화:
-        임시 CALL 노드를 직접적인 CALLS 엣지 또는 ExternalCall 노드로 변환합니다.
+        [호출 관계 해결 (Topology Resolution)]
+        1차 분석에서 생성된 임시 `CALL` 노드를 실제 `METHOD` 노드 간의 `CALLS` 관계(Edge)로 변환합니다.
+        전체 그래프의 연결성을 완성하는 중요한 단계입니다.
         
-        로직 개선 (카테시안 곱 방지 및 엄격한 매칭):
-        1. 문맥 인식 내부 해석:
-           - CALL objectName과 대상 Class이름 매칭 (대소문자 무시)
-           - 또는 objectName이 비어있으면(this.method) 같은 클래스 메서드 매칭
-        2. 외부 호출 해석:
-           - 매칭되지 않은 나머지 CALL은 고유한 ExternalCall 노드로 생성하여 연결
+        Logic:
+        1. 내부 호출 (Internal): 
+           - 호출한 객체명(objectName)과 대상 클래스명을 매칭 (엄격 모드)
+           - this 호출(objName 없음)은 같은 클래스 내 메서드와 매칭
+        2. 외부 호출 (External):
+           - 내부에서 찾지 못한 호출은 외부 라이브러리나 API 호출로 간주하여 `ExternalCall` 노드로 분류
         """
         logger.info("Resolving function calls (Topology Optimization)...")
         

@@ -2,27 +2,27 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from api.routes import uploads, projects, graph
-from core.analysis.analysis_flow import AnalysisFlow
+from core.analysis.analyzer import Analyzer
 from infra.db_client import DBClient
 import logging
 
 logger = logging.getLogger(__name__)
 
 # Global Instance
-analysis_flow = None
+analyzer = None
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global analysis_flow
+    global analyzer
     
     # Initialize Shared Components
     db_client = DBClient()
-    analysis_flow = AnalysisFlow(db_client)
+    analyzer = Analyzer(db_client)
     
     # Inject into app state for access in routes
-    app.state.analysis_flow = analysis_flow
+    app.state.analyzer = analyzer
     
-    logger.info("✅ AnalysisFlow Initialized")
+    logger.info("✅ Analyzer Initialized")
     
     yield
     db_client.close()
