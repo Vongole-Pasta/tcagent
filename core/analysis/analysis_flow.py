@@ -1,6 +1,5 @@
 import logging
 import os
-from core.analysis.skills.diff_checker import DiffChecker
 from core.analysis.skills.incremental_analysis import IncrementalAnalyzer
 from infra.db_client import DBClient
 
@@ -15,29 +14,8 @@ class AnalysisFlow:
         self.connector = connector if connector else DBClient()
         
         # Initialize Sub-components
-        self.change_detector = DiffChecker(self.connector)
+        # DiffChecker removed as it was for disk-based analysis which is deprecated
         self.incremental_analyzer = IncrementalAnalyzer(self.connector)
-        
-    def scan_files(self, file_paths: list[str] = None, project: str = None):
-        """
-        1단계: 파일 스캔 및 분석 (Disk-based legacy method, kept for compatibility if needed)
-        """
-        logger.info(f"Starting Scan & Analysis Flow (Project: {project})...")
-        
-        # 1. Detect Changes
-        if file_paths:
-             changes = self.change_detector.detect_changes(file_paths)
-        else:
-             changes = []
-        
-        # 2. Incremental Update (Graph Sync)
-        # Disk-based analysis is deprecated. Only memory-based analysis is supported via /upload endpoint.
-        
-        return {
-            "changes": changes,
-            "methods": [],
-            "graph": self.fetch_project_graph(project)
-        }
 
     def fetch_project_graph(self, project: str):
         """UI 시각화를 위한 프로젝트 그래프 데이터를 조회합니다."""
