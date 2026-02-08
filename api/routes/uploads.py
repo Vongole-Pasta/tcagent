@@ -20,8 +20,8 @@ async def upload_files(request: Request, project: Optional[str] = Form(None), fi
     - ZIP 파일: 자동 압축 해제 후 메모리에서 분석
     **Java(.java) 파일만 처리됩니다.**
     """
-    incremental_analyzer = getattr(request.app.state, "incremental_analyzer", None)
-    if not incremental_analyzer:
+    analyzer = getattr(request.app.state, "analyzer", None)
+    if not analyzer:
         raise HTTPException(status_code=503, detail="Analysis Agent not initialized")
     
     # Project Name Logic
@@ -86,12 +86,12 @@ async def upload_files(request: Request, project: Optional[str] = Form(None), fi
 
     try:
         # Calls IncrementalAnalyzer.process_files_from_memory
-        result_files = incremental_analyzer.process_files_from_memory(files_data, project=safe_project)
+        result_files = analyzer.process_files_from_memory(files_data, project=safe_project)
         
         # Get processed method list for UI response
         method_list = []
         for rel_path in result_files:
-             methods = incremental_analyzer.connector.execute_query(
+             methods = analyzer.connector.execute_query(
                 """
                 MATCH (f:FILE {path: $path, project: $project})-[:AST|CONTAINS|DEFINES*]->(m:METHOD)
                 WITH DISTINCT m, f

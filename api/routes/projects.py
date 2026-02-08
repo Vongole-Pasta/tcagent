@@ -9,14 +9,14 @@ async def get_all_projects(request: Request):
     """
     Get a list of all available projects.
     """
-    incremental_analyzer = getattr(request.app.state, "incremental_analyzer", None)
-    if not incremental_analyzer:
+    analyzer = getattr(request.app.state, "analyzer", None)
+    if not analyzer:
         raise HTTPException(status_code=503, detail="Analysis Agent not initialized")
 
     try:
         # Fetch distinct projects from FILE nodes
         query = "MATCH (f:FILE) RETURN DISTINCT f.project as project"
-        results = incremental_analyzer.connector.execute_query(query)
+        results = analyzer.connector.execute_query(query)
         projects = [r["project"] for r in results if r.get("project")]
         return {"projects": projects}
     except Exception as e:
@@ -30,8 +30,8 @@ async def get_project_nodes(project_id: str, request: Request, type: Optional[st
     Query Params:
     - type: 'endpoint' (optional) - if set, returns only endpoints.
     """
-    incremental_analyzer = getattr(request.app.state, "incremental_analyzer", None)
-    if not incremental_analyzer:
+    analyzer = getattr(request.app.state, "analyzer", None)
+    if not analyzer:
         raise HTTPException(status_code=503, detail="Analysis Agent not initialized")
 
     try:
@@ -44,7 +44,7 @@ async def get_project_nodes(project_id: str, request: Request, type: Optional[st
                     # or assume the DB is isolated per session conceptualization.
                     # TODO: Enhance queries to filter by project via path: (p:Project)-...->(m:Method) in future if strict multi-project DB.
         
-        results = incremental_analyzer.connector.execute_query(query, params)
+        results = analyzer.connector.execute_query(query, params)
         
         nodes = []
         for r in results:

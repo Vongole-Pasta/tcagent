@@ -54,12 +54,12 @@ async def get_upstream_graph(method_id: str, request: Request):
     """
     Get graph of upstream callers (Who calls me?)
     """
-    incremental_analyzer = getattr(request.app.state, "incremental_analyzer", None)
-    if not incremental_analyzer:
+    analyzer = getattr(request.app.state, "analyzer", None)
+    if not analyzer:
         raise HTTPException(status_code=503, detail="Analysis Agent not initialized")
 
     try:
-        results = incremental_analyzer.connector.execute_query(
+        results = analyzer.connector.execute_query(
             CypherQueries.GET_UPSTREAM_IMPACT, 
             {"method_id": method_id}
         )
@@ -72,12 +72,12 @@ async def get_downstream_graph(method_id: str, request: Request):
     """
     Get graph of downstream callees (Who do I call?)
     """
-    incremental_analyzer = getattr(request.app.state, "incremental_analyzer", None)
-    if not incremental_analyzer:
+    analyzer = getattr(request.app.state, "analyzer", None)
+    if not analyzer:
         raise HTTPException(status_code=503, detail="Analysis Agent not initialized")
 
     try:
-        results = incremental_analyzer.connector.execute_query(
+        results = analyzer.connector.execute_query(
             CypherQueries.GET_DOWNSTREAM_FLOW, 
             {"method_id": method_id}
         )
@@ -90,12 +90,12 @@ async def get_node_details(method_id: str, request: Request):
     """
     Get detailed information for a specific node (Source code, etc.)
     """
-    incremental_analyzer = getattr(request.app.state, "incremental_analyzer", None)
-    if not incremental_analyzer:
+    analyzer = getattr(request.app.state, "analyzer", None)
+    if not analyzer:
         raise HTTPException(status_code=503, detail="Analysis Agent not initialized")
 
     try:
-        results = incremental_analyzer.connector.execute_query(
+        results = analyzer.connector.execute_query(
             CypherQueries.GET_METHOD_CONTEXT, 
             {"method_id": method_id}
         )
