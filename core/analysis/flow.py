@@ -32,7 +32,7 @@ class Builder:
             file_path (str): 파일 경로
             content (bytes): 파일 내용
         """
-        # self._cleanup_file_flow_data(file_path) # Moved to inside conditionals
+
         _, ext = os.path.splitext(file_path)
         
         strategy = self.strategies.get(ext)
@@ -50,7 +50,7 @@ class Builder:
                 scan_id = str(uuid.uuid4())
                 strategy.process(tree, content, file_path, scan_id)
                 self._prune_nodes(file_path, scan_id)
-            # Removed unreachable else block for non-Java files as strategy list only contains Java
+
 
         except Exception as e:
             logger.error(f"Failed to process flow for {file_path} from memory: {e}")

@@ -15,16 +15,7 @@ class Factory:
             logger.error(f"Failed to get parser for {lang_name}: {e}")
             raise
 
-    @staticmethod
-    def get_language(extension: str):
-        lang_name = Factory._get_language_name(extension)
-        if not lang_name:
-            raise ValueError(f"Unsupported extension: {extension}")
-        try:
-            return get_language(lang_name)
-        except Exception as e:
-            logger.error(f"Failed to get language for {lang_name}: {e}")
-            raise
+
 
     @staticmethod
     def _get_language_name(extension: str):

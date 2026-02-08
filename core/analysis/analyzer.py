@@ -1,8 +1,7 @@
 import logging
 import os
+import hashlib
 from infra.db_client import DBClient
-from .loader import Loader
-from .architecture import Builder as ArchitectureBuilder
 from .flow import Builder as FlowBuilder
 from config import Config
 from graph_db.queries import CypherQueries
@@ -18,8 +17,6 @@ class Analyzer:
     """
     def __init__(self, connector: DBClient):
         self.connector = connector
-        self.ingestor = Loader(connector)
-        self.arch_builder = ArchitectureBuilder(connector)
         self.flow_builder = FlowBuilder(connector)
 
     def process_files_from_memory(self, files_data: list[dict], project: str = None):
@@ -77,7 +74,8 @@ class Analyzer:
             content = file_data['content']
             
             try:
-                file_hash = self.ingestor.calculate_file_hash_from_content(content)
+                # file_hash = self.ingestor.calculate_file_hash_from_content(content)
+                file_hash = hashlib.sha256(content).hexdigest()
                 relative_path = os.path.relpath(file_path, upload_root) if upload_root else file_path
                 file_name = os.path.basename(file_path)
                 processed_paths.add(relative_path)
@@ -100,9 +98,9 @@ class Analyzer:
                 query = """
                 MERGE (f:FILE {path: $path, project: $project})
                 SET f.name = $name,
-                    f.hash = $hash,
-                    f.language = $language,
-                    f.status = $status
+                f.hash = $hash,
+                f.language = $language,
+                f.status = $status
                 """
                 self.connector.execute_query(query, {
                     "path": relative_path,
@@ -118,7 +116,6 @@ class Analyzer:
                     # 'Flow'는 다시 봐야 할 수도 있음. 하지만 'Architecture'는 내부 구조라 그대로일 것.
                     # 여기서는 사용자 요청에 따라 '상태' 관리를 우선하므로, 
                     # 일단 다 돌리되, 최적화는 나중에.
-                    self.arch_builder.process_file_from_content(relative_path, content)
                     self.flow_builder.process_file_from_content(relative_path, content)
                     updated_files.append(relative_path)
                 
