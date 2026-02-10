@@ -99,16 +99,14 @@ class Analyzer:
                 MERGE (f:FILE {path: $path, project: $project})
                 SET f.name = $name,
                 f.hash = $hash,
-                f.language = $language,
-                f.status = $status
+                f.language = $language
                 """
                 self.connector.execute_query(query, {
                     "path": relative_path,
                     "name": file_name,
                     "hash": file_hash,
                     "language": language,
-                    "project": project,
-                    "status": status
+                    "project": project
                 })
 
                 if status in ["NEW", "MODIFIED", "AS-IS"]: # AS-IS도 분석은 다시 돌려서 관계 복구/확인 (또는 생략 가능하지만 안전하게 수행)
