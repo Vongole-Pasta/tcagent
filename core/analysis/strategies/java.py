@@ -71,9 +71,14 @@ class JavaFlowStrategy:
             
         class_name = source_code[name_node.start_byte:name_node.end_byte].decode("utf-8")
         
-        # Unique TYPE Identity: Package + FileName(no_ext) + ClassName
+        # Unique TYPE Identity: Package + FileName + ClassName (to avoid collision)
         file_name_no_ext = os.path.splitext(os.path.basename(file_path))[0]
-        full_name = f"{package_name}.{file_name_no_ext}.{class_name}" if package_name else f"{file_name_no_ext}.{class_name}"
+        
+        # Avoid redundancy if class name matches file name (e.g. User.java -> User class)
+        if file_name_no_ext == class_name:
+             full_name = f"{package_name}.{class_name}" if package_name else class_name
+        else:
+             full_name = f"{package_name}.{file_name_no_ext}.{class_name}" if package_name else f"{file_name_no_ext}.{class_name}"
         
         if parent_name:
             full_name = f"{parent_name}${class_name}" # Inner Class 컨벤션
@@ -194,28 +199,16 @@ class JavaFlowStrategy:
         TYPE -> CONTAINS -> FIELD
         FIELD -> OF_TYPE -> TYPE (Target Type)
         """
-        # field_type (e.g., "List<String>", "UserDto") -> Simple Type for linking ("UserDto", "String")
-        simple_type = self.generic_pattern.sub("", field_type)
-        
         query = """
         MATCH (c:TYPE {fullName: $class_full_name})
         CREATE (f:FIELD {name: $field_name, type: $field_type}) // Always create new to avoid global merge
         MERGE (c)-[:CONTAINS]->(f)
-        
-        WITH f, $simple_type as targetTypeName
-        // Try to link to Type if exists (Weak Link by Name)
-        OPTIONAL MATCH (t:TYPE) WHERE t.name = targetTypeName
-        FOREACH (_ IN CASE WHEN t IS NOT NULL THEN [1] ELSE [] END |
-            MERGE (f)-[:OF_TYPE]->(t)
-        )
         """
-        # Note: Using simple name matching for now
         
         self.connector.execute_query(query, {
             "class_full_name": class_full_name,
             "field_name": field_name,
-            "field_type": field_type,
-            "simple_type": simple_type
+            "field_type": field_type
         })
 
 
@@ -443,8 +436,6 @@ class JavaFlowStrategy:
         METHOD -> CONTAINS -> PARAMETER
         PARAMETER -> OF_TYPE -> TYPE
         """
-        simple_type = self.generic_pattern.sub("", param_type)
-        
         query = """
         MATCH (m:METHOD {signature: $method_signature})
         CREATE (p:PARAMETER {name: $param_name, index: $index})  // CREATE new to avoid global merge
@@ -453,19 +444,12 @@ class JavaFlowStrategy:
         SET p.name = $param_name,
             p.type = $param_type,
             p.index = $index
-        
-        WITH p, $simple_type as targetTypeName
-        OPTIONAL MATCH (t:TYPE) WHERE t.name = targetTypeName
-        FOREACH (_ IN CASE WHEN t IS NOT NULL THEN [1] ELSE [] END |
-            MERGE (p)-[:OF_TYPE]->(t)
-        )
         """
         self.connector.execute_query(query, {
              "method_signature": method_signature,
              "param_name": param_name,
              "param_type": param_type,
-             "index": index,
-             "simple_type": simple_type
+             "index": index
         })
 
 
