@@ -18,6 +18,36 @@ class JavaFlowStrategy:
         self.connector = connector
         # 자바에서 자주 쓰이는 Collection, Map 등의 제네릭 타입을 처리하기 위한 정규식
         self.generic_pattern = re.compile(r"<.*>")
+        # Generic Type Splitting Pattern (split by <, >, ,, space)
+        self.type_split_pattern = re.compile(r"[<>, \t]+")
+
+    def _extract_all_types(self, type_str: str) -> list[str]:
+        """
+        [제네릭 타입 분해]
+        복잡한 제네릭 타입 문자열에서 모든 개별 타입을 추출합니다.
+        예: "Map<String, List<UserDto>>" -> ["Map", "String", "List", "UserDto"]
+        """
+        if not type_str:
+            return []
+        
+        # 1. Split by delimiters
+        parts = self.type_split_pattern.split(type_str)
+        
+        # 2. Filter empty strings and clean up
+        types = [p.strip() for p in parts if p.strip()]
+        
+        # 3. Handle FQCN (List<com.example.User> -> User) if needed?
+        # Typically we link to Simple Name in Graph if Type Node uses Simple Name.
+        # But Type Node uses FQCN in fullName property, but `name` property is Simple Name.
+        # Linking usually happens via `name`.
+        # So we should extract Simple Name from FQCN for linking.
+        simple_types = []
+        for t in types:
+            simple_name = t.split('.')[-1]
+            if simple_name:
+                simple_types.append(simple_name)
+                
+        return list(set(simple_types)) # Unique
 
     def process(self, tree: tree_sitter.Tree, source_code: bytes, file_path: str, scan_id: str = None):
         """
@@ -199,16 +229,21 @@ class JavaFlowStrategy:
         TYPE -> CONTAINS -> FIELD
         FIELD -> OF_TYPE -> TYPE (Target Type)
         """
+        # Extract all types from generic string
+        target_types = self._extract_all_types(field_type)
+
         query = """
         MATCH (c:TYPE {fullName: $class_full_name})
         CREATE (f:FIELD {name: $field_name, type: $field_type}) // Always create new to avoid global merge
         MERGE (c)-[:CONTAINS]->(f)
+        SET f.types = $target_types
         """
         
         self.connector.execute_query(query, {
             "class_full_name": class_full_name,
             "field_name": field_name,
-            "field_type": field_type
+            "field_type": field_type,
+            "target_types": target_types
         })
 
 
@@ -436,6 +471,9 @@ class JavaFlowStrategy:
         METHOD -> CONTAINS -> PARAMETER
         PARAMETER -> OF_TYPE -> TYPE
         """
+        # Extract all types from generic string (List<UserDto> -> [List, UserDto])
+        target_types = self._extract_all_types(param_type)
+        
         query = """
         MATCH (m:METHOD {signature: $method_signature})
         CREATE (p:PARAMETER {name: $param_name, index: $index})  // CREATE new to avoid global merge
@@ -443,12 +481,14 @@ class JavaFlowStrategy:
         MERGE (m)-[:CONTAINS]->(p)
         SET p.name = $param_name,
             p.type = $param_type,
+            p.types = $target_types,  // Store list of all involved types
             p.index = $index
         """
         self.connector.execute_query(query, {
              "method_signature": method_signature,
              "param_name": param_name,
              "param_type": param_type,
+             "target_types": target_types,
              "index": index
         })
 

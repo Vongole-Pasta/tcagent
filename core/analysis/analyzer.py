@@ -149,18 +149,20 @@ class Analyzer:
         [지연 연결 (Late Binding)]
         분석 순서 문제로 연결되지 못한 파라미터와 필드를 찾아서,
         존재하는 타입 노드와 연결(OF_TYPE)합니다.
+        
+        * Generic Support: p.types (list) contains all inner types (e.g. [List, UserDto])
+        We link to ANY defined TYPE that matches ANY of the inner types.
         """
         # 1. Link Parameters
-        # Match Parameter (p) without OF_TYPE
-        # Match Type (t) where t.name matches p.simple_type
+        # Match Parameter (p)
+        # Match Type (t) where t.name is IN p.types list
         # Create (p)-[:OF_TYPE]->(t)
         query_params = """
         MATCH (p:PARAMETER)
-        WHERE NOT (p)-[:OF_TYPE]->(:TYPE)
+        WHERE p.types IS NOT NULL
         WITH p
         MATCH (t:TYPE) 
-        WHERE t.name = split(p.type, '<')[0]  // Simple heuristic for List<User> -> User. Better handles in strategy but here valid too.
-           OR t.name = split(split(p.type, '<')[0], '.')[-1] // Handle FQCN
+        WHERE t.name IN p.types
         MERGE (p)-[:OF_TYPE]->(t)
         """
         self.connector.execute_query(query_params)
@@ -168,11 +170,10 @@ class Analyzer:
         # 2. Link Fields
         query_fields = """
         MATCH (f:FIELD)
-        WHERE NOT (f)-[:OF_TYPE]->(:TYPE)
+        WHERE f.types IS NOT NULL
         WITH f
         MATCH (t:TYPE)
-        WHERE t.name = split(f.type, '<')[0]
-           OR t.name = split(split(f.type, '<')[0], '.')[-1]
+        WHERE t.name IN f.types
         MERGE (f)-[:OF_TYPE]->(t)
         """
         self.connector.execute_query(query_fields)
