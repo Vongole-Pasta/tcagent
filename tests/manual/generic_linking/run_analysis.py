@@ -1,5 +1,10 @@
 import asyncio
 import os
+import sys
+
+# Add project root to sys.path
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../..")))
+
 from infra.db_client import DBClient
 from core.analysis.analyzer import Analyzer
 import logging

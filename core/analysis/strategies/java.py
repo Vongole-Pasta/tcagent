@@ -26,6 +26,8 @@ class JavaFlowStrategy:
         [제네릭 타입 분해]
         복잡한 제네릭 타입 문자열에서 모든 개별 타입을 추출합니다.
         예: "Map<String, List<UserDto>>" -> ["Map", "String", "List", "UserDto"]
+        예: "UserDto[]" -> ["UserDto"]
+        예: "List<? extends Product>" -> ["List", "Product"]
         """
         if not type_str:
             return []
@@ -34,17 +36,26 @@ class JavaFlowStrategy:
         parts = self.type_split_pattern.split(type_str)
         
         # 2. Filter empty strings and clean up
-        types = [p.strip() for p in parts if p.strip()]
+        # Remove [], ... from each part
+        cleaned_parts = []
+        for p in parts:
+            p = p.strip()
+            if not p: continue
+            
+            # Remove array/varargs indicators
+            p = p.replace("[]", "").replace("...", "")
+            
+            cleaned_parts.append(p)
+            
+        # 3. Handle FQCN & Filter keywords
+        ignored_keywords = {"?", "extends", "super", "var", "void", "int", "long", "boolean", "byte", "short", "char", "float", "double"}
         
-        # 3. Handle FQCN (List<com.example.User> -> User) if needed?
-        # Typically we link to Simple Name in Graph if Type Node uses Simple Name.
-        # But Type Node uses FQCN in fullName property, but `name` property is Simple Name.
-        # Linking usually happens via `name`.
-        # So we should extract Simple Name from FQCN for linking.
         simple_types = []
-        for t in types:
+        for t in cleaned_parts:
+            # Extract simple name from FQCN logic
             simple_name = t.split('.')[-1]
-            if simple_name:
+            
+            if simple_name and simple_name not in ignored_keywords:
                 simple_types.append(simple_name)
                 
         return list(set(simple_types)) # Unique
@@ -357,10 +368,29 @@ class JavaFlowStrategy:
         if params_node:
             param_idx = 0
             for child in params_node.children:
-                if child.type == "formal_parameter":
+                if child.type == "formal_parameter" or child.type == "spread_parameter":
                     # Type + Name
                     p_type_node = child.child_by_field_name("type")
                     p_name_node = child.child_by_field_name("name")
+                    
+                    # Special handling for spread_parameter (Varargs)
+                    if child.type == "spread_parameter":
+                         # Field lookup failed in tests, so iterate children manually
+                         # Expected children: [type_identifier, '...', variable_declarator]
+                         for grandchild in child.children:
+                              # Type Logic
+                              if not p_type_node and grandchild.type not in ["...", "variable_declarator", "modifiers", "annotation"]:
+                                   p_type_node = grandchild
+                                   
+                              # Name Logic (inside variable_declarator)
+                              if grandchild.type == "variable_declarator":
+                                   p_name_node = grandchild.child_by_field_name("name")
+                                   if not p_name_node:
+                                        # Fallback: find identifier inside variable_declarator
+                                        for ggc in grandchild.children:
+                                             if ggc.type == "identifier":
+                                                  p_name_node = ggc
+                                                  break
                     
                     # Fallback for interface methods (no fields)
                     if not p_type_node or not p_name_node:
