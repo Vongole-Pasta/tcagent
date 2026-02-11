@@ -18,6 +18,47 @@ class JavaFlowStrategy:
         self.connector = connector
         # 자바에서 자주 쓰이는 Collection, Map 등의 제네릭 타입을 처리하기 위한 정규식
         self.generic_pattern = re.compile(r"<.*>")
+        # Generic Type Splitting Pattern (split by <, >, ,, space)
+        self.type_split_pattern = re.compile(r"[<>, \t]+")
+
+    def _extract_all_types(self, type_str: str) -> list[str]:
+        """
+        [제네릭 타입 분해]
+        복잡한 제네릭 타입 문자열에서 모든 개별 타입을 추출합니다.
+        예: "Map<String, List<UserDto>>" -> ["Map", "String", "List", "UserDto"]
+        예: "UserDto[]" -> ["UserDto"]
+        예: "List<? extends Product>" -> ["List", "Product"]
+        """
+        if not type_str:
+            return []
+        
+        # 1. Split by delimiters
+        parts = self.type_split_pattern.split(type_str)
+        
+        # 2. Filter empty strings and clean up
+        # Remove [], ... from each part
+        cleaned_parts = []
+        for p in parts:
+            p = p.strip()
+            if not p: continue
+            
+            # Remove array/varargs indicators
+            p = p.replace("[]", "").replace("...", "")
+            
+            cleaned_parts.append(p)
+            
+        # 3. Handle FQCN & Filter keywords
+        ignored_keywords = {"?", "extends", "super", "var", "void", "int", "long", "boolean", "byte", "short", "char", "float", "double"}
+        
+        simple_types = []
+        for t in cleaned_parts:
+            # Extract simple name from FQCN logic
+            simple_name = t.split('.')[-1]
+            
+            if simple_name and simple_name not in ignored_keywords:
+                simple_types.append(simple_name)
+                
+        return list(set(simple_types)) # Unique
 
     def process(self, tree: tree_sitter.Tree, source_code: bytes, file_path: str, scan_id: str = None):
         """
@@ -199,16 +240,21 @@ class JavaFlowStrategy:
         TYPE -> CONTAINS -> FIELD
         FIELD -> OF_TYPE -> TYPE (Target Type)
         """
+        # Extract all types from generic string
+        target_types = self._extract_all_types(field_type)
+
         query = """
         MATCH (c:TYPE {fullName: $class_full_name})
         CREATE (f:FIELD {name: $field_name, type: $field_type}) // Always create new to avoid global merge
         MERGE (c)-[:CONTAINS]->(f)
+        SET f.types = $target_types
         """
         
         self.connector.execute_query(query, {
             "class_full_name": class_full_name,
             "field_name": field_name,
-            "field_type": field_type
+            "field_type": field_type,
+            "target_types": target_types
         })
 
 
@@ -322,10 +368,29 @@ class JavaFlowStrategy:
         if params_node:
             param_idx = 0
             for child in params_node.children:
-                if child.type == "formal_parameter":
+                if child.type == "formal_parameter" or child.type == "spread_parameter":
                     # Type + Name
                     p_type_node = child.child_by_field_name("type")
                     p_name_node = child.child_by_field_name("name")
+                    
+                    # Special handling for spread_parameter (Varargs)
+                    if child.type == "spread_parameter":
+                         # Field lookup failed in tests, so iterate children manually
+                         # Expected children: [type_identifier, '...', variable_declarator]
+                         for grandchild in child.children:
+                              # Type Logic
+                              if not p_type_node and grandchild.type not in ["...", "variable_declarator", "modifiers", "annotation"]:
+                                   p_type_node = grandchild
+                                   
+                              # Name Logic (inside variable_declarator)
+                              if grandchild.type == "variable_declarator":
+                                   p_name_node = grandchild.child_by_field_name("name")
+                                   if not p_name_node:
+                                        # Fallback: find identifier inside variable_declarator
+                                        for ggc in grandchild.children:
+                                             if ggc.type == "identifier":
+                                                  p_name_node = ggc
+                                                  break
                     
                     # Fallback for interface methods (no fields)
                     if not p_type_node or not p_name_node:
@@ -436,6 +501,9 @@ class JavaFlowStrategy:
         METHOD -> CONTAINS -> PARAMETER
         PARAMETER -> OF_TYPE -> TYPE
         """
+        # Extract all types from generic string (List<UserDto> -> [List, UserDto])
+        target_types = self._extract_all_types(param_type)
+        
         query = """
         MATCH (m:METHOD {signature: $method_signature})
         CREATE (p:PARAMETER {name: $param_name, index: $index})  // CREATE new to avoid global merge
@@ -443,12 +511,14 @@ class JavaFlowStrategy:
         MERGE (m)-[:CONTAINS]->(p)
         SET p.name = $param_name,
             p.type = $param_type,
+            p.types = $target_types,  // Store list of all involved types
             p.index = $index
         """
         self.connector.execute_query(query, {
              "method_signature": method_signature,
              "param_name": param_name,
              "param_type": param_type,
+             "target_types": target_types,
              "index": index
         })
 
