@@ -71,9 +71,14 @@ class JavaFlowStrategy:
             
         class_name = source_code[name_node.start_byte:name_node.end_byte].decode("utf-8")
         
-        # Unique TYPE Identity: Package + FileName(no_ext) + ClassName
+        # Unique TYPE Identity: Package + FileName + ClassName (to avoid collision)
         file_name_no_ext = os.path.splitext(os.path.basename(file_path))[0]
-        full_name = f"{package_name}.{file_name_no_ext}.{class_name}" if package_name else f"{file_name_no_ext}.{class_name}"
+        
+        # Avoid redundancy if class name matches file name (e.g. User.java -> User class)
+        if file_name_no_ext == class_name:
+             full_name = f"{package_name}.{class_name}" if package_name else class_name
+        else:
+             full_name = f"{package_name}.{file_name_no_ext}.{class_name}" if package_name else f"{file_name_no_ext}.{class_name}"
         
         if parent_name:
             full_name = f"{parent_name}${class_name}" # Inner Class 컨벤션
@@ -94,13 +99,118 @@ class JavaFlowStrategy:
         
         # 메서드 추출을 위해 class_body 탐색
         body_node = node.child_by_field_name("body")
+        if not body_node:
+            for child in node.children:
+                if child.type in ["class_body", "interface_body", "enum_body"]:
+                    body_node = child
+                    break
+        
         if body_node:
             # Class Level Annotation (Base URL)
             base_url = self._extract_base_url(node, source_code)
+            
+            # Extract Fields first
+            # Extract Fields first
+            self._process_fields(body_node, source_code, full_name, file_path)
+            
+            # If Record, extract components as fields
+            if node.type == "record_declaration":
+                 self._process_record_components(node, source_code, full_name)
+            
+            # If Enum, extract constants as fields
+            if node.type == "enum_declaration":
+                 self._process_enum_constants(body_node, source_code, full_name)
+            
             self._process_methods(body_node, source_code, full_name, file_path, scan_id, base_url)
             
             # Inner Class 재귀 호출
             self._traverse_types(body_node, source_code, file_path, package_name, full_name, scan_id)
+
+    def _process_fields(self, class_body_node, source_code: bytes, class_full_name: str, file_path: str):
+        """[필드 추출] 클래스 멤버 변수를 추출하여 FIELD 노드로 생성"""
+        for child in class_body_node.children:
+            if child.type == "field_declaration":
+                # Type Parsing
+                type_node = child.child_by_field_name("type")
+                if not type_node: continue
+                field_type = source_code[type_node.start_byte:type_node.end_byte].decode("utf-8")
+                
+                # Variable Declarator (could be multiple: int a, b;)
+                for grandchild in child.children:
+                    if grandchild.type == "variable_declarator":
+                        name_node = grandchild.child_by_field_name("name")
+                        if name_node:
+                            field_name = source_code[name_node.start_byte:name_node.end_byte].decode("utf-8")
+                            self._create_field_node(class_full_name, field_name, field_type)
+            
+
+
+    def _process_record_components(self, record_node, source_code: bytes, class_full_name: str):
+        """[Record Component 추출] Record의 파라미터를 필드로 변환"""
+        # structure: record_declaration -> formal_parameters -> formal_parameter -> (type, name)
+        
+        # 1. Find 'formal_parameters' child
+        params_node = None
+        for c in record_node.children:
+            if c.type == "formal_parameters":
+                 params_node = c
+                 break
+        
+        if params_node:
+            for param in params_node.children:
+                if param.type == "formal_parameter":
+                    # Inside formal_parameter: (type) (identifier)
+                    f_type = None
+                    f_name = None
+                    
+                    for grandchild in param.children:
+                        # Name
+                        if grandchild.type == "identifier":
+                            f_name = source_code[grandchild.start_byte:grandchild.end_byte].decode("utf-8")
+                        # Type (Anything else that looks like a type)
+                        elif grandchild.type not in [",", "(", ")", "block_comment", "line_comment", "modifiers"]:
+                            f_type = source_code[grandchild.start_byte:grandchild.end_byte].decode("utf-8")
+                    
+                    if f_name and f_type:
+                        self._create_field_node(class_full_name, f_name, f_type) 
+
+    def _process_enum_constants(self, enum_body_node, source_code: bytes, class_full_name: str):
+        """[Enum Constant 추출] Enum 상수를 필드로 변환 (Type은 Enum 자신)"""
+        # structure: enum_declaration -> enum_body -> enum_constant -> (name)
+        
+        for child in enum_body_node.children:
+            if child.type == "enum_constant":
+                name_node = child.child_by_field_name("name")
+                if name_node:
+                    constant_name = source_code[name_node.start_byte:name_node.end_byte].decode("utf-8")
+                    
+                    # Enum의 Type은 자기 자신
+                    # 예: public enum Status { ACTIVE, INACTIVE } -> ACTIVE (Type: Status)
+                    # class_full_name이 "com.example.Status"라면, Simple Type은 "Status"
+                    
+                    simple_type = class_full_name.split(".")[-1]
+                    
+                    # Create Field Node
+                    self._create_field_node(class_full_name, constant_name, simple_type) 
+
+    def _create_field_node(self, class_full_name, field_name, field_type):
+        """
+        [필드 노드 생성]
+        TYPE -> CONTAINS -> FIELD
+        FIELD -> OF_TYPE -> TYPE (Target Type)
+        """
+        query = """
+        MATCH (c:TYPE {fullName: $class_full_name})
+        CREATE (f:FIELD {name: $field_name, type: $field_type}) // Always create new to avoid global merge
+        MERGE (c)-[:CONTAINS]->(f)
+        """
+        
+        self.connector.execute_query(query, {
+            "class_full_name": class_full_name,
+            "field_name": field_name,
+            "field_type": field_type
+        })
+
 
     def _create_type_node(self, full_name, name, package_name, type_str, file_path):
         query = """
@@ -115,6 +225,11 @@ class JavaFlowStrategy:
         SET f.package = $package_name
         
         MERGE (f)-[:CONTAINS]->(c)
+        
+        // Clean up old Fields to avoid duplication on re-analysis
+        WITH c
+        OPTIONAL MATCH (c)-[:CONTAINS]->(old_f:FIELD)
+        DETACH DELETE old_f
         """
         self.connector.execute_query(query, {
             "full_name": full_name,
@@ -180,25 +295,70 @@ class JavaFlowStrategy:
             # java parser에서 constructor_declaration의 name 필드는 클래스명을 가리킴
              pass
         
+        # Fallback: Find identifier if field lookup fails (e.g. interface methods)
         if not name_node:
+            for child in method_node.children:
+                if child.type == "identifier":
+                    name_node = child
+                    break
+        
+        if not name_node:
+            # print(f"DEBUG: Skipping method/constructor without name in {class_full_name}")
             return
 
         method_name = source_code[name_node.start_byte:name_node.end_byte].decode("utf-8")
         
-        # 파라미터 리스트 추출 (Signature 생성을 위해)
+        # 파라미터 리스트 추출 (Signature 생성을 위해 + PARAMETER 노드 생성)
         params_node = method_node.child_by_field_name("parameters")
+        if not params_node:
+             for child in method_node.children:
+                 if child.type == "formal_parameters":
+                     params_node = child
+                     break
+        
         param_list = []
+        parameters_data = [] # List of dict: {name, type, index}
+        
         if params_node:
-            for param in params_node.children:
-                if param.type == "formal_parameter":
+            param_idx = 0
+            for child in params_node.children:
+                if child.type == "formal_parameter":
                     # Type + Name
-                    p_type_node = param.child_by_field_name("type")
-                    p_name_node = param.child_by_field_name("name")
+                    p_type_node = child.child_by_field_name("type")
+                    p_name_node = child.child_by_field_name("name")
+                    
+                    # Fallback for interface methods (no fields)
+                    if not p_type_node or not p_name_node:
+                         for p_child in child.children:
+                             if p_child.type == "identifier":
+                                 p_name_node = p_child
+                             elif p_child.type not in ["modifiers", "marker_annotation", "annotation"] and (p_child.type.endswith("_type") or p_child.type == "type_identifier" or p_child.type == "generic_type" or p_child.type == "integral_type" or p_child.type == "boolean_type" or p_child.type == "floating_point_type" or p_child.type == "void_type"): 
+                                 # This is a heuristic for type. 
+                                 # Better approach: Iterate and pick non-identifier?
+                                 # Let's match known type nodes or anything not identifier
+                                 if not p_type_node: p_type_node = p_child
+
+                    # Second Pass Fallback: simplistic "not identifier" is type
+                    # (Similar to Record logic, but let's be careful with modifiers)
+                    if not p_type_node:
+                         for p_child in child.children:
+                              if p_child.type not in ["identifier", "modifiers", "marker_annotation", "annotation", "spread_parameter", ",", "...", "line_comment", "block_comment"]:
+                                   p_type_node = p_child
+                                   
                     if p_type_node and p_name_node:
                         p_type = source_code[p_type_node.start_byte:p_type_node.end_byte].decode("utf-8")
-                        # 제네릭 제거 (List<String> -> List) - 단순화
+                        p_name = source_code[p_name_node.start_byte:p_name_node.end_byte].decode("utf-8")
+                        
+                        # 제네릭 제거 (List<String> -> List) - 단순화 for Signature
                         p_type_simple = self.generic_pattern.sub("", p_type)
                         param_list.append(p_type_simple)
+                        
+                        parameters_data.append({
+                            "name": p_name,
+                            "type": p_type,
+                            "index": param_idx
+                        })
+                        param_idx += 1
         
         # Signature: com.example.MyClass.myMethod(String,int)
         signature = f"{class_full_name}.{method_name}({','.join(param_list)})"
@@ -254,8 +414,12 @@ class JavaFlowStrategy:
                         endpoint = self._combine_url(base_url, extracted_path)
 
         # DB 저장 (Updated Logic)
-        self._create_method_node(signature, method_name, full_source, class_full_name, ",".join(param_list), method_hash, scan_id, endpoint, http_method)
+        self._create_method_node(signature, method_name, full_source, class_full_name, method_hash, scan_id, endpoint, http_method)
         
+        # Create PARAMETER nodes
+        for param in parameters_data:
+            self._create_parameter_node(signature, param["name"], param["type"], param["index"])
+
         # Call 관계 추출 및 저장 (1단계: 텍스트 기반 호출 추출)
         # 메서드 바디(Body) 내부 탐색
         body_node = method_node.child_by_field_name("body")
@@ -266,6 +430,29 @@ class JavaFlowStrategy:
             for (target_name, obj_name), count in calls.items():
                 self._create_call_node(signature, target_name, obj_name, count)
 
+    def _create_parameter_node(self, method_signature, param_name, param_type, index):
+        """
+        [파라미터 노드 생성]
+        METHOD -> CONTAINS -> PARAMETER
+        PARAMETER -> OF_TYPE -> TYPE
+        """
+        query = """
+        MATCH (m:METHOD {signature: $method_signature})
+        CREATE (p:PARAMETER {name: $param_name, index: $index})  // CREATE new to avoid global merge
+        
+        MERGE (m)-[:CONTAINS]->(p)
+        SET p.name = $param_name,
+            p.type = $param_type,
+            p.index = $index
+        """
+        self.connector.execute_query(query, {
+             "method_signature": method_signature,
+             "param_name": param_name,
+             "param_type": param_type,
+             "index": index
+        })
+
+
     def _combine_url(self, base, path):
         if not base: base = ""
         if not path: path = ""
@@ -274,16 +461,11 @@ class JavaFlowStrategy:
         return f"{base}/{path}"
 
 
-    def _create_method_node(self, signature, name, source, class_full_name, args, method_hash, scan_id, endpoint, http_method):
+    def _create_method_node(self, signature, name, source, class_full_name, method_hash, scan_id, endpoint, http_method):
         """
         [메서드 노드 생성 및 연결]
         추출된 메서드 정보를 그래프 DB에 'METHOD' 노드로 생성(MERGE)합니다.
-        
-        동작 방식:
-        1. 노드 생성/매칭 (Signature 기준)
-        2. 상태 업데이트 (NEW: 생성됨, AS-IS: 변경없음, MODIFIED: 내용변경됨)
-        3. 속성 설정 (소스코드, 인자, 해시, 엔드포인트 정보 등)
-        4. 부모 클래스(TYPE)와 'CONTAINS' 관계로 연결
+        ...
         """
         query = """
         MERGE (m:METHOD {signature: $signature})
@@ -300,7 +482,6 @@ class JavaFlowStrategy:
         // Update Properties
         SET m.name = $name,
         m.source = $source,
-        m.args = $args,
         m.hash = $method_hash,
         m.last_scan_id = $scan_id,
         m.endpoint = $endpoint,
@@ -309,18 +490,23 @@ class JavaFlowStrategy:
         WITH m
         MATCH (c:TYPE {fullName: $class_full_name})
         MERGE (c)-[:CONTAINS]->(m)
+        
+        // Clean up old Parameters to avoid duplication/globality
+        WITH m
+        OPTIONAL MATCH (m)-[:CONTAINS]->(old_p:PARAMETER)
+        DETACH DELETE old_p
         """
         self.connector.execute_query(query, {
             "signature": signature,
             "name": name,
             "source": source,
             "class_full_name": class_full_name,
-            "args": args,
             "method_hash": method_hash,
             "scan_id": scan_id,
             "endpoint": endpoint,
             "http_method": http_method
         })
+
 
     def _extract_method_calls(self, node, source_code: bytes, caller_signature: str, calls: dict):
         # 재귀적으로 method_invocation 찾기

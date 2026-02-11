@@ -94,8 +94,9 @@ class CypherQueries:
     # --- Status Management Queries ---
     
     # [삭제된 노드 정리]
-    # 프로젝트 내에서 삭제된 파일 및 그 하위 노드(Class, Method)를 DB에서 완전히 제거(Hard Delete)합니다.
+    # 프로젝트 내에서 삭제된 노드(Method, Types)를 DB에서 완전히 제거(Hard Delete)합니다.
     # 'DELETED' 상태로 마킹된 후 일정 시간이 지났거나, 명시적 정리 요청 시 실행됩니다.
+    # (FILE 삭제는 MARK_FILE_DELETED_AND_ISOLATE에서 즉시 수행됩니다)
     DELETE_PROJECT_DELETED_NODES = """
     MATCH (f:FILE {project: $project})
     
@@ -104,11 +105,6 @@ class CypherQueries:
     OPTIONAL MATCH (f)-[:CONTAINS*]->(n)
     WHERE n.status = 'DELETED' AND NOT n:FILE
     DETACH DELETE n
-    
-    // 2. Delete DELETED Files
-    WITH f
-    WHERE f.status = 'DELETED'
-    DETACH DELETE f
     """
     
     # [프로젝트 파일 목록 및 해시 조회]
@@ -120,19 +116,26 @@ class CypherQueries:
     RETURN f.path as path, f.hash as hash
     """
     
-    # [파일 삭제 마킹 및 격리]
-    # 파일이 삭제된 경우, 해당 파일과 하위 노드들을 'DELETED' 상태로 마킹(Soft Delete)하고
-    # 다른 노드와의 연결(CALLS)을 끊어(Isolate) 그래프 분석에 영향을 주지 않게 합니다.
-    # 이후 DELETE_PROJECT_DELETED_NODES에 의해 완전히 삭제될 수 있습니다.
+    # [파일 삭제 (Mixed Strategy)]
+    # 1. 파일(File)과 클래스(Type) 등 구조적인 노드는 즉시 삭제 (Hard Delete)
+    # 2. 메서드(Method)는 'DELETED' 상태로 변경하여 보존 (Soft Delete & Orphan)
+    #    -> 파일이 삭제되어도, 메서드의 존재 이력이나 ID 기반 조회는 가능하도록 함.
     MARK_FILE_DELETED_AND_ISOLATE = """
     MATCH (f:FILE {path: $path, project: $project})
-    SET f.status = 'DELETED'
-    WITH f
-    # Mark all children (Classes, Methods) as DELETED
+    
+    // 1. Identify descendant Methods to preserve
+    OPTIONAL MATCH (f)-[:CONTAINS*]->(m:METHOD)
+    SET m.status = 'DELETED'
+    
+    WITH f, collect(DISTINCT m) as methods
+    
+    // 2. Delete File and its descendants (Types, Fields), EXCLUDING Methods
     MATCH (f)-[:CONTAINS*0..]->(node)
-    SET node.status = 'DELETED'
-    WITH node
-    # Remove only CALLS relationships to isolate from flow
-    OPTIONAL MATCH (node)-[r:CALLS]-()
-    DELETE r
+    WHERE NOT node:METHOD
+    DETACH DELETE node
+    
+    // 3. Isolate preserved Methods (remove outgoing calls)
+    FOREACH (m IN methods | 
+        FOREACH (r IN [(m)-[cw:CALLS]->() | cw] | DELETE r)
+    )
     """

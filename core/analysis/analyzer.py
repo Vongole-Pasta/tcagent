@@ -99,16 +99,14 @@ class Analyzer:
                 MERGE (f:FILE {path: $path, project: $project})
                 SET f.name = $name,
                 f.hash = $hash,
-                f.language = $language,
-                f.status = $status
+                f.language = $language
                 """
                 self.connector.execute_query(query, {
                     "path": relative_path,
                     "name": file_name,
                     "hash": file_hash,
                     "language": language,
-                    "project": project,
-                    "status": status
+                    "project": project
                 })
 
                 if status in ["NEW", "MODIFIED", "AS-IS"]: # AS-IS도 분석은 다시 돌려서 관계 복구/확인 (또는 생략 가능하지만 안전하게 수행)
@@ -140,4 +138,41 @@ class Analyzer:
             logger.info("Re-resolving global call topology...")
             self.flow_builder._resolve_calls()
             
+            # Late Binding: Link unlinked Parameters/Fields to Types (Order Independence)
+            logger.info("Linking unresolved types...")
+            self._link_unresolved_types(project)
+            
         return updated_files
+
+    def _link_unresolved_types(self, project: str):
+        """
+        [지연 연결 (Late Binding)]
+        분석 순서 문제로 연결되지 못한 파라미터와 필드를 찾아서,
+        존재하는 타입 노드와 연결(OF_TYPE)합니다.
+        """
+        # 1. Link Parameters
+        # Match Parameter (p) without OF_TYPE
+        # Match Type (t) where t.name matches p.simple_type
+        # Create (p)-[:OF_TYPE]->(t)
+        query_params = """
+        MATCH (p:PARAMETER)
+        WHERE NOT (p)-[:OF_TYPE]->(:TYPE)
+        WITH p
+        MATCH (t:TYPE) 
+        WHERE t.name = split(p.type, '<')[0]  // Simple heuristic for List<User> -> User. Better handles in strategy but here valid too.
+           OR t.name = split(split(p.type, '<')[0], '.')[-1] // Handle FQCN
+        MERGE (p)-[:OF_TYPE]->(t)
+        """
+        self.connector.execute_query(query_params)
+        
+        # 2. Link Fields
+        query_fields = """
+        MATCH (f:FIELD)
+        WHERE NOT (f)-[:OF_TYPE]->(:TYPE)
+        WITH f
+        MATCH (t:TYPE)
+        WHERE t.name = split(f.type, '<')[0]
+           OR t.name = split(split(f.type, '<')[0], '.')[-1]
+        MERGE (f)-[:OF_TYPE]->(t)
+        """
+        self.connector.execute_query(query_fields)
