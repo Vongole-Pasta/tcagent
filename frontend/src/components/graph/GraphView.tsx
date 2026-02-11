@@ -45,10 +45,8 @@ const getLayoutedElements = (nodes: Node[], edges: Edge[], direction = 'TB') => 
                 y: nodeWithPosition.y - nodeHeight / 2,
             },
             style: {
+                ...node.style,
                 width: nodeWidth,
-                // Access custom data property type safely
-                backgroundColor: (node.data?.type === 'ENDPOINT') ? '#eff6ff' : '#fff',
-                border: (node.data?.type === 'ENDPOINT') ? '1px solid #3b82f6' : '1px solid #777'
             }
         };
     });
@@ -72,23 +70,35 @@ function InnerGraphView() { // Renamed from GraphView
             const direction = 'TB';
 
             // Map API data to React Flow format if not already
-            const rfNodes: Node[] = graphData.nodes.map(n => ({
-                id: n.id,
-                data: {
-                    label: (n as any).name,
-                    type: (n as any).type // Store type in data so we can access it later
-                },
-                position: { x: 0, y: 0 },
-                style: {
-                    background: (n as any).type === 'ENDPOINT' ? '#eff6ff' : '#ffffff',
-                    border: (n as any).type === 'ENDPOINT' ? '1px solid #2563eb' : '1px solid #e2e8f0',
-                    borderRadius: '8px',
-                    padding: '10px',
-                    fontSize: '12px',
-                    fontWeight: 500,
-                    color: '#1e293b'
-                }
-            }));
+            // Map API data to React Flow format if not already
+            const rfNodes: Node[] = graphData.nodes.map(n => {
+                const isSelected = n.id === selectedNodeId;
+                const isEndpoint = (n as any).type === 'ENDPOINT';
+
+                return {
+                    id: n.id,
+                    data: {
+                        label: isEndpoint ? (n as any).name : `${(n as any).name}()`, // Requirement 3: Append ()
+                        type: (n as any).type
+                    },
+                    position: { x: 0, y: 0 },
+                    style: {
+                        // Requirement 4: Highlighting (Modified per user request: Uniform default style)
+                        background: '#ffffff',
+                        border: isSelected
+                            ? '2px solid #ef4444'
+                            : '1px solid #e2e8f0',
+                        borderRadius: '8px',
+                        padding: '10px',
+                        fontSize: '12px',
+                        fontWeight: isSelected ? 700 : 500,
+                        color: '#1e293b',
+                        boxShadow: isSelected ? '0 0 15px rgba(239, 68, 68, 0.3)' : 'none',
+                        zIndex: isSelected ? 10 : 1,
+                        width: nodeWidth // Ensure width is consistent for layout
+                    }
+                };
+            });
 
             const rfEdges: Edge[] = graphData.edges.map(e => ({
                 id: e.id,
@@ -97,6 +107,7 @@ function InnerGraphView() { // Renamed from GraphView
                 type: 'smoothstep',
                 animated: true,
                 markerEnd: { x: 0, y: 0, type: MarkerType.ArrowClosed },
+                style: { stroke: '#94a3b8' } // Softer edge color
             }));
 
             const { nodes: layoutedNodes, edges: layoutedEdges } = getLayoutedElements(

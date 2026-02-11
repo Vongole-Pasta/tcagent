@@ -3,7 +3,7 @@
 import React, { useEffect, useState } from 'react';
 import { useStore } from '@/store/useStore';
 import { useDropzone } from 'react-dropzone';
-import { Upload, Search, Box, Globe, FileCode } from 'lucide-react';
+import { Upload, Search, Globe, FileCode } from 'lucide-react';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
@@ -173,47 +173,60 @@ export function Sidebar() {
                             No items found.
                         </div>
                     )}
-                    {sortedNodes.map((node) => (
-                        <div
-                            key={node.id}
-                            onClick={() => handleNodeClick(node)}
-                            className={cn(
-                                "flex items-center gap-3 p-3 rounded-md cursor-pointer transition-colors text-sm border border-transparent",
-                                selectedNodeId === node.id
-                                    ? "bg-accent text-accent-foreground border-border shadow-sm"
-                                    : "hover:bg-muted/60",
-                                node.status === 'DELETED' && "opacity-60 grayscale"
-                            )}
-                        >
-                            {node.type === 'ENDPOINT' ? (
-                                <Globe className="h-4 w-4 text-blue-500 shrink-0" />
-                            ) : (
-                                <Box className="h-4 w-4 text-orange-500 shrink-0" />
-                            )}
+                    {sortedNodes.map((node) => {
+                        // Parse signature to get parameters
+                        let params = "";
+                        if (node.signature && node.signature.includes('(')) {
+                            params = node.signature.substring(node.signature.indexOf('('));
+                        }
 
-                            <div className="flex-1 min-w-0">
-                                <div className="flex items-center gap-2">
-                                    <span className="font-mono text-xs text-muted-foreground mr-1">
-                                        {node.type === 'ENDPOINT' ? 'API' : 'M'}
-                                    </span>
-                                    <div className="flex flex-col flex-1 min-w-0">
+                        return (
+                            <div
+                                key={node.id}
+                                onClick={() => handleNodeClick(node)}
+                                className={cn(
+                                    "flex items-center gap-3 p-3 rounded-md cursor-pointer transition-colors text-sm border border-transparent",
+                                    selectedNodeId === node.id
+                                        ? "bg-accent text-accent-foreground border-border shadow-sm"
+                                        : "hover:bg-muted/60",
+                                    node.status === 'DELETED' && "opacity-60 grayscale"
+                                )}
+                            >
+                                {node.type === 'ENDPOINT' ? (
+                                    <Globe className="h-4 w-4 text-blue-500 shrink-0" />
+                                ) : (
+                                    <div className="flex items-center justify-center h-5 w-6 rounded bg-orange-100 text-orange-600 font-serif font-bold text-[10px] shrink-0 border border-orange-200" title="Method">
+                                        f(x)
+                                    </div>
+                                )}
 
+                                <div className="flex-1 min-w-0">
+                                    <div className="flex flex-col">
                                         <div className="flex items-center gap-2">
                                             <span className="truncate block font-medium">
                                                 {node.name}
                                             </span>
                                             {getStatusBadge(node.status)}
                                         </div>
+
+                                        {/* Display Parameters for Methods to distinguish overloads */}
+                                        {node.type === 'METHOD' && params && (
+                                            <span className="text-[10px] text-muted-foreground truncate block font-mono mt-0.5">
+                                                {params}
+                                            </span>
+                                        )}
+
+                                        {/* Display Endpoint info if available */}
                                         {node.endpoint && (
-                                            <span className="text-[10px] text-muted-foreground truncate block">
+                                            <span className="text-[10px] text-muted-foreground truncate block mt-0.5">
                                                 {node.http_method} {node.endpoint}
                                             </span>
                                         )}
                                     </div>
                                 </div>
                             </div>
-                        </div>
-                    ))}
+                        );
+                    })}
                 </div>
             </ScrollArea>
         </div>
