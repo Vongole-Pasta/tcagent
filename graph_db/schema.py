@@ -55,7 +55,8 @@ NODE_SCHEMA = {
     # - 메서드의 입력 인자를 나타내며, 순서(index)와 타입 정보를 가짐
     "PARAMETER": [
         "name",        # 파라미터 변수명 (예: userId)
-        "type",        # 파라미터 타입 (예: Long)
+        "type",        # 파라미터 타입 (Display용: 원본 문자열, 예: List<UserDto>)
+        "types",       # 파라미터 타입 리스트 (Logic용: 연결대상 분해, 예: ['List', 'UserDto'])
         "index"        # 인자 순서 (0부터 시작)
     ],
     
@@ -64,7 +65,8 @@ NODE_SCHEMA = {
     # - 클래스/객체의 멤버 변수, Enum 상수, Record 컴포넌트를 나타냄
     "FIELD": [
         "name",        # 필드명 (예: email, ACTIVE)
-        "type"         # 필드 타입 (예: String, Status)
+        "type",        # 필드 타입 (Display용: 원본 문자열, 예: List<String>)
+        "types"        # 필드 타입 리스트 (Logic용: 연결대상 분해, 예: ['List', 'String'])
     ]
 }
 
