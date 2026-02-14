@@ -30,3 +30,10 @@ class Config:
     ALLOWED_EXTENSIONS = {
         ".java": "java",
     }
+
+    # LangSmith & LLM
+    LANGCHAIN_TRACING_V2 = os.getenv("LANGCHAIN_TRACING_V2", "true")
+    LANGCHAIN_PROJECT = os.getenv("LANGCHAIN_PROJECT", "tcagent-integrated-test")
+    LANGCHAIN_API_KEY = os.getenv("LANGCHAIN_API_KEY", "")
+    OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
+    MODEL_NAME = os.getenv("MODEL_NAME", "gpt-4o")

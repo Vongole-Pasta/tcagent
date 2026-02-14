@@ -1,16 +1,78 @@
 "use client";
 
-import React from 'react';
+import React, { useState } from 'react';
 import { useStore } from '@/store/useStore';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from '@/components/ui/button';
-import { Activity, Box, Globe, MousePointerClick, Sparkles } from 'lucide-react';
+import { TestResultsView, GeneratedScenario } from '@/components/test/TestResultsView';
+import { Activity, Box, Globe, MousePointerClick, Sparkles, Loader2 } from 'lucide-react';
+
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 
 export function Dashboard() {
     const { projectNodes } = useStore();
 
     const totalMethods = projectNodes.length; // All nodes are methods, some have endpoints
     const totalEndpoints = projectNodes.filter(n => n.type === 'ENDPOINT').length;
+
+    const [loading, setLoading] = useState(false);
+    const [scenarios, setScenarios] = useState<GeneratedScenario[]>([]);
+    const [error, setError] = useState<string | null>(null);
+
+    const handleGenerate = async () => {
+        setLoading(true);
+        setError(null);
+        setScenarios([]);
+
+        try {
+            const response = await fetch(`${API_BASE_URL}/api/tests/generate`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ project_id: 'default' })
+            });
+
+            if (!response.ok) {
+                throw new Error('Failed to generate tests');
+            }
+
+            const data = await response.json();
+            setScenarios(data.scenarios || []);
+        } catch (err: any) {
+            setError(err.message || "An error occurred");
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    const handleDownload = async () => {
+        try {
+            const response = await fetch(`${API_BASE_URL}/api/tests/download`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ scenarios })
+            });
+
+            if (!response.ok) throw new Error("Download failed");
+
+            const blob = await response.blob();
+            const url = window.URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `integrated_tests_${new Date().toISOString().slice(0, 19)}.xlsx`;
+            document.body.appendChild(a);
+            a.click();
+            window.URL.revokeObjectURL(url);
+            document.body.removeChild(a);
+        } catch (err: any) {
+            setError(err.message);
+        }
+    };
+
+    const updateScenario = (index: number, field: keyof GeneratedScenario, value: string | number) => {
+        const newScenarios = [...scenarios];
+        newScenarios[index] = { ...newScenarios[index], [field]: value };
+        setScenarios(newScenarios);
+    };
 
     return (
         <div className="p-8 h-full bg-slate-50 overflow-y-auto">
@@ -70,30 +132,59 @@ export function Dashboard() {
                 {/* Actions */}
                 <div className="flex items-center justify-between p-6 bg-gradient-to-r from-blue-50 to-indigo-50 rounded-lg border border-blue-100 shadow-sm">
                     <div>
-                        <h3 className="text-lg font-semibold text-blue-900">Generate Integration Tests</h3>
+                        <h3 className="text-lg font-semibold text-blue-900">통합 테스트 생성</h3>
                         <p className="text-sm text-blue-700 mt-1">
-                            Automatically generate comprehensive integration tests based on the current graph analysis.
+                            현재 그래프 분석을 기반으로 포괄적인 통합 테스트 시나리오를 자동으로 생성합니다.
                         </p>
                     </div>
                     <Button
                         size="lg"
+                        onClick={handleGenerate}
+                        disabled={loading}
                         className="bg-blue-600 hover:bg-blue-700 shadow-md transition-all hover:scale-105"
                     >
-                        <Sparkles className="mr-2 h-4 w-4" />
-                        Generate Tests
+                        {loading ? (
+                            <>
+                                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                                생성 중...
+                            </>
+                        ) : (
+                            <>
+                                <Sparkles className="mr-2 h-4 w-4" />
+                                테스트 생성
+                            </>
+                        )}
                     </Button>
                 </div>
 
-                {/* Guide / Empty State Helper */}
-                <Card className="items-center justify-center flex flex-col p-10 border-dashed border-2 bg-slate-50/50">
-                    <div className="bg-blue-100 p-4 rounded-full mb-4">
-                        <MousePointerClick className="h-8 w-8 text-blue-600" />
+                {/* Error Message */}
+                {error && (
+                    <div className="p-4 bg-red-50 text-red-600 rounded-md text-sm border border-red-200">
+                        Error: {error}
                     </div>
-                    <h3 className="text-xl font-semibold mb-2">How to explore?</h3>
-                    <p className="text-muted-foreground text-center max-w-md">
-                        Select a <strong>Method</strong> or <strong>Endpoint</strong> from the left sidebar to visualize its call graph and dependency chain.
-                    </p>
-                </Card>
+                )}
+
+                {/* Content Area: Guide or Results */}
+                {scenarios.length > 0 ? (
+                    <TestResultsView
+                        scenarios={scenarios}
+                        updateScenario={updateScenario}
+                        onDownload={handleDownload}
+                    />
+                ) : (
+                    /* Guide / Empty State Helper */
+                    <Card className="items-center justify-center flex flex-col p-10 border-dashed border-2 bg-slate-50/50">
+                        <div className="bg-blue-100 p-4 rounded-full mb-4">
+                            <MousePointerClick className="h-8 w-8 text-blue-600" />
+                        </div>
+                        <h3 className="text-xl font-semibold mb-2">탐색 방법</h3>
+                        <p className="text-muted-foreground text-center max-w-md">
+                            왼쪽 사이드바에서 <strong>Method</strong> 또는 <strong>Endpoint</strong>를 선택하여 호출 그래프와 의존성을 시각화하세요.
+                            <br />
+                            또는 위 <strong>"테스트 생성"</strong> 버튼을 눌러 변경된 코드에 대한 테스트 시나리오를 확인하세요.
+                        </p>
+                    </Card>
+                )}
 
             </div>
         </div>
