@@ -1,25 +1,24 @@
 from langchain_core.prompts import PromptTemplate
 
 SCENARIO_GENERATION_PROMPT = PromptTemplate(
-    input_variables=["root_method", "modified_method", "call_path", "parameters"],
+    input_variables=["root_method", "affected_methods_context", "parameters"],
     template="""
 당신은 통합 테스트 시나리오를 작성하는 전문 QA 엔지니어입니다.
 변경된 소스 코드와 이를 호출하는 최상위 진입점(Root Method)의 정보를 바탕으로,
 통합 테스트 시나리오를 작성하여 JSON 형식으로 출력해야 합니다.
 
 **목표**:
-변경된 로직(`modified_method`)이 호출되는 경로(`call_path`)를 통해,
-최상위 진입점(`root_method`)에서 실행 가능한 테스트 케이스를 도출하세요.
+**목표**:
+동일한 진입점(`root_method`) 하위에서 변경된 여러 로직들(`affected_methods_context`)을 분석하여,
+각 변경 사항을 검증할 수 있는 통합 테스트 시나리오들을 도출하세요.
+각 변경된 메소드(Target)별로 최소 1개 이상의 테스트 케이스가 포함되어야 합니다.
 
 **입력 정보**:
 1. **Root Method** (테스트 진입점):
 {root_method}
 
-2. **Modified Method** (변경된 로직):
-{modified_method}
-
-3. **Call Path** (호출 경로):
-{call_path}
+2. **Affected Methods Context** (변경된 메소드들 및 호출 경로):
+{affected_methods_context}
 
 4. **Parameters** (입력 데이터 구조):
 {parameters}

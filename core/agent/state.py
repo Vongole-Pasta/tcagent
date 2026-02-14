@@ -15,14 +15,18 @@ class ParameterInfo(BaseModel):
     type: str
     fields: List[Dict[str, str]] = []  # Recursive field info if available
 
+class AffectedMethod(BaseModel):
+    id: str
+    signature: str
+    code: str
+    call_path: List[str]
+
 class TraceResult(BaseModel):
-    """Path from Root to Target"""
+    """Path from Root to Multiple Targets"""
     root_method_id: str
     root_method_signature: str
     root_method_code: str
-    target_method_id: str
-    target_method_code: str
-    call_path: List[str]  # List of method signatures in the path
+    affected_methods: List[AffectedMethod] = []
     parameters: List[ParameterInfo] = []
 
 class GeneratedScenario(BaseModel):
