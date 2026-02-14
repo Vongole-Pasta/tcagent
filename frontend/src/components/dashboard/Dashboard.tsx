@@ -177,7 +177,7 @@ export function Dashboard() {
                         <div className="bg-blue-100 p-4 rounded-full mb-4">
                             <MousePointerClick className="h-8 w-8 text-blue-600" />
                         </div>
-                        <h3 className="text-xl font-semibold mb-2">탐색 방법</h3>
+                        <h3 className="text-xl font-semibold mb-2">사용 방법</h3>
                         <p className="text-muted-foreground text-center max-w-md">
                             왼쪽 사이드바에서 <strong>Method</strong> 또는 <strong>Endpoint</strong>를 선택하여 호출 그래프와 의존성을 시각화하세요.
                             <br />
