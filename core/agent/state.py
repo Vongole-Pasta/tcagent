@@ -13,7 +13,8 @@ class ParameterInfo(BaseModel):
     """Parameter Information with Type Details"""
     name: str
     type: str
-    fields: List[Dict[str, str]] = []  # Recursive field info if available
+    fields: List[Dict[str, str]] = []  # Flat list of internal fields (deprecated or simple usage)
+    dto_schema: Optional[Dict[str, Any]] = None # Recursive dictionary for complex DTO structure
 
 class AffectedMethod(BaseModel):
     id: str
@@ -28,6 +29,8 @@ class TraceResult(BaseModel):
     root_method_code: str
     affected_methods: List[AffectedMethod] = []
     parameters: List[ParameterInfo] = []
+    return_type_name: Optional[str] = None
+    return_schema: Optional[Dict[str, Any]] = None
 
 class GeneratedScenario(BaseModel):
     """Mapped to Excel 'VOD' Sheet Columns"""

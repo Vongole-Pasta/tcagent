@@ -95,34 +95,71 @@ class IntegratedTestAgentNodes:
                         existing.affected_methods.append(affected_method)
                 else:
                     # Fetch parameters for the root method context (only once per root)
+                    # Updated Query: Fetch Annotations and DTO fields
                     param_query = """
                     MATCH (m:METHOD)-[:CONTAINS]->(p:PARAMETER)
                     WHERE elementId(m) = $root_id
                     OPTIONAL MATCH (p)-[:OF_TYPE]->(t:TYPE)
                     OPTIONAL MATCH (t)-[:CONTAINS]->(f:FIELD)
-                    RETURN p.index as param_index, p.name as param_name, p.type as param_type, t.name as type_name, collect({name: f.name, type: f.type}) as fields
+                    RETURN m.source as method_source, 
+                           p.index as param_index, 
+                           p.name as param_name, 
+                           p.type as param_type, 
+                           collect({name: f.name, type: f.type}) as fields
                     ORDER BY param_index
                     """
                     params_result = self.db_client.execute_query(param_query, {"root_id": root_id})
                     
                     parameter_infos = []
                     for p_row in params_result:
-                        # Filter out fields with None values (artifacts of OPTIONAL MATCH)
+                        # Construct simple schema for now (recursive fetch is expensive in one query)
+                        # We can improve this by assuming 'fields' represent the DTO structure
                         raw_fields = p_row['fields']
-                        clean_fields = [f for f in raw_fields if f.get('name') is not None and f.get('type') is not None]
-                        
+                        clean_fields = {}
+                        for f in raw_fields:
+                            if f.get('name') and f.get('type'):
+                                clean_fields[f['name']] = f['type']
+
                         parameter_infos.append({
                             "name": p_row['param_name'],
                             "type": p_row['param_type'],
-                            "fields": clean_fields
+                            "dto_schema": clean_fields if clean_fields else None
                         })
+
+                    # Fetch Return Type and Schema
+                    return_query = """
+                    MATCH (m:METHOD)
+                    WHERE elementId(m) = $root_id
+                    OPTIONAL MATCH (m)-[:RETURNS]->(t:TYPE)
+                    OPTIONAL MATCH (t)-[:CONTAINS]->(f:FIELD)
+                    RETURN t.name as return_type, collect({name: f.name, type: f.type}) as fields
+                    """
+                    return_result = self.db_client.execute_query(return_query, {"root_id": root_id})
+                    
+                    return_type_name = "void"
+                    return_schema = None
+                    
+                    if return_result:
+                        row = return_result[0]
+                        return_type_name = row.get('return_type', 'void')
+                        raw_fields = row.get('fields', [])
+                        
+                        clean_fields = {}
+                        for f in raw_fields:
+                            if f.get('name') and f.get('type'):
+                                clean_fields[f['name']] = f['type']
+                        
+                        if clean_fields:
+                            return_schema = clean_fields
 
                     grouped_traces[root_id] = TraceResult(
                         root_method_id=root_id,
                         root_method_signature=root_node.get('signature', ''),
                         root_method_code=root_node.get('source', ''),
                         affected_methods=[affected_method],
-                        parameters=parameter_infos
+                        parameters=parameter_infos,
+                        return_type_name=return_type_name,
+                        return_schema=return_schema
                     )
 
         trace_results = list(grouped_traces.values())
@@ -158,7 +195,8 @@ Code:
                 inputs = {
                     "root_method": f"Signature: {trace.root_method_signature}\nCode:\n{trace.root_method_code[:2000]}...",
                     "affected_methods_context": affected_methods_context,
-                    "parameters": json.dumps([p.model_dump() for p in trace.parameters], indent=2, ensure_ascii=False)
+                    "parameters": json.dumps([p.model_dump() for p in trace.parameters], indent=2, ensure_ascii=False),
+                    "return_schema": json.dumps(trace.return_schema, indent=2, ensure_ascii=False) if trace.return_schema else "No Schema Available (void or primitive)"
                 }
                 
                 result = chain.invoke(inputs)
