@@ -3,12 +3,12 @@ import logging
 import json
 from typing import List, Dict, Any
 from langchain_openai import ChatOpenAI
-from langchain_core.output_parsers import JsonOutputParser
+from langchain_core.output_parsers import JsonOutputParser, StrOutputParser
 
 from config import Config
 from infra.db_client import DBClient
 from core.agent.state import AgentState, TargetMethod, TraceResult, GeneratedScenario
-from core.agent.prompts import SCENARIO_GENERATION_PROMPT
+from core.agent.prompts import SCENARIO_GENERATION_PROMPT, TEST_STRATEGY_PROMPT
 
 logger = logging.getLogger(__name__)
 
@@ -224,3 +224,42 @@ Code:
                 return {"generated_scenarios": generated_scenarios, "errors": [f"Scenario gen error: {e}"]}
 
         return {"generated_scenarios": generated_scenarios}
+
+    def synthesize_strategy(self, state: AgentState) -> Dict[str, Any]:
+        """
+        Generate a test strategy summary based on identified targets and roots.
+        """
+        targets = state.target_methods
+        traces = state.trace_results
+        
+        logger.info(f"Synthesizing strategy for {len(targets)} targets and {len(traces)} roots...")
+        
+        # 1. Summarize Targets
+        target_summary = ""
+        for t in targets:
+            target_summary += f"- [{t.status}] {t.name} ({t.signature})\n"
+        
+        # 2. Summarize Roots
+        trace_summary = ""
+        for tr in traces:
+            trace_summary += f"- Entry Point: {tr.root_method_signature}\n"
+            trace_summary += f"  - Affects: {len(tr.affected_methods)} methods\n"
+        
+        if not targets:
+            return {"test_strategy_summary": "변경된 사항이 감지되지 않았습니다."}
+
+        # 3. Invoke LLM
+        chain = TEST_STRATEGY_PROMPT | self.llm | StrOutputParser()
+        
+        inputs = {
+            "target_summary": target_summary,
+            "trace_summary": trace_summary
+        }
+        
+        try:
+            strategy_text = chain.invoke(inputs)
+            logger.info("Strategy synthesized successfully.")
+            return {"test_strategy_summary": strategy_text}
+        except Exception as e:
+            logger.error(f"Strategy synthesis failed: {e}")
+            return {"test_strategy_summary": f"전략 수립 중 오류 발생: {e}"}

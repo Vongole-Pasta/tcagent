@@ -51,5 +51,6 @@ class AgentState(BaseModel):
     target_methods: List[TargetMethod] = []
     trace_results: List[TraceResult] = []
     generated_scenarios: List[GeneratedScenario] = []
+    test_strategy_summary: Optional[str] = None
     excel_file_path: str = ""
     errors: List[str] = []

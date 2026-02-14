@@ -38,13 +38,16 @@ async def generate_tests(request: Request, body: GenerateRequest):
         
         if isinstance(final_state, dict):
             scenarios = final_state.get("generated_scenarios", [])
+            strategy_summary = final_state.get("test_strategy_summary", None)
             errors = final_state.get("errors", [])
         else:
             scenarios = getattr(final_state, "generated_scenarios", [])
+            strategy_summary = getattr(final_state, "test_strategy_summary", None)
             errors = getattr(final_state, "errors", [])
         
         return {
             "scenarios": scenarios,
+            "strategy_summary": strategy_summary,
             "errors": errors,
             "count": len(scenarios)
         }

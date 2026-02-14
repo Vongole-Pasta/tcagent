@@ -17,6 +17,7 @@ def create_agent_graph(db_client: DBClient):
     # Add Nodes
     workflow.add_node("identify_targets", nodes.identify_targets)
     workflow.add_node("trace_roots", nodes.trace_roots)
+    workflow.add_node("synthesize_strategy", nodes.synthesize_strategy)
     workflow.add_node("generate_scenarios", nodes.generate_scenarios)
     
     # Define Edges
@@ -24,7 +25,8 @@ def create_agent_graph(db_client: DBClient):
     
     # Conditional logic or direct sequence
     workflow.add_edge("identify_targets", "trace_roots")
-    workflow.add_edge("trace_roots", "generate_scenarios")
+    workflow.add_edge("trace_roots", "synthesize_strategy")
+    workflow.add_edge("synthesize_strategy", "generate_scenarios")
     workflow.add_edge("generate_scenarios", END)
     
     # Compile with memory for checkpointer (optional, good for debugging)

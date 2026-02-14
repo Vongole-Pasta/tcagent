@@ -24,13 +24,14 @@ export interface GeneratedScenario {
 
 interface TestResultsViewProps {
     scenarios: GeneratedScenario[];
+    strategySummary?: string | null;
     updateScenario: (index: number, field: keyof GeneratedScenario, value: string | number) => void;
     onDownload: () => void;
 }
 
-export function TestResultsView({ scenarios, updateScenario, onDownload }: TestResultsViewProps) {
+export function TestResultsView({ scenarios, strategySummary, updateScenario, onDownload }: TestResultsViewProps) {
 
-    if (scenarios.length === 0) {
+    if (scenarios.length === 0 && !strategySummary) {
         return (
             <Card className="items-center justify-center flex flex-col p-10 border-dashed border-2 bg-slate-50/50 mt-8">
                 <div className="flex flex-col items-center justify-center h-40 text-center space-y-4">
@@ -46,28 +47,79 @@ export function TestResultsView({ scenarios, updateScenario, onDownload }: TestR
         );
     }
 
+    const renderMarkdown = (text: string) => {
+        if (!text) return null;
+        return text.split('\n').map((line, idx) => {
+            if (line.startsWith('### ')) {
+                return <h3 key={idx} className="text-md font-semibold mt-4 mb-2 text-blue-700">{line.replace('### ', '')}</h3>;
+            }
+            if (line.startsWith('## ')) {
+                return <h2 key={idx} className="text-lg font-bold mt-6 mb-3 border-b pb-1">{line.replace('## ', '')}</h2>;
+            }
+            if (line.startsWith('- ')) {
+                const content = line.replace('- ', '');
+                const parts = content.split(/(\*\*.*?\*\*)/g);
+                return (
+                    <li key={idx} className="ml-4 list-disc text-sm text-slate-700 my-1">
+                        {parts.map((part, pIdx) => {
+                            if (part.startsWith('**') && part.endsWith('**')) {
+                                return <strong key={pIdx} className="font-semibold text-slate-900 bg-yellow-50 px-1 rounded">{part.slice(2, -2)}</strong>;
+                            }
+                            return part;
+                        })}
+                    </li>
+                );
+            }
+            return <p key={idx} className="text-sm text-slate-600 my-1">{line}</p>;
+        });
+    };
+
     return (
         <div className="space-y-4 mt-8">
             <div className="flex justify-between items-center bg-white p-4 rounded-lg border shadow-sm">
                 <div>
                     <h2 className="text-lg font-semibold flex items-center gap-2">
-                        ✨ 생성된 테스트 시나리오 ({scenarios.length}건)
+                        ✨ 테스트 분석 결과
                     </h2>
                     <p className="text-sm text-muted-foreground">
-                        결과를 검토하고 수정할 수 있습니다. 완료되면 엑셀로 다운로드하세요.
+                        {scenarios.length > 0
+                            ? `생성된 시나리오 ${scenarios.length}건 및 전략 분석 결과입니다.`
+                            : "전략 분석 결과입니다. 테스트 시나리오를 생성하려면 '테스트 생성'을 클릭하세요."}
                     </p>
                 </div>
-                <Button onClick={onDownload} variant="outline" className="gap-2 border-green-600 text-green-700 hover:bg-green-50">
-                    <Download className="h-4 w-4" />
-                    Excel 다운로드
-                </Button>
+                {scenarios.length > 0 && (
+                    <Button onClick={onDownload} variant="outline" className="gap-2 border-green-600 text-green-700 hover:bg-green-50">
+                        <Download className="h-4 w-4" />
+                        Excel 다운로드
+                    </Button>
+                )}
             </div>
 
-            <Tabs defaultValue="vod" className="w-full">
+            <Tabs defaultValue={strategySummary ? "strategy" : "vod"} className="w-full">
                 <TabsList>
-                    <TabsTrigger value="vod">VOD (상세)</TabsTrigger>
-                    <TabsTrigger value="scenario">시나리오 (요약)</TabsTrigger>
+                    <TabsTrigger value="strategy">요약 (Summary)</TabsTrigger>
+                    <TabsTrigger value="vod">VOD (Detailed)</TabsTrigger>
+                    <TabsTrigger value="scenario">시나리오 (Scenario)</TabsTrigger>
                 </TabsList>
+
+                <TabsContent value="strategy" className="mt-4">
+                    <Card>
+                        <CardHeader>
+                            <CardTitle>테스트 전략 리포트</CardTitle>
+                        </CardHeader>
+                        <CardContent>
+                            {strategySummary ? (
+                                <div className="prose prose-sm max-w-none p-4 bg-slate-50 rounded-md border text-slate-700 leading-relaxed">
+                                    {renderMarkdown(strategySummary)}
+                                </div>
+                            ) : (
+                                <div className="text-center py-10 text-slate-400">
+                                    전략 분석 결과가 없습니다. "전략 분석" 버튼을 눌러주세요.
+                                </div>
+                            )}
+                        </CardContent>
+                    </Card>
+                </TabsContent>
 
                 <TabsContent value="vod" className="mt-4">
                     <Card>

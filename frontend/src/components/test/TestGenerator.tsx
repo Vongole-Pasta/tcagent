@@ -29,10 +29,15 @@ interface GeneratedScenario {
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 
 export function TestGenerator({ trigger }: { trigger?: React.ReactNode }) {
+    // Original State
     const [open, setOpen] = useState(false);
     const [loading, setLoading] = useState(false);
     const [scenarios, setScenarios] = useState<GeneratedScenario[]>([]);
     const [error, setError] = useState<string | null>(null);
+
+    // Strategy State
+    const [strategySummary, setStrategySummary] = useState<string | null>(null);
+    const [analyzing, setAnalyzing] = useState(false);
 
     const handleGenerate = async () => {
         setLoading(true);
@@ -90,6 +95,60 @@ export function TestGenerator({ trigger }: { trigger?: React.ReactNode }) {
         setScenarios(newScenarios);
     };
 
+    const handleAnalyzeStrategy = async () => {
+        setAnalyzing(true);
+        setError(null);
+        setStrategySummary(null);
+
+        try {
+            const response = await fetch(`${API_BASE_URL}/api/strategy/generate`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ project_id: 'default' })
+            });
+
+            if (!response.ok) {
+                throw new Error('Failed to analyze strategy');
+            }
+
+            const data = await response.json();
+            setStrategySummary(data.strategy_summary);
+        } catch (err: any) {
+            setError(err.message || "An error occurred");
+        } finally {
+            setAnalyzing(false);
+        }
+    };
+
+    // Simple Markdown Renderer (Bold & Headers)
+    const renderMarkdown = (text: string) => {
+        if (!text) return null;
+        return text.split('\n').map((line, idx) => {
+            if (line.startsWith('### ')) {
+                return <h3 key={idx} className="text-md font-semibold mt-4 mb-2 text-blue-700">{line.replace('### ', '')}</h3>;
+            }
+            if (line.startsWith('## ')) {
+                return <h2 key={idx} className="text-lg font-bold mt-6 mb-3 border-b pb-1">{line.replace('## ', '')}</h2>;
+            }
+            if (line.startsWith('- ')) {
+                const content = line.replace('- ', '');
+                // Bold processing: **text**
+                const parts = content.split(/(\*\*.*?\*\*)/g);
+                return (
+                    <li key={idx} className="ml-4 list-disc text-sm text-slate-700 my-1">
+                        {parts.map((part, pIdx) => {
+                            if (part.startsWith('**') && part.endsWith('**')) {
+                                return <strong key={pIdx} className="font-semibold text-slate-900 bg-yellow-50 px-1 rounded">{part.slice(2, -2)}</strong>;
+                            }
+                            return part;
+                        })}
+                    </li>
+                );
+            }
+            return <p key={idx} className="text-sm text-slate-600 my-1">{line}</p>;
+        });
+    };
+
     return (
         <Dialog open={open} onOpenChange={setOpen}>
             <DialogTrigger asChild>
@@ -104,99 +163,115 @@ export function TestGenerator({ trigger }: { trigger?: React.ReactNode }) {
                 <DialogHeader>
                     <DialogTitle className="flex items-center gap-2">
                         <Sparkles className="h-5 w-5 text-blue-600" />
-                        Integrated Test Generator
+                        Integrated Test Generator & Strategy
                     </DialogTitle>
                 </DialogHeader>
 
-                <div className="flex-1 overflow-auto p-1">
-                    {loading ? (
-                        <div className="flex flex-col items-center justify-center h-64 gap-4">
-                            <Loader2 className="h-10 w-10 animate-spin text-blue-600" />
-                            <p className="text-muted-foreground animate-pulse">Analyzing Call Graph & Generating Scenarios...</p>
-                        </div>
-                    ) : scenarios.length > 0 ? (
-                        <div className="space-y-4">
-                            <div className="flex justify-between items-center">
-                                <p className="text-sm text-green-600 font-medium">✨ Successfully generated {scenarios.length} scenarios. Review and edit before downloading.</p>
-                                <Button onClick={handleDownload} variant="outline" className="gap-2 border-green-600 text-green-700 hover:bg-green-50">
-                                    <Download className="h-4 w-4" />
-                                    Download Excel
-                                </Button>
-                            </div>
-                            <div className="border rounded-md">
-                                <Table>
-                                    <TableHeader>
-                                        <TableRow>
-                                            <TableHead className="w-[120px]">ID</TableHead>
-                                            <TableHead className="w-[150px]">Case Name</TableHead>
-                                            <TableHead className="w-[250px]">Description</TableHead>
-                                            <TableHead className="w-[200px]">Pre-condition</TableHead>
-                                            <TableHead className="w-[200px]">Procedure</TableHead>
-                                            <TableHead className="w-[200px]">Expected Result</TableHead>
-                                        </TableRow>
-                                    </TableHeader>
-                                    <TableBody>
-                                        {scenarios.map((scenario, idx) => (
-                                            <TableRow key={idx}>
-                                                <TableCell className="font-mono text-xs">{scenario.test_case_id}</TableCell>
-                                                <TableCell>
-                                                    <Input
-                                                        value={scenario.test_case_name}
-                                                        onChange={(e: React.ChangeEvent<HTMLInputElement>) => updateScenario(idx, 'test_case_name', e.target.value)}
-                                                        className="h-8 text-xs"
-                                                    />
-                                                </TableCell>
-                                                <TableCell>
-                                                    <Textarea
-                                                        value={scenario.description}
-                                                        onChange={(e: React.ChangeEvent<HTMLTextAreaElement>) => updateScenario(idx, 'description', e.target.value)}
-                                                        className="min-h-[60px] text-xs"
-                                                    />
-                                                </TableCell>
-                                                <TableCell>
-                                                    <Textarea
-                                                        value={scenario.pre_condition}
-                                                        onChange={(e: React.ChangeEvent<HTMLTextAreaElement>) => updateScenario(idx, 'pre_condition', e.target.value)}
-                                                        className="min-h-[60px] text-xs"
-                                                    />
-                                                </TableCell>
-                                                <TableCell>
-                                                    <Textarea
-                                                        value={scenario.procedure}
-                                                        onChange={(e: React.ChangeEvent<HTMLTextAreaElement>) => updateScenario(idx, 'procedure', e.target.value)}
-                                                        className="min-h-[60px] text-xs"
-                                                    />
-                                                </TableCell>
-                                                <TableCell>
-                                                    <Textarea
-                                                        value={scenario.expected_result}
-                                                        onChange={(e: React.ChangeEvent<HTMLTextAreaElement>) => updateScenario(idx, 'expected_result', e.target.value)}
-                                                        className="min-h-[60px] text-xs"
-                                                    />
-                                                </TableCell>
-                                            </TableRow>
-                                        ))}
-                                    </TableBody>
-                                </Table>
-                            </div>
-                        </div>
-                    ) : (
-                        <div className="flex flex-col items-center justify-center h-64 text-center space-y-4">
-                            <FileSpreadsheet className="h-16 w-16 text-slate-200" />
-                            <div className="space-y-2">
-                                <h3 className="text-lg font-medium">Ready to Generate</h3>
-                                <p className="text-sm text-muted-foreground max-w-sm">
-                                    Click the button below to analyze modified code (Status: NEW/MODIFIED) and generate integration test scenarios.
-                                </p>
-                            </div>
-                            <Button onClick={handleGenerate} size="lg" className="bg-blue-600 hover:bg-blue-700">
-                                Start Generation
+                <div className="flex-1 overflow-auto p-4 space-y-6">
+                    {/* Strategy Section */}
+                    <div className="bg-slate-50 p-4 rounded-lg border">
+                        <div className="flex justify-between items-center mb-4">
+                            <h3 className="font-semibold text-slate-800 flex items-center gap-2">
+                                <FileSpreadsheet className="h-4 w-4" />
+                                1. 변경점 분석 및 테스트 전략 (Strategy)
+                            </h3>
+                            <Button
+                                onClick={handleAnalyzeStrategy}
+                                disabled={analyzing}
+                                variant="outline"
+                                size="sm"
+                                className="border-blue-200 hover:bg-blue-50 text-blue-700"
+                            >
+                                {analyzing ? <Loader2 className="h-3 w-3 animate-spin mr-1" /> : "🔍 "}
+                                전략 분석 실행
                             </Button>
                         </div>
-                    )}
+
+                        {analyzing && (
+                            <div className="py-8 text-center text-sm text-muted-foreground animate-pulse">
+                                변경된 코드와 영향 범위를 분석하고 있습니다...
+                            </div>
+                        )}
+
+                        {strategySummary && (
+                            <div className="bg-white p-4 rounded border shadow-sm prose prose-sm max-w-none">
+                                {renderMarkdown(strategySummary)}
+                            </div>
+                        )}
+                    </div>
+
+                    {/* Generation Section */}
+                    <div className="bg-white p-4 rounded-lg border">
+                        <div className="flex justify-between items-center mb-4">
+                            <h3 className="font-semibold text-slate-800 flex items-center gap-2">
+                                <Sparkles className="h-4 w-4" />
+                                2. 상세 시나리오 생성 (Details)
+                            </h3>
+                        </div>
+
+                        {loading ? (
+                            <div className="flex flex-col items-center justify-center h-40 gap-4">
+                                <Loader2 className="h-8 w-8 animate-spin text-blue-600" />
+                                <p className="text-muted-foreground animate-pulse">Call Graph 분석 및 시나리오 생성 중...</p>
+                            </div>
+                        ) : scenarios.length > 0 ? (
+                            <div className="space-y-4">
+                                <div className="flex justify-between items-center">
+                                    <p className="text-sm text-green-600 font-medium">✨ 총 {scenarios.length}개의 시나리오가 생성되었습니다.</p>
+                                    <Button onClick={handleDownload} variant="outline" className="gap-2 border-green-600 text-green-700 hover:bg-green-50">
+                                        <Download className="h-4 w-4" />
+                                        Excel 다운로드
+                                    </Button>
+                                </div>
+                                <div className="border rounded-md max-h-[400px] overflow-auto">
+                                    <Table>
+                                        <TableHeader className="sticky top-0 bg-white z-10 shadow-sm">
+                                            <TableRow>
+                                                <TableHead className="w-[120px]">ID</TableHead>
+                                                <TableHead className="w-[150px]">Case Name</TableHead>
+                                                <TableHead className="w-[200px]">Procedure</TableHead>
+                                                <TableHead className="w-[200px]">Expected Result</TableHead>
+                                            </TableRow>
+                                        </TableHeader>
+                                        <TableBody>
+                                            {scenarios.map((scenario, idx) => (
+                                                <TableRow key={idx}>
+                                                    <TableCell className="font-mono text-xs">{scenario.test_case_id}</TableCell>
+                                                    <TableCell className="text-xs">{scenario.test_case_name}</TableCell>
+                                                    <TableCell>
+                                                        <Textarea
+                                                            value={scenario.procedure}
+                                                            readOnly
+                                                            className="min-h-[40px] text-xs bg-slate-50 resize-none font-mono"
+                                                        />
+                                                    </TableCell>
+                                                    <TableCell>
+                                                        <Textarea
+                                                            value={scenario.expected_result}
+                                                            readOnly
+                                                            className="min-h-[40px] text-xs bg-slate-50 resize-none font-mono"
+                                                        />
+                                                    </TableCell>
+                                                </TableRow>
+                                            ))}
+                                        </TableBody>
+                                    </Table>
+                                </div>
+                            </div>
+                        ) : (
+                            <div className="flex flex-col items-center justify-center py-8 text-center space-y-4 bg-slate-50/50 rounded-lg border-2 border-dashed">
+                                <p className="text-sm text-muted-foreground">
+                                    위의 전략 분석을 확인한 후, 상세 시나리오를 생성하세요.
+                                </p>
+                                <Button onClick={handleGenerate} size="lg" className="bg-blue-600 hover:bg-blue-700">
+                                    시나리오 생성 시작
+                                </Button>
+                            </div>
+                        )}
+                    </div>
 
                     {error && (
-                        <div className="p-4 mt-4 bg-red-50 text-red-600 rounded-md text-sm">
+                        <div className="p-4 bg-red-50 text-red-600 rounded-md text-sm border border-red-200">
                             Error: {error}
                         </div>
                     )}
@@ -204,4 +279,5 @@ export function TestGenerator({ trigger }: { trigger?: React.ReactNode }) {
             </DialogContent>
         </Dialog>
     );
+
 }

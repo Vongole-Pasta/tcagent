@@ -17,6 +17,7 @@ export function Dashboard() {
 
     const [loading, setLoading] = useState(false);
     const [scenarios, setScenarios] = useState<GeneratedScenario[]>([]);
+    const [strategySummary, setStrategySummary] = useState<string | null>(null);
     const [error, setError] = useState<string | null>(null);
 
     const handleGenerate = async () => {
@@ -37,12 +38,15 @@ export function Dashboard() {
 
             const data = await response.json();
             setScenarios(data.scenarios || []);
+            setStrategySummary(data.strategy_summary || null);
         } catch (err: any) {
             setError(err.message || "An error occurred");
         } finally {
             setLoading(false);
         }
     };
+
+
 
     const handleDownload = async () => {
         try {
@@ -165,9 +169,10 @@ export function Dashboard() {
                 )}
 
                 {/* Content Area: Guide or Results */}
-                {scenarios.length > 0 ? (
+                {scenarios.length > 0 || strategySummary ? (
                     <TestResultsView
                         scenarios={scenarios}
+                        strategySummary={strategySummary}
                         updateScenario={updateScenario}
                         onDownload={handleDownload}
                     />

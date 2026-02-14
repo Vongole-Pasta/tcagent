@@ -23,6 +23,7 @@ async def lifespan(app: FastAPI):
     
     # Initialize Agent Graph
     agent_graph = create_agent_graph(db_client)
+
     
     # Inject into app state for access in routes
     app.state.analyzer = analyzer
