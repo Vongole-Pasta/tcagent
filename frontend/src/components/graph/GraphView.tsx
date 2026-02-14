@@ -24,7 +24,7 @@ const nodeHeight = 60;
 const getLayoutedElements = (nodes: Node[], edges: Edge[], direction = 'TB') => {
     const dagreGraph = new dagre.graphlib.Graph();
     dagreGraph.setDefaultEdgeLabel(() => ({}));
-    dagreGraph.setGraph({ rankdir: direction }); // Use the passed direction
+    dagreGraph.setGraph({ rankdir: direction });
 
     nodes.forEach((node) => {
         dagreGraph.setNode(node.id, { width: nodeWidth, height: nodeHeight });
@@ -55,47 +55,55 @@ const getLayoutedElements = (nodes: Node[], edges: Edge[], direction = 'TB') => 
 };
 
 function InnerGraphView() { // Renamed from GraphView
-    const { graphData, isLoading, fetchNodeDetail, selectedNodeId, projectNodes } = useStore();
+    const { graphData, isGraphLoading, fetchNodeDetail, selectedNodeId, projectNodes } = useStore();
     const [nodes, setNodes, onNodesChange] = useNodesState<Node>([]);
     const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([]);
-    const { fitView } = useReactFlow(); // Added useReactFlow hook
+    const { fitView } = useReactFlow();
 
     useEffect(() => {
         if (graphData.nodes.length > 0) {
-            // Determine layout direction based on selected node type
-            const selectedNode = projectNodes.find(n => n.id === selectedNodeId);
-            // User feedback: "Bottom-Up" means Me at Bottom, Callers at Top. 
-            // Since edges are Caller->Me, 'TB' layout achieves this (Source Top, Target Bottom).
-            // So we use 'TB' for BOTH Upstream and Downstream.
             const direction = 'TB';
 
-            // Map API data to React Flow format if not already
-            // Map API data to React Flow format if not already
             const rfNodes: Node[] = graphData.nodes.map(n => {
                 const isSelected = n.id === selectedNodeId;
                 const isEndpoint = (n as any).type === 'ENDPOINT';
+                const className = (n as any).className;
+                const nodeName = isEndpoint ? (n as any).name : `${(n as any).name}()`;
 
                 return {
                     id: n.id,
                     data: {
-                        label: isEndpoint ? (n as any).name : `${(n as any).name}()`, // Requirement 3: Append ()
+                        label: (
+                            <div className="flex flex-col items-center justify-center h-full">
+                                {className && (
+                                    <div className="text-[10px] text-slate-500 font-semibold mb-1 leading-tight text-center w-full truncate px-1">
+                                        {className}
+                                    </div>
+                                )}
+                                <div className="font-bold text-sm text-center leading-tight">
+                                    {nodeName}
+                                </div>
+                            </div>
+                        ),
                         type: (n as any).type
                     },
                     position: { x: 0, y: 0 },
                     style: {
-                        // Requirement 4: Highlighting (Modified per user request: Uniform default style)
                         background: '#ffffff',
                         border: isSelected
                             ? '2px solid #ef4444'
                             : '1px solid #e2e8f0',
                         borderRadius: '8px',
-                        padding: '10px',
+                        padding: '10px', // Keep padding
                         fontSize: '12px',
-                        fontWeight: isSelected ? 700 : 500,
                         color: '#1e293b',
-                        boxShadow: isSelected ? '0 0 15px rgba(239, 68, 68, 0.3)' : 'none',
+                        boxShadow: isSelected ? '0 0 15px rgba(239, 68, 68, 0.3)' : '0 1px 3px rgba(0,0,0,0.1)',
                         zIndex: isSelected ? 10 : 1,
-                        width: nodeWidth // Ensure width is consistent for layout
+                        width: nodeWidth,
+                        height: nodeHeight, // Enforce height
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
                     }
                 };
             });
@@ -107,19 +115,18 @@ function InnerGraphView() { // Renamed from GraphView
                 type: 'smoothstep',
                 animated: true,
                 markerEnd: { x: 0, y: 0, type: MarkerType.ArrowClosed },
-                style: { stroke: '#94a3b8' } // Softer edge color
+                style: { stroke: '#94a3b8' }
             }));
 
             const { nodes: layoutedNodes, edges: layoutedEdges } = getLayoutedElements(
                 rfNodes,
                 rfEdges,
-                direction // Pass the determined direction
+                direction
             );
 
             setNodes(layoutedNodes);
             setEdges(layoutedEdges);
 
-            // Force fit view after layout
             window.requestAnimationFrame(() => {
                 fitView({ duration: 400, padding: 0.2 });
             });
@@ -127,7 +134,7 @@ function InnerGraphView() { // Renamed from GraphView
             setNodes([]);
             setEdges([]);
         }
-    }, [graphData, setNodes, setEdges, fitView, selectedNodeId, projectNodes]); // Added fitView, selectedNodeId, projectNodes to dependencies
+    }, [graphData, setNodes, setEdges, fitView, selectedNodeId, projectNodes]);
 
     const onNodeClick = useCallback((event: any, node: Node) => {
         fetchNodeDetail(node.id);
@@ -135,8 +142,9 @@ function InnerGraphView() { // Renamed from GraphView
 
     return (
         <div className="flex-1 h-full bg-slate-50 relative">
-            {isLoading && (
-                <div className="absolute top-4 left-4 z-10 bg-white/80 p-2 rounded shadow text-sm">
+            {isGraphLoading && (
+                <div className="absolute top-4 left-4 z-10 bg-white/80 p-2 rounded shadow text-sm flex items-center gap-2">
+                    <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-primary"></div>
                     Loading Graph...
                 </div>
             )}

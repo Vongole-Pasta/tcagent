@@ -8,9 +8,20 @@ class CypherQueries:
     
     # [메서드 상세 조회]
     # 특정 메서드 ID를 입력받아 이름, 시그니처, 소스 코드를 반환합니다.
-    # Frontend: 상세 패널(DetailPanel)에서 소스 코드 보기용
+    # [단일 노드 메타데이터 조회]
+    # 그래프 쿼리 결과가 없을 때(고립된 노드 등), 최소한 해당 노드는 보여주기 위해 사용합니다.
+    GET_NODE_METADATA = """
+    MATCH (m:METHOD)
+    WHERE (elementId(m) = $method_id OR m.id = $method_id)
+    OPTIONAL MATCH (c:TYPE)-[:CONTAINS]->(m)
+    RETURN m, c.name as className
+    """
+    
+    # [메서드 컨텍스트 조회]
+    # RAG(검색 증강 생성)를 위해 특정 메서드의 소스 코드와 주변 정보를 조회합니다.
     GET_METHOD_CONTEXT = """
-    MATCH (m:METHOD) WHERE elementId(m) = $method_id OR m.id = $method_id
+    MATCH (m:METHOD)
+    WHERE (elementId(m) = $method_id OR m.id = $method_id)
     RETURN m.name as name, m.signature as signature, m.source as source
     """
     
@@ -40,21 +51,23 @@ class CypherQueries:
 
     # [모든 메서드 목록 조회]
     # 프로젝트 내의 모든 메서드를 조회하여 검색 기능을 지원합니다.
+    # [모든 메서드 목록 조회]
+    # 프로젝트 내의 모든 메서드를 조회하여 검색 기능을 지원합니다.
     GET_ALL_METHODS = """
-    MATCH (m:METHOD)
-    RETURN elementId(m) as id, m.name as name, m.signature as signature, m.endpoint as endpoint, m.http_method as http_method, m.status as status
-    ORDER BY m.name
+    MATCH (m:METHOD)<-[:CONTAINS]-(c:TYPE)
+    RETURN elementId(m) as id, m.name as name, m.signature as signature, m.endpoint as endpoint, m.http_method as http_method, m.status as status, c.name as class_name
+    ORDER BY c.name, m.name
     """
     
     # [API 엔드포인트 목록 조회]
     # API 엔드포인트(URL) 정보를 가진 메서드만 필터링하여 조회합니다.
     # 각 엔드포인트가 호출하는 하위 메서드들의 상태(NEW/MODIFIED 등)를 집계하여 보여줍니다.
     GET_ALL_ENDPOINTS = """
-    MATCH (m:METHOD)
+    MATCH (m:METHOD)<-[:CONTAINS]-(c:TYPE)
     WHERE m.endpoint IS NOT NULL
     OPTIONAL MATCH (m)-[:CALLS*0..]->(d:METHOD)
-    WITH m, collect(DISTINCT d.status) as statuses
-    RETURN elementId(m) as id, m.name as name, m.endpoint as endpoint, m.http_method as http_method, statuses
+    WITH m, c, collect(DISTINCT d.status) as statuses
+    RETURN elementId(m) as id, m.name as name, m.endpoint as endpoint, m.http_method as http_method, statuses, c.name as class_name
     ORDER BY m.endpoint
     """
 
@@ -66,8 +79,11 @@ class CypherQueries:
     GET_UPSTREAM_IMPACT = """
     MATCH path = (source:METHOD)-[:CALLS*0..]->(target:METHOD)
     WHERE (elementId(target) = $method_id OR target.id = $method_id)
-    RETURN path
-    LIMIT 100
+    WITH path LIMIT 100
+    UNWIND nodes(path) as m
+    OPTIONAL MATCH (c:TYPE)-[:CONTAINS]->(m)
+    WITH path, collect({id: elementId(m), className: c.name}) as metadata
+    RETURN path, metadata
     """
 
     # [하위 호출 흐름 조회]
@@ -77,8 +93,11 @@ class CypherQueries:
     GET_DOWNSTREAM_FLOW = """
     MATCH path = (source:METHOD)-[:CALLS*0..]->(target:METHOD)
     WHERE (elementId(source) = $method_id OR source.id = $method_id)
-    RETURN path
-    LIMIT 100
+    WITH path LIMIT 100
+    UNWIND nodes(path) as m
+    OPTIONAL MATCH (c:TYPE)-[:CONTAINS]->(m)
+    WITH path, collect({id: elementId(m), className: c.name}) as metadata
+    RETURN path, metadata
     """
     
     # --- Change Detection Helpers ---

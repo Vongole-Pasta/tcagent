@@ -74,7 +74,8 @@ async def get_project_nodes(project_id: str, request: Request, type: Optional[st
                 "endpoint": r.get("endpoint"),
                 "http_method": r.get("http_method"),
                 "type": "ENDPOINT" if r.get("endpoint") else "METHOD",
-                "status": status
+                "status": status,
+                "className": r.get("class_name")
             })
             
         return {"nodes": nodes}

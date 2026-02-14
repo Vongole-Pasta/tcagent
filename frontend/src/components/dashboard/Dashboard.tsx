@@ -10,20 +10,25 @@ import { Activity, Box, Globe, MousePointerClick, Sparkles, Loader2 } from 'luci
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 
 export function Dashboard() {
-    const { projectNodes } = useStore();
+    const {
+        projectNodes,
+        generatedScenarios,
+        strategySummary,
+        setGeneratedTestResults,
+        updateScenario
+    } = useStore();
 
     const totalMethods = projectNodes.length; // All nodes are methods, some have endpoints
     const totalEndpoints = projectNodes.filter(n => n.type === 'ENDPOINT').length;
 
     const [loading, setLoading] = useState(false);
-    const [scenarios, setScenarios] = useState<GeneratedScenario[]>([]);
-    const [strategySummary, setStrategySummary] = useState<string | null>(null);
     const [error, setError] = useState<string | null>(null);
 
     const handleGenerate = async () => {
         setLoading(true);
         setError(null);
-        setScenarios([]);
+        // Clear previous results in store? Optional, but good for UX to show loading state cleanly.
+        // setGeneratedTestResults([], null);
 
         try {
             const response = await fetch(`${API_BASE_URL}/api/tests/generate`, {
@@ -37,8 +42,7 @@ export function Dashboard() {
             }
 
             const data = await response.json();
-            setScenarios(data.scenarios || []);
-            setStrategySummary(data.strategy_summary || null);
+            setGeneratedTestResults(data.scenarios || [], data.strategy_summary || null);
         } catch (err: any) {
             setError(err.message || "An error occurred");
         } finally {
@@ -46,36 +50,15 @@ export function Dashboard() {
         }
     };
 
-
-
-    const handleDownload = async () => {
-        try {
-            const response = await fetch(`${API_BASE_URL}/api/tests/download`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ scenarios })
-            });
-
-            if (!response.ok) throw new Error("Download failed");
-
-            const blob = await response.blob();
-            const url = window.URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = `integrated_tests_${new Date().toISOString().slice(0, 19)}.xlsx`;
-            document.body.appendChild(a);
-            a.click();
-            window.URL.revokeObjectURL(url);
-            document.body.removeChild(a);
-        } catch (err: any) {
-            setError(err.message);
-        }
-    };
-
-    const updateScenario = (index: number, field: keyof GeneratedScenario, value: string | number) => {
-        const newScenarios = [...scenarios];
-        newScenarios[index] = { ...newScenarios[index], [field]: value };
-        setScenarios(newScenarios);
+    const handleDownload = () => {
+        const dataStr = JSON.stringify(generatedScenarios, null, 2);
+        const blob = new Blob([dataStr], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = 'test_scenarios.json';
+        a.click();
+        URL.revokeObjectURL(url);
     };
 
     return (
@@ -121,13 +104,13 @@ export function Dashboard() {
 
                     <Card>
                         <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                            <CardTitle className="text-sm font-medium">Analysis Status</CardTitle>
+                            <CardTitle className="text-sm font-medium">Test Scenarios</CardTitle>
                             <Activity className="h-4 w-4 text-muted-foreground" />
                         </CardHeader>
                         <CardContent>
-                            <div className="text-2xl font-bold text-green-600">Active</div>
+                            <div className="text-2xl font-bold">{generatedScenarios.length}</div>
                             <p className="text-xs text-muted-foreground">
-                                Ready for Graph Exploration
+                                Generated test cases
                             </p>
                         </CardContent>
                     </Card>
@@ -169,9 +152,9 @@ export function Dashboard() {
                 )}
 
                 {/* Content Area: Guide or Results */}
-                {scenarios.length > 0 || strategySummary ? (
+                {generatedScenarios.length > 0 || strategySummary ? (
                     <TestResultsView
-                        scenarios={scenarios}
+                        scenarios={generatedScenarios}
                         strategySummary={strategySummary}
                         updateScenario={updateScenario}
                         onDownload={handleDownload}

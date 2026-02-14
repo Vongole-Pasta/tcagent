@@ -202,6 +202,13 @@ export function Sidebar() {
 
                                 <div className="flex-1 min-w-0">
                                     <div className="flex flex-col">
+                                        {/* Display Class Name */}
+                                        {node.className && (
+                                            <span className="text-[10px] text-muted-foreground font-semibold mb-0.5">
+                                                {node.className}
+                                            </span>
+                                        )}
+
                                         <div className="flex items-center gap-2">
                                             <span className="truncate block font-medium">
                                                 {node.name}
