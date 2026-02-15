@@ -26,15 +26,15 @@ def create_agent_graph(db_client: DBClient):
     
     # Conditional logic or direct sequence
     workflow.add_edge("identify_targets", "trace_roots")
-    workflow.add_edge("trace_roots", "synthesize_strategy") # Direct connection
-    workflow.add_edge("synthesize_strategy", "generate_scenarios")
+    workflow.add_edge("trace_roots", "generate_scenarios") # Changed execution order
     workflow.add_edge("generate_scenarios", "evaluate_scenarios")
+    workflow.add_edge("synthesize_strategy", END)
 
     def should_retry(state: AgentState):
         """피드백에 기반하여 트레이스 재생성이 필요한지 확인합니다."""
-        for trace in state.trace_results:
+        for ctx in state.test_contexts:
             # 평가 실패 AND 재시도 횟수 제한 미만인 경우
-            if not trace.evaluation_passed and trace.retry_count < 2:
+            if not ctx.evaluation_passed and ctx.retry_count < 2:
                 return "retry"
         return "end"
 
@@ -43,7 +43,7 @@ def create_agent_graph(db_client: DBClient):
         should_retry,
         {
             "retry": "generate_scenarios",
-            "end": END
+            "end": "synthesize_strategy"
         }
     )
     

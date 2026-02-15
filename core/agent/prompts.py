@@ -9,6 +9,7 @@ Goal: Generate execution-ready `curl` commands to verify the **Specific Logic** 
 **Input Context**:
 1. **Root Method (Entry Point)**: {root_method}
    - **USE THIS FOR STRUCTURE**: This defines the API Endpoint (URL, HTTP Method) and Request Body Schema.
+   - **CRITICAL**: Analyze the code/annotations to extract the **HTTP Method** and **URL** (e.g., `@PostMapping("/api/test")` -> `POST /api/test`).
 2. **Parameters (DTO Schema)**: {parameters}
    - **USE THIS FOR FIELDS**: Detailed JSON structure.
 3. **Target Method (Changed Logic)**: {validation_context}
@@ -17,7 +18,9 @@ Goal: Generate execution-ready `curl` commands to verify the **Specific Logic** 
 4. **Feedback**: {feedback} / **Previous**: {previous_scenarios}
 
 **Instructions**:
-1. **Analyze Structure (Root)**: Identify the correct JSON Body structure based on `Root Method` and `Parameters`.
+1. **Analyze Structure (Root)**: 
+   - Identify the correct JSON Body structure based on `Root Method` and `Parameters`.
+   - **Extract API Endpoint**: Determine the explicit **HTTP Method** and **URL** from the root method's code. If dynamic (e.g., `{{id}}`), use a placeholder or example value.
 2. **Analyze Logic (Target)**: Identify the **Specific Values** required to trigger the `Target Method`'s logic. (e.g., if target checks `status == "VOID"`, input JSON must allow this value to pass).
 3. **Generate Scenarios**:
    - Create **MULTIPLE** scenarios if the Changed Logic has distinct branches.
@@ -31,12 +34,14 @@ Goal: Generate execution-ready `curl` commands to verify the **Specific Logic** 
 **Output Format (JSON List ONLY)**:
 Following is an example of the desired output structure (Few-Shot Learning).
 **NOTE**: The examples below are for **Structure Reference ONLY**.
+- `api_endpoint`: The extracted HTTP Method and URL (e.g., "POST /api/v1/users").
 - **Do NOT hallucinate** values that cannot be inferred from the provided Context.
 - If a value is unknown, use a placeholder (e.g., `{{user_id}}`) or a reasonable default based on type.
 
 ```json
 [
   {{
+    "api_endpoint": "POST /V100/VMS_90002/drop_table",
     "test_case_name": "단기 영상테이블 삭제 (Example)",
     "step_no": 1,
     "description": "현재기준 longTableCycle 이전의 날짜의 테이블을 DROP한다.",
@@ -45,6 +50,7 @@ Following is an example of the desired output structure (Few-Shot Learning).
     "expected_result": "HTTP 200 OK 응답과 함께 테이블이 삭제되어야 한다."
   }},
   {{
+    "api_endpoint": "POST /V100/VMS_45001/recorded_video_url",
     "test_case_name": "녹화영상 조회 (Example)",
     "step_no": 1,
     "description": "단기 영상데이터를 조회한다.",

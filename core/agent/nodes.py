@@ -8,7 +8,7 @@ from langchain_core.output_parsers import JsonOutputParser, StrOutputParser
 
 from config import Config
 from infra.db_client import DBClient
-from core.agent.state import AgentState, TargetMethod, TraceResult, GeneratedScenario, ValidationTarget
+from core.agent.state import AgentState, MethodNode, TestContext, GeneratedScenario
 from core.agent.prompts import SCENARIO_GENERATION_PROMPT, TEST_STRATEGY_PROMPT, SCENARIO_EVALUATION_PROMPT
 
 logger = logging.getLogger(__name__)
@@ -82,7 +82,7 @@ class IntegratedTestAgentNodes:
         
         targets = []
         for row in results:
-            targets.append(TargetMethod(
+            targets.append(MethodNode(
                 id=row['id'],
                 name=row['name'],
                 signature=row['signature'],
@@ -102,60 +102,50 @@ class IntegratedTestAgentNodes:
         
         logger.info(f"{len(targets)}개 대상에 대한 루트 추적 중...")
         
+        
         # root_method_id별로 트레이스를 그룹화하기 위한 딕셔너리
-        # Key: root_method_id, Value: TraceResult
-        grouped_traces: Dict[str, TraceResult] = {}
+        # Key: root_method_id, Value: TestContext
+        grouped_contexts: Dict[str, TestContext] = {}
         
         try:
             for target in targets:
                 # 루트 메서드(프로젝트 컨텍스트 내에서 다른 메서드에 의해 호출되지 않는 메서드)를 찾습니다.
                 # 또는 명시적인 컨트롤러 엔드포인트인 메서드를 찾습니다.
                 # 단순화를 위해 가장 긴 상위 경로를 찾습니다.
-                # 'nodes(path)'를 반환하도록 업데이트됨
                 query = """
                 MATCH path = (root:METHOD)-[:CALLS*0..]->(target:METHOD)
                 WHERE (elementId(target) = $target_id)
                   AND NOT ()-[:CALLS]->(root)
-                RETURN root, target, nodes(path) as path_nodes
+                RETURN root, target
                 LIMIT 5
                 """
+                
                 
                 paths = self.db_client.execute_query(query, {"target_id": target.id})
                 
                 for row in paths:
                     root_node = row['root']
                     target_node = row['target']
-                    path_nodes = row['path_nodes'] # Neo4j 노드 리스트
                     
                     root_id = root_node.element_id
                     
-                    # 중간 노드 추출 (루트[0]와 타겟[-1] 제외)
-                    # 최적화: 중간 경로의 소스 코드는 더 이상 프롬프트에 사용되지 않으므로 추출하지 않음 (메모리/DB 부하 감소)
-                    intermediates = []
-                    if len(path_nodes) > 2:
-                        for node in path_nodes[1:-1]:
-                            intermediates.append({
-                                "id": node.element_id,
-                                "signature": node.get('signature', 'unknown'),
-                                "code": "" # 불필요한 소스 코드 데이터 제거
-                            })
-
-                    # ValidationTarget 객체 생성
+                    # MethodNode (Target) 객체 생성
                     # 최적화: 루트 메서드와 동일한 경우 코드를 중복 저장하지 않음 (토큰 절약)
                     is_root_duplicate = (target_node.element_id == root_id)
                     
-                    validation_target = {
-                        "id": target_node.element_id,
-                        "signature": target_node.get('signature', ''),
-                        "code": "" if is_root_duplicate else target_node.get('source', ''),
-                        "path_trace": intermediates # 서명 정보만 포함된 경량화된 리스트
-                    }
+                    target_method_node = MethodNode(
+                        id=target_node.element_id,
+                        name=target_node.get('name', ''),
+                        signature=target_node.get('signature', ''),
+                        code="" if is_root_duplicate else target_node.get('source', ''),
+                        status=target_node.get('status', '')
+                    )
 
-                    if root_id in grouped_traces:
-                        # 고유한 경우 기존 트레이스에 추가
-                        existing = grouped_traces[root_id]
-                        if not any(vt.id == validation_target['id'] for vt in existing.validation_targets):
-                            existing.validation_targets.append(ValidationTarget(**validation_target))
+                    if root_id in grouped_contexts:
+                        # 고유한 경우 기존 컨텍스트에 추가
+                        existing = grouped_contexts[root_id]
+                        if not any(tm.id == target_method_node.id for tm in existing.target_methods):
+                            existing.target_methods.append(target_method_node)
                     else:
                         # 루트 메서드 컨텍스트를 위한 파라미터 조회 (루트당 한 번만)
                         # 업데이트된 쿼리: 어노테이션 및 DTO 필드 조회
@@ -189,14 +179,18 @@ class IntegratedTestAgentNodes:
                             })
 
 
-                        root_method_code = root_node.get('source', '')
-                        root_method_signature = root_node.get('signature', '')
 
-                        grouped_traces[root_id] = TraceResult(
-                            root_method_id=root_id,
-                            root_method_signature=root_method_signature,
-                            root_method_code=root_method_code,
-                            validation_targets=[ValidationTarget(**validation_target)],
+                        root_method_node = MethodNode(
+                            id=root_id,
+                            name=root_node.get('name', ''),
+                            signature=root_node.get('signature', ''),
+                            code=root_node.get('source', ''),
+                            status=root_node.get('status', '')
+                        )
+
+                        grouped_contexts[root_id] = TestContext(
+                            root_method=root_method_node,
+                            target_methods=[target_method_node],
                             parameters=parameter_infos
                         )
 
@@ -206,9 +200,9 @@ class IntegratedTestAgentNodes:
             traceback.print_exc()
             raise e
 
-        trace_results = list(grouped_traces.values())
-        logger.info(f"여러 대상을 포괄하는 {len(trace_results)}개의 고유 루트 경로를 추적했습니다.")
-        return {"trace_results": trace_results}
+        test_contexts = list(grouped_contexts.values())
+        logger.info(f"여러 대상을 포괄하는 {len(test_contexts)}개의 고유 루트 경로를 추적했습니다.")
+        return {"test_contexts": test_contexts}
 
 
     def generate_scenarios(self, state: AgentState) -> Dict[str, Any]:
@@ -217,60 +211,60 @@ class IntegratedTestAgentNodes:
         가능한 경우 원본 코드 대신 요약된 컨텍스트를 사용합니다.
         Critic 에이전트의 피드백 루프를 처리합니다.
         """
-        traces = state.trace_results
+        contexts = state.test_contexts
         all_generated_scenarios = []
         
-        logger.info(f"{len(traces)}개 루트 그룹에 대한 시나리오 생성 중...")
+        logger.info(f"{len(contexts)}개 루트 그룹에 대한 시나리오 생성 중...")
         
         chain = SCENARIO_GENERATION_PROMPT | self.llm | StrOutputParser()
         
-        for i, trace in enumerate(traces):
+        for i, ctx in enumerate(contexts):
             # 이미 평가를 통과한 경우 건너뜀
-            if trace.evaluation_passed:
-                all_generated_scenarios.extend(trace.generated_scenarios)
+            if ctx.evaluation_passed:
+                all_generated_scenarios.extend(ctx.generated_scenarios)
                 continue
             
             # 재시도 제한에 도달한 경우 건너뜀 (이전 결과 수용)
-            if trace.retry_count >= 2 and trace.generated_scenarios:
+            if ctx.retry_count >= 2 and ctx.generated_scenarios:
                 logger.warning(f"트레이스 {i} 재시도 제한 도달. 현재 시나리오 수용.")
-                trace.evaluation_passed = True
-                all_generated_scenarios.extend(trace.generated_scenarios)
+                ctx.evaluation_passed = True
+                all_generated_scenarios.extend(ctx.generated_scenarios)
                 continue
 
             try:
                 validation_context = ""
-                for idx, vt in enumerate(trace.validation_targets):
+                for idx, tm in enumerate(ctx.target_methods):
                     # 코드 가져오기 (최적화된 경우 루트 코드 사용)
-                    vt_code = vt.code
-                    if not vt_code and vt.id == trace.root_method_id:
-                        vt_code = f"(Root Method Code와 동일)\n{trace.root_method_code[:2000]}"
-                    elif not vt_code:
-                        vt_code = "(코드 없음)"
+                    tm_code = tm.code
+                    if not tm_code and tm.id == ctx.root_method.id:
+                        tm_code = f"(Root Method Code와 동일)\n{ctx.root_method.code[:2000]}"
+                    elif not tm_code:
+                        tm_code = "(코드 없음)"
                     else:
-                        vt_code = vt_code[:2000]
+                        tm_code = tm_code[:2000]
 
                     validation_context += f"""
 --- Target Method {idx+1} ---
-Signature: {vt.signature}
+Signature: {tm.signature}
 Target Code:
-{vt_code}...
+{tm_code}...
 """
                 
                 # 루트 메서드 포맷팅 (가능한 경우 요약 + 부분 코드 사용)
                 root_context = ""
-                root_context += f"Signature: {trace.root_method_signature}\n"
-                root_context += f"Code:\n{trace.root_method_code[:1000]}..."
+                root_context += f"Signature: {ctx.root_method.signature}\n"
+                root_context += f"Code:\n{ctx.root_method.code[:1000]}..."
 
                 # LLM 입력 준비 (최적화: None 값 제외 및 불필요 메타데이터 제거)
                 
                 # 1. 파라미터 최적화
-                params_json = json.dumps([p.model_dump(exclude_none=True) for p in trace.parameters], indent=2, ensure_ascii=False)
+                params_json = json.dumps([p.model_dump(exclude_none=True) for p in ctx.parameters], indent=2, ensure_ascii=False)
                 
                 # 2. 이전 시나리오 요약 (재시도 시 전체 덤프 대신 핵심 필드만 전달)
                 previous_scenarios_json = "None"
-                if trace.generated_scenarios:
+                if ctx.generated_scenarios:
                     summary_list = []
-                    for s in trace.generated_scenarios:
+                    for s in ctx.generated_scenarios:
                         summary_list.append({
                             "test_case_name": s.test_case_name,
                             "description": s.description,
@@ -284,7 +278,7 @@ Target Code:
                     "root_method": root_context,
                     "validation_context": validation_context,
                     "parameters": params_json,
-                    "feedback": trace.feedback if trace.feedback else "None",
+                    "feedback": ctx.feedback if ctx.feedback else "None",
                     "previous_scenarios": previous_scenarios_json
                 }
                 
@@ -309,53 +303,54 @@ Target Code:
                             procedure=item.get('procedure', ''),
                             expected_result=item.get('expected_result', ''),
                             scenario_id=f"SC-{i+1:03d}",
-                            root_method_signature=trace.root_method_signature
+                            root_method_signature=ctx.root_method.signature,
+                            api_endpoint=item.get('api_endpoint')
                         )
                         current_scenarios.append(scenario)
                 
                 # Update Trace Result
-                trace.generated_scenarios = current_scenarios
+                ctx.generated_scenarios = current_scenarios
                 all_generated_scenarios.extend(current_scenarios)
                 logger.info(f"루트 그룹 {i+1}에 대해 {len(current_scenarios)}개의 시나리오 생성됨")
                 
             except Exception as e:
                 logger.error(f"트레이스 {i} 시나리오 생성 실패: {e}")
                 # 이전 결과가 있으면 유지
-                if trace.generated_scenarios:
-                    all_generated_scenarios.extend(trace.generated_scenarios)
+                if ctx.generated_scenarios:
+                    all_generated_scenarios.extend(ctx.generated_scenarios)
                     
-        return {"generated_scenarios": all_generated_scenarios, "trace_results": traces}
+        return {"generated_scenarios": all_generated_scenarios, "test_contexts": contexts}
 
     def evaluate_scenarios(self, state: AgentState) -> Dict[str, Any]:
         """
         Critic 노드: 생성된 시나리오를 평가하고 피드백을 제공합니다.
         """
-        traces = state.trace_results
+        contexts = state.test_contexts
         logger.info("시나리오 평가 중 (Critic 모드)...")
         
         chain = SCENARIO_EVALUATION_PROMPT | self.llm | StrOutputParser()
         
         has_failure = False
         
-        for i, trace in enumerate(traces):
-            if trace.evaluation_passed:
+        for i, ctx in enumerate(contexts):
+            if ctx.evaluation_passed:
                 continue
                 
-            if not trace.generated_scenarios:
+            if not ctx.generated_scenarios:
                 continue
 
             # 재시도 제한 도달 시 건너뜀
-            if trace.retry_count >= 2:
-                trace.evaluation_passed = True
+            if ctx.retry_count >= 2:
+                ctx.evaluation_passed = True
                 continue
 
             try:
                 # Critic을 위한 컨텍스트 준비
                 validation_context = ""
-                for vt in trace.validation_targets:
-                    validation_context += f"Signature: {vt.signature}\nCode:\n{vt.code[:1000]}\n"
+                for tm in ctx.target_methods:
+                    validation_context += f"Signature: {tm.signature}\nCode:\n{tm.code[:1000]}\n"
                 
-                scenarios_text = json.dumps([s.model_dump() for s in trace.generated_scenarios], indent=2, ensure_ascii=False)
+                scenarios_text = json.dumps([s.model_dump() for s in ctx.generated_scenarios], indent=2, ensure_ascii=False)
                 
                 result_text = chain.invoke({
                     "validation_context": validation_context,
@@ -398,30 +393,30 @@ Target Code:
                 
                 if decision == "FAIL" or score < 80:
                     logger.warning(f"트레이스 {i} 평가 실패. 점수: {score}. 피드백: {feedback}")
-                    trace.evaluation_passed = False
-                    trace.feedback = feedback
-                    trace.retry_count += 1
+                    ctx.evaluation_passed = False
+                    ctx.feedback = feedback
+                    ctx.retry_count += 1
                     has_failure = True
                 else:
                     logger.info(f"트레이스 {i} 평가 통과. 점수: {score}.")
-                    trace.evaluation_passed = True
-                    trace.feedback = None
+                    ctx.evaluation_passed = True
+                    ctx.feedback = None
             
             except Exception as e:
                 logger.error(f"트레이스 {i} 평가 실패: {e}")
                 # Critic 실패 시 통과로 가정
-                trace.evaluation_passed = True
+                ctx.evaluation_passed = True
 
-        return {"trace_results": traces} # 피드백 상태 반영을 위한 업데이트
+        return {"test_contexts": contexts} # 피드백 상태 반영을 위한 업데이트
 
     def synthesize_strategy(self, state: AgentState) -> Dict[str, Any]:
         """
         식별된 대상 및 루트를 기반으로 테스트 전략 요약을 생성합니다.
         """
         targets = state.target_methods
-        traces = state.trace_results
+        contexts = state.test_contexts
         
-        logger.info(f"{len(targets)}개 대상 및 {len(traces)}개 루트에 대한 전략 합성 중...")
+        logger.info(f"{len(targets)}개 대상 및 {len(contexts)}개 루트에 대한 전략 합성 중...")
         
         # 1. 대상 요약
         target_summary = ""
@@ -430,10 +425,19 @@ Target Code:
         
         # 2. 루트 요약
         trace_summary = ""
-        for tr in traces:
-            entry_point = tr.root_method_signature
-            trace_summary += f"- Entry Point: {entry_point}\n"
-            trace_summary += f"  - Validation Targets: {len(tr.validation_targets)} methods\n"
+        for ctx in contexts:
+            entry_point = ctx.root_method.signature
+            
+            # API Endpoint 정보 추가 (시나리오 생성 결과 기반)
+            api_info = ""
+            if ctx.generated_scenarios:
+                # 첫 번째 시나리오의 엔드포인트를 사용하거나, 고유한 엔드포인트들을 나열
+                endpoints = set(s.api_endpoint for s in ctx.generated_scenarios if s.api_endpoint)
+                if endpoints:
+                    api_info = f" (API: {', '.join(endpoints)})"
+            
+            trace_summary += f"- Entry Point: {entry_point}{api_info}\n"
+            trace_summary += f"  - Target Methods: {len(ctx.target_methods)} methods\n"
         
         if not targets:
             return {"test_strategy_summary": "변경된 사항이 감지되지 않았습니다."}

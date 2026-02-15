@@ -33,7 +33,7 @@ class ExcelExporter:
         # User analysis showed headers at row ~4. Let's stick to a clean new file for now.
         headers_vod = [
             "Test Case ID", "Test Case Name", "Step No", "Description", 
-            "Pre-condition", "Procedure", "Expected Result", "", "", "", "", "", "", "", "", "", "Scenario ID"
+            "Pre-condition", "Procedure", "Expected Result", "API Endpoint", "", "", "", "", "", "", "", "", "Scenario ID"
         ]
         ws_vod.append(headers_vod)
         
@@ -46,7 +46,8 @@ class ExcelExporter:
                 scenario.pre_condition,         # 5
                 scenario.procedure,             # 6
                 scenario.expected_result,       # 7
-                "", "", "", "", "", "", "", "", "", # 8-16 (Empty)
+                scenario.api_endpoint or scenario.root_method_signature, # 8 (API Endpoint)
+                "", "", "", "", "", "", "", "", # 9-16 (Empty)
                 scenario.scenario_id            # 17
             ]
             ws_vod.append(row)
@@ -62,7 +63,7 @@ class ExcelExporter:
             if scenario.scenario_id not in seen_scenarios:
                 ws_scenario.append([
                     scenario.scenario_id,
-                    scenario.root_method_signature, # Real Endpoint
+                    scenario.api_endpoint or scenario.root_method_signature, # Real Endpoint
                     scenario.description     # Approximation
                 ])
                 seen_scenarios.add(scenario.scenario_id)
