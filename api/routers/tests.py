@@ -61,6 +61,11 @@ async def download_tests(body: DownloadRequest):
     """
     Convert the provided scenarios (JSON) into an Excel file.
     """
+    import logging
+    logger = logging.getLogger("api.routers.tests")
+    logger.info(f"Received download request with {len(body.scenarios)} scenarios.")
+    logger.info(f"Summary length: {len(body.strategy_summary) if body.strategy_summary else 0}")
+    
     try:
         # Create a temporary file
         with tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx") as tmp:

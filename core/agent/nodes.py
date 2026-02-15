@@ -1,6 +1,7 @@
 
 import logging
 import json
+import re
 from typing import List, Dict, Any
 from langchain_openai import ChatOpenAI
 from langchain_core.output_parsers import JsonOutputParser, StrOutputParser
@@ -20,6 +21,51 @@ class IntegratedTestAgentNodes:
             temperature=0,
             api_key=Config.OPENAI_API_KEY
         )
+
+    def _parse_json_safely(self, text: str) -> Any:
+        # 1. Try direct parsing
+        try:
+            return json.loads(text)
+        except json.JSONDecodeError:
+            pass
+            
+        # 2. Extract JSON from markdown code blocks (handle optional "json" tag)
+        # Using a more lenient regex that captures everything between backticks
+        match = re.search(r"```(json)?(.*?)```", text, re.DOTALL)
+        if match:
+            clean_text = match.group(2).strip()
+            try:
+                return json.loads(clean_text)
+            except json.JSONDecodeError:
+                pass # Fallthrough if content inside backticks isn't valid JSON
+
+        # 3. Fallback: Find first '[' or '{' and last ']' or '}'
+        # This handles cases where backticks might be missing or malformed
+        try:
+            # Find list or object
+            list_start = text.find('[')
+            list_end = text.rfind(']')
+            obj_start = text.find('{')
+            obj_end = text.rfind('}')
+            
+            start = -1
+            end = -1
+            
+            # Determine if it looks like a list or object and which comes first
+            if list_start != -1 and (obj_start == -1 or list_start < obj_start):
+                start = list_start
+                end = list_end
+            elif obj_start != -1:
+                start = obj_start
+                end = obj_end
+                
+            if start != -1 and end != -1 and end > start:
+                json_candidate = text[start:end+1]
+                return json.loads(json_candidate)
+        except json.JSONDecodeError:
+            pass
+            
+        raise ValueError(f"Failed to parse JSON from text: {text[:100]}...")
 
     def identify_targets(self, state: AgentState) -> Dict[str, Any]:
         """
@@ -92,10 +138,13 @@ class IntegratedTestAgentNodes:
                         })
 
                 # AffectedMethod 객체 생성
+                # 최적화: 루트 메서드와 동일한 경우 코드를 중복 저장하지 않음 (토큰 절약)
+                is_root_duplicate = (target_node.element_id == root_id)
+                
                 affected_method = {
                     "id": target_node.element_id,
                     "signature": target_node.get('signature', ''),
-                    "code": target_node.get('source', ''),
+                    "code": "" if is_root_duplicate else target_node.get('source', ''),
                     "path_trace": intermediates # Populated with dicts, will be converted to MethodInfo
                 }
 
@@ -206,8 +255,9 @@ class IntegratedTestAgentNodes:
         
         logger.info(f"{len(traces)}개 루트 그룹에 대한 시나리오 생성 중...")
         
-        parser = JsonOutputParser()
-        chain = SCENARIO_GENERATION_PROMPT | self.llm | parser
+        logger.info(f"{len(traces)}개 루트 그룹에 대한 시나리오 생성 중...")
+        
+        chain = SCENARIO_GENERATION_PROMPT | self.llm | StrOutputParser()
         
         for i, trace in enumerate(traces):
             # 이미 평가를 통과한 경우 건너뜀
@@ -237,12 +287,21 @@ class IntegratedTestAgentNodes:
                             if trace.retry_count > 0:
                                 path_context += f"     [Full Code Context for Retry]:\n{p_node.code[:2000]}\n"
                     
+                    # 코드 가져오기 (최적화된 경우 루트 코드 사용)
+                    am_code = am.code
+                    if not am_code and am.id == trace.root_method_id:
+                        am_code = f"(Same as Root Method Code)\n{trace.root_method_code[:2000]}"
+                    elif not am_code:
+                        am_code = "(No code available)"
+                    else:
+                        am_code = am_code[:2000]
+
                     affected_methods_context += f"""
 --- Target Method {idx+1} ---
 Signature: {am.signature}
 {path_context}
 Target Code:
-{am.code[:2000]}...
+{am_code}...
 """
                 
                 # 루트 메서드 포맷팅 (가능한 경우 요약 + 부분 코드 사용)
@@ -251,17 +310,46 @@ Target Code:
                     root_context += f"Summary: {trace.root_method_summary}\n"
                 root_context += f"Code:\n{trace.root_method_code[:1000]}..." # Reduced code size due to summary
 
-                # LLM 입력 준비
+                # LLM 입력 준비 (최적화: None 값 제외 및 불필요 메타데이터 제거)
+                
+                # 1. 파라미터 최적화
+                params_json = json.dumps([p.model_dump(exclude_none=True) for p in trace.parameters], indent=2, ensure_ascii=False)
+                
+                # 2. 리턴 스키마 최적화
+                return_schema_json = "No Schema Available (void or primitive)"
+                if trace.return_schema:
+                    return_schema_json = json.dumps(trace.return_schema, indent=2, ensure_ascii=False)
+                
+                # 3. 이전 시나리오 요약 (재시도 시 전체 덤프 대신 핵심 필드만 전달)
+                previous_scenarios_json = "None"
+                if trace.generated_scenarios:
+                    summary_list = []
+                    for s in trace.generated_scenarios:
+                        summary_list.append({
+                            "test_case_name": s.test_case_name,
+                            "description": s.description,
+                            "procedure": s.procedure,
+                            "expected_result": s.expected_result
+                            # 제외: test_case_id, step_no, scenario_id, root_method_signature (토큰 절약)
+                        })
+                    previous_scenarios_json = json.dumps(summary_list, indent=2, ensure_ascii=False)
+
                 inputs = {
                     "root_method": root_context,
                     "affected_methods_context": affected_methods_context,
-                    "parameters": json.dumps([p.model_dump() for p in trace.parameters], indent=2, ensure_ascii=False),
-                    "return_schema": json.dumps(trace.return_schema, indent=2, ensure_ascii=False) if trace.return_schema else "No Schema Available (void or primitive)",
+                    "parameters": params_json,
+                    "return_schema": return_schema_json,
                     "feedback": trace.feedback if trace.feedback else "None",
-                    "previous_scenarios": json.dumps([s.model_dump() for s in trace.generated_scenarios], indent=2, ensure_ascii=False) if trace.generated_scenarios else "None"
+                    "previous_scenarios": previous_scenarios_json
                 }
                 
-                result = chain.invoke(inputs)
+                result_text = chain.invoke(inputs)
+                
+                try:
+                    result = self._parse_json_safely(result_text)
+                except Exception as e:
+                    logger.error(f"트레이스 {i} 시나리오 파싱 실패: {e}")
+                    raise e
                 
                 # 결과를 GeneratedScenario 객체로 파싱
                 current_scenarios = []
@@ -300,8 +388,9 @@ Target Code:
         traces = state.trace_results
         logger.info("시나리오 평가 중 (Critic 모드)...")
         
-        parser = JsonOutputParser()
-        chain = SCENARIO_EVALUATION_PROMPT | self.llm | parser
+        logger.info("시나리오 평가 중 (Critic 모드)...")
+        
+        chain = SCENARIO_EVALUATION_PROMPT | self.llm | StrOutputParser()
         
         has_failure = False
         
@@ -325,16 +414,22 @@ Target Code:
                 
                 scenarios_text = json.dumps([s.model_dump() for s in trace.generated_scenarios], indent=2, ensure_ascii=False)
                 
-                result = chain.invoke({
+                result_text = chain.invoke({
                     "affected_methods_context": affected_methods_context,
                     "scenarios": scenarios_text
                 })
+                
+                try:
+                    result = self._parse_json_safely(result_text)
+                except Exception as e:
+                    logger.error(f"트레이스 {i} 평가 파싱 실패: {e}")
+                    raise e
                 
                 decision = result.get("decision", "PASS")
                 score = result.get("score", 100)
                 feedback = result.get("feedback", "")
                 
-                if decision == "FAIL" or score <= 80:
+                if decision == "FAIL" or score < 80:
                     logger.warning(f"트레이스 {i} 평가 실패. 점수: {score}. 피드백: {feedback}")
                     trace.evaluation_passed = False
                     trace.feedback = feedback

@@ -78,24 +78,35 @@ Constraint: Max 3 lines. No syntax explanation.
 SCENARIO_EVALUATION_PROMPT = PromptTemplate(
     input_variables=["scenarios", "affected_methods_context"],
     template="""
-Role: Strict QA Auditor.
-Task: Verify if scenarios cover changed logic correctly.
+Role: QA Lead Auditor.
+Task: Evaluate test scenarios against changed code.
 
 **Context**:
 - Scenarios: {scenarios}
 - Changed Code: {affected_methods_context}
 
-**Criteria**:
-1. Coverage: Test changed logic (e.g., new constraints)?
-2. Correctness: Inputs match preconditions?
-3. Completeness: Missing edge cases?
+**Scoring Criteria**:
+- **100 (Perfect)**: Covers ALL changed logic, edge cases, and exception handling perfectly.
+- **90-99 (Excellent)**: Covers main logic well, but minor improvements possible.
+- **80-89 (Good/Pass)**: Covers core happy paths, but misses some edge cases.
+- **< 80 (Fail)**: Misses critical logic or assertions are incorrect.
+
+**Evaluation Focus**:
+1. **Validation Logic**: Does it test invalid inputs (null, empty, max length, special chars)?
+2. **Business Logic**: Does it verify the specific changes in the target code?
+3. **Edge Cases**: Does it cover boundary values (min/max)?
+
+**Instructions**:
+1. Analyze if scenarios cover the specific changes in the code.
+2. If the scenarios are sufficient for the given code changes, give **100 points**. Do not deduct points arbitrarily.
+3. Be specific in feedback if score < 100.
 
 **Output (JSON)**:
 {{
-  "thought_process": "Briefly analyze coverage/correctness step-by-step...",
-  "decision": "PASS" (if Score > 80) or "FAIL",
-  "score": 0-100,
-  "feedback": "Specific missing cases or errors (in Korean)."
+  "thought_process": "Step-by-step reasoning checking Validation, Business Logic, and Edge Cases...",
+  "decision": "PASS" (Score >= 80) or "FAIL",
+  "score": <0-100>,
+  "feedback": "Feedback in Korean (Required if not 100)."
 }}
 """
 )

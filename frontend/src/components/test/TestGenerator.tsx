@@ -69,16 +69,35 @@ export function TestGenerator({ trigger }: { trigger?: React.ReactNode }) {
             const response = await fetch(`${API_BASE_URL}/api/tests/download`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ scenarios })
+                body: JSON.stringify({
+                    scenarios,
+                    strategy_summary: strategySummary
+                })
             });
 
-            if (!response.ok) throw new Error("Download failed");
+            // Check for JSON error response first
+            const contentType = response.headers.get("content-type");
+            if (!response.ok) {
+                if (contentType && contentType.includes("application/json")) {
+                    const errorData = await response.json();
+                    console.error("Download Error Details:", errorData);
+                    throw new Error(JSON.stringify(errorData) || "Download failed");
+                }
+                throw new Error(`Download failed: ${response.statusText}`);
+            }
+
+            // Verify it's not JSON (success 200 but JSON content?)
+            if (contentType && contentType.includes("application/json")) {
+                const data = await response.json();
+                console.error("Unexpected JSON response:", data);
+                throw new Error("Server returned JSON instead of file. Check console for details.");
+            }
 
             const blob = await response.blob();
             const url = window.URL.createObjectURL(blob);
             const a = document.createElement('a');
             a.href = url;
-            a.download = `integrated_tests_${new Date().toISOString().slice(0, 19)}.xlsx`;
+            a.download = `integrated_tests_${new Date().toISOString().slice(0, 19).replace(/:/g, "-")}.xlsx`; // Safe filename
             document.body.appendChild(a);
             a.click();
             window.URL.revokeObjectURL(url);
