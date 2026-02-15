@@ -2,22 +2,32 @@
 import logging
 import openpyxl
 from openpyxl import Workbook
-from typing import List
+from typing import List, Optional
 from core.agent.state import GeneratedScenario
 
 logger = logging.getLogger(__name__)
 
 class ExcelExporter:
     @staticmethod
-    def create_workbook(scenarios: List[GeneratedScenario], file_path: str):
+    def create_workbook(scenarios: List[GeneratedScenario], summary: Optional[str], file_path: str):
         """
-        Create an Excel workbook with 'VOD' and 'Scenario' sheets based on the scenarios.
+        Create an Excel workbook with 'Summary', 'VOD', and 'Scenario' sheets.
         """
         wb = Workbook()
         
-        # --- VOD Sheet ---
-        ws_vod = wb.active
-        ws_vod.title = "VOD"
+        # --- Summary Sheet ---
+        if summary:
+            ws_summary = wb.active
+            ws_summary.title = "Summary"
+            ws_summary["A1"] = "Test Strategy Summary"
+            ws_summary["A2"] = summary
+            # Simple styling if needed, e.g., alignment
+            
+            # Create VOD sheet as the second sheet
+            ws_vod = wb.create_sheet("VOD")
+        else:
+            ws_vod = wb.active
+            ws_vod.title = "VOD"
         
         # Headers (Row 4 based on analysis, but we'll start at 1 for simplicity unless template is required)
         # User analysis showed headers at row ~4. Let's stick to a clean new file for now.

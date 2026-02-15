@@ -7,7 +7,6 @@ class TargetMethod(BaseModel):
     name: str
     signature: str
     status: str
-    file_path: str
 
 class ParameterInfo(BaseModel):
     """타입 세부 정보를 포함한 파라미터 정보"""
@@ -27,7 +26,6 @@ class AffectedMethod(BaseModel):
     id: str
     signature: str
     code: str
-    call_path: List[str] # 서명 리스트 (레거시 표시용)
     path_trace: List[MethodInfo] = [] # 전체 메서드 객체의 정렬된 리스트 (중간 노드)
 
 class TraceResult(BaseModel):

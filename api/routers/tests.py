@@ -2,7 +2,7 @@
 from fastapi import APIRouter, Request, HTTPException
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
-from typing import List
+from typing import List, Optional
 import tempfile
 import os
 
@@ -16,6 +16,7 @@ class GenerateRequest(BaseModel):
 
 class DownloadRequest(BaseModel):
     scenarios: List[GeneratedScenario]
+    strategy_summary: Optional[str] = None
 
 @router.post("/generate")
 async def generate_tests(request: Request, body: GenerateRequest):
@@ -65,7 +66,7 @@ async def download_tests(body: DownloadRequest):
         with tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx") as tmp:
             file_path = tmp.name
         
-        ExcelExporter.create_workbook(body.scenarios, file_path)
+        ExcelExporter.create_workbook(body.scenarios, body.strategy_summary, file_path)
         
         # Return as file response
         return FileResponse(

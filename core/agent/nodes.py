@@ -29,8 +29,7 @@ class IntegratedTestAgentNodes:
         query = """
         MATCH (m:METHOD)
         WHERE m.status IN ['NEW', 'MODIFIED']
-        OPTIONAL MATCH (m)<-[:CONTAINS]-(c:TYPE)<-[:CONTAINS]-(f:FILE)
-        RETURN elementId(m) as id, m.name as name, m.signature as signature, m.status as status, f.path as file_path
+        RETURN elementId(m) as id, m.name as name, m.signature as signature, m.status as status
         """
         results = self.db_client.execute_query(query)
         
@@ -40,8 +39,7 @@ class IntegratedTestAgentNodes:
                 id=row['id'],
                 name=row['name'],
                 signature=row['signature'],
-                status=row['status'],
-                file_path=row.get('file_path', 'UNKNOWN')
+                status=row['status']
             ))
             
         logger.info(f"{len(targets)}개의 대상 메서드를 발견했습니다.")
@@ -98,7 +96,6 @@ class IntegratedTestAgentNodes:
                     "id": target_node.element_id,
                     "signature": target_node.get('signature', ''),
                     "code": target_node.get('source', ''),
-                    "call_path": [n.get('signature', '') for n in path_nodes], # For reference
                     "path_trace": intermediates # Populated with dicts, will be converted to MethodInfo
                 }
 
@@ -235,6 +232,10 @@ class IntegratedTestAgentNodes:
                         path_context += "\n[Intermediate Path]:\n"
                         for p_node in am.path_trace:
                             path_context += f"  -> {p_node.signature}\n     (Summary: {p_node.summary})\n"
+                            
+                            # 재시도 루프인 경우, 상세 문맥을 위해 원본 코드(일부)를 제공
+                            if trace.retry_count > 0:
+                                path_context += f"     [Full Code Context for Retry]:\n{p_node.code[:2000]}\n"
                     
                     affected_methods_context += f"""
 --- Target Method {idx+1} ---

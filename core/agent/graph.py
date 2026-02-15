@@ -20,6 +20,7 @@ def create_agent_graph(db_client: DBClient):
     workflow.add_node("summarize_context", nodes.summarize_context)
     workflow.add_node("synthesize_strategy", nodes.synthesize_strategy)
     workflow.add_node("generate_scenarios", nodes.generate_scenarios)
+    workflow.add_node("evaluate_scenarios", nodes.evaluate_scenarios)
     
     # Define Edges
     workflow.set_entry_point("identify_targets")
@@ -29,7 +30,6 @@ def create_agent_graph(db_client: DBClient):
     workflow.add_edge("trace_roots", "summarize_context")
     workflow.add_edge("summarize_context", "synthesize_strategy")
     workflow.add_edge("synthesize_strategy", "generate_scenarios")
-    workflow.add_node("evaluate_scenarios", nodes.evaluate_scenarios)
     workflow.add_edge("generate_scenarios", "evaluate_scenarios")
 
     def should_retry(state: AgentState):
