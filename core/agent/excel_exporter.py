@@ -62,7 +62,7 @@ class ExcelExporter:
             if scenario.scenario_id not in seen_scenarios:
                 ws_scenario.append([
                     scenario.scenario_id,
-                    scenario.test_case_name, # Approximation
+                    scenario.root_method_signature, # Real Endpoint
                     scenario.description     # Approximation
                 ])
                 seen_scenarios.add(scenario.scenario_id)

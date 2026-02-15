@@ -22,7 +22,7 @@ class MethodInfo(BaseModel):
     code: str
     summary: Optional[str] = None
 
-class AffectedMethod(BaseModel):
+class ValidationTarget(BaseModel):
     id: str
     signature: str
     code: str
@@ -34,16 +34,15 @@ class TraceResult(BaseModel):
     root_method_signature: str
     root_method_code: str
     root_method_summary: Optional[str] = None
-    affected_methods: List[AffectedMethod] = []
+    validation_targets: List[ValidationTarget] = []
     parameters: List[ParameterInfo] = []
-    return_type_name: Optional[str] = None
-    return_schema: Optional[Dict[str, Any]] = None
     
     # 검증 및 피드백 루프 필드
     generated_scenarios: List['GeneratedScenario'] = [] # 이 트레이스에 특화된 시나리오
     feedback: Optional[str] = None # Critic 피드백
     retry_count: int = 0
     evaluation_passed: bool = False
+    
 
 class GeneratedScenario(BaseModel):
     """Excel 'VOD' 시트 컬럼 매핑"""
