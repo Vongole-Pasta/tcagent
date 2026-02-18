@@ -347,8 +347,24 @@ Target Code:
             try:
                 # Critic을 위한 컨텍스트 준비
                 validation_context = ""
+                
+                # 1. Root Method (Entry Point) 정보 추가 - URL 매핑 및 진입점 로직 확인용
+                validation_context += f"--- Root Method (Entry Point) ---\n"
+                validation_context += f"Signature: {ctx.root_method.signature}\n"
+                # Root Code는 URL 매핑과 초기 로직 확인을 위해 필수적임
+                if ctx.root_method.code:
+                    validation_context += f"Code:\n{ctx.root_method.code[:3000]}\n\n"
+                else:
+                    validation_context += "Code: (Not Available)\n\n"
+
+                # 2. Target Methods (Changed Logic) 정보 추가 - 실제 변경된 비즈니스 로직 확인용
                 for tm in ctx.target_methods:
-                    validation_context += f"Signature: {tm.signature}\nCode:\n{tm.code[:1000]}\n"
+                    validation_context += f"--- Target Method (Changed Logic: {tm.name}) ---\n"
+                    validation_context += f"Signature: {tm.signature}\n"
+                    if tm.code:
+                        validation_context += f"Code:\n{tm.code[:2000]}\n\n"
+                    else:
+                        validation_context += "Code: (Not Available)\n\n"
                 
                 scenarios_text = json.dumps([s.model_dump() for s in ctx.generated_scenarios], indent=2, ensure_ascii=False)
                 

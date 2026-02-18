@@ -35,8 +35,9 @@ Goal: Generate execution-ready `curl` commands to verify the **Specific Logic** 
 Following is an example of the desired output structure (Few-Shot Learning).
 **NOTE**: The examples below are for **Structure Reference ONLY**.
 - `api_endpoint`: The extracted HTTP Method and URL (e.g., "POST /api/v1/users").
-- **Do NOT hallucinate** values that cannot be inferred from the provided Context.
-- If a value is unknown, use a placeholder (e.g., `{{user_id}}`) or a reasonable default based on type.
+- **Expected Result**: MUST be specific. logic-based.
+   - **GOOD**: "Returns JSON {{'status':'error'}} AND logs 'Invalid ID' error."
+   - **BAD**: "Request succeeds." or "Returns 200 OK."
 
 ```json
 [
@@ -47,16 +48,16 @@ Following is an example of the desired output structure (Few-Shot Learning).
     "description": "현재기준 longTableCycle 이전의 날짜의 테이블을 DROP한다.",
     "pre_condition": "config_properties.xml : vod.table.partition.long.yn 값이 'Y'",
     "procedure": "curl -X POST -H 'Content-Type:application/json' http://vms-vod:18080/V100/VMS_90002/drop_table? -d '{{\"user_id\":\"9999999999\",\"cam_id\":\"D99999999999999\",\"user_cam_code\":\"999999999\"}}'",
-    "expected_result": "HTTP 200 OK 응답과 함께 테이블이 삭제되어야 한다."
+    "expected_result": "HTTP 200 OK 응답. 서버 로그에 'Drop table VMS_90002 success' 메시지가 출력되어야 함."
   }},
   {{
     "api_endpoint": "POST /V100/VMS_45001/recorded_video_url",
-    "test_case_name": "녹화영상 조회 (Example)",
+    "test_case_name": "녹화영상 조회 (Valid)",
     "step_no": 1,
     "description": "단기 영상데이터를 조회한다.",
     "pre_condition": "config_properties.xml : vod.table.partition.long.yn 값이 'N'",
     "procedure": "curl -X POST http://10.10.10.10:18080/V100/VMS_45001/recorded_video_url -H 'Content-Type: application/json' -d '{{\"user_id\": \"P_USER_ID\", \"secure_yn\": \"Y\", \"cam_info\": [{{\"cam_id\": \"P_CAM_ID\", \"playlist_yn\": \"N\", \"search_datetime_info\": [{{\"start_time\": \"20230626000000\", \"end_time\": \"20230626235959\"}}]}}]}}'",
-    "expected_result": "{{\"res_msg\":\"성공\",\"data\":{{\"list\":[...]}}}}"
+    "expected_result": "응답 바디에 '\"res_msg\":\"성공\"' 및 '\"list\":[...]' 데이터가 포함되어야 함."
   }}
 ]
 ```
@@ -89,34 +90,37 @@ Goal: Create a concise Test Strategy Report regarding the changes.
 SCENARIO_EVALUATION_PROMPT = PromptTemplate(
     input_variables=["scenarios", "validation_context"],
     template="""
-Role: QA Lead Auditor.
-Task: Evaluate if the test scenarios represent **Valid API Calls** that target the changed logic.
+Role: Lead Auditor (Conditional Strict Verification).
+Language: Korean (for feedback).
+Task: Verify if the generated test scenarios are **Factually Correct** based on the provided Source Code.
 
-**Context**:
-- Scenarios: {scenarios}
-- Changed Code: {validation_context}
+**Input Context**:
+{validation_context}
 
-**Scoring Criteria**:
-- **100 (Pass)**: The scenario constructs a **Valid API Request** (correct endpoint/structure) and attempts to verify the logic.
-- **80-99 (Pass with feedback)**: Valid request, but the description or expected result is generic.
-- **< 80 (Fail)**: The API call is invalid (wrong endpoint/method) or completely unrelated to the change.
+**Scenarios to Verify**:
+{scenarios}
 
-**Evaluation Focus**:
-1. **Interface Compliance**: Is the `curl` command compatible with the **Root Method**'s interface? (Endpoint, Method, JSON Structure).
-2. **Intent Match**: Does the test case *intend* to verify the specific change? (e.g., using specific values mentioned in the code).
-3. **Plausibility**: Is the expected result plausible for success?
+**Evaluation Criteria (IMPORTANT: Be Flexible if Code is simple)**:
 
-**Instruction**:
-- **IGNORE** internal logic reachability (you cannot know for sure).
-- **FOCUS** on whether the Request is **Well-Formed** and **Relevant**.
-- Give **100** if the curl looks correct and relevant.
+1. **Procedure Verification (Url & Method)**:
+   - **Review Root Method Code**: Does it have `@RequestMapping`, `@PostMapping`, or `@GetMapping` annotations?
+   - **YES**: The `curl` command MUST match these annotations exactly. (**FAIL** if mismatch).
+   - **NO (Missing Annotations)**: Do **NOT** Fail. Assume the scenario inferred the URL from context or naming convention. Treat as **PASS**.
 
-**Output (JSON)**:
+2. **Expected Result Verification (Logs & Returns)**:
+   - **Review Source Code**: Does it contain `logger.info(...)`, `return ...`, or `throw ...` statements?
+   - **YES (Artifacts Exist)**: The "Expected Result" MUST mention these specific logs or return values. (**FAIL** if vague).
+   - **NO (Void/No Logs)**: Do **NOT** Fail for generic success messages (e.g., "HTTP 200 OK"). If the code does nothing visible, a simple success expectation is acceptable.
+
+3. **Logic Relevance**:
+   - Does the input payload appear to target the specific logic parameters in the **Target Method**?
+
+**Output Format (JSON)**:
 {{
-  "thought_process": "Check Interface Compliance and Intent...",
-  "decision": "PASS" (Score >= 80) or "FAIL",
+  "thought_process": "1. URL Check: Root code has no annotations -> Skip strict URL check (PASS). 2. Expectation Check: Code has 'logger.info', but scenario validation misses it -> FAIL (Feedback required).",
+  "decision": "PASS" | "FAIL",
   "score": <0-100>,
-  "feedback": "Feedback in Korean (Required only if score < 100)."
+  "feedback": "구체적인 피드백 (점수가 100점이 아닌 경우 필수). 예: '코드에 로그가 존재하므로 기대 결과에 포함해야 합니다.' (코드에 로그/리턴이 없는 경우 'PASS' 처리)"
 }}
 """
 )
