@@ -41,6 +41,9 @@ export function TestGenerator({ trigger }: { trigger?: React.ReactNode }) {
     const [strategySummary, setStrategySummary] = useState<string | null>(null);
     const [analyzing, setAnalyzing] = useState(false);
 
+    // Popup State
+    const [showSuccessPopup, setShowSuccessPopup] = useState(false);
+
     const handleGenerate = async () => {
         setLoading(true);
         setError(null);
@@ -146,6 +149,7 @@ export function TestGenerator({ trigger }: { trigger?: React.ReactNode }) {
         setAnalyzing(true);
         setError(null);
         setStrategySummary(null);
+        setShowSuccessPopup(false);
 
         try {
             const response = await fetch(`${API_BASE_URL}/api/strategy/generate`, {
@@ -160,6 +164,7 @@ export function TestGenerator({ trigger }: { trigger?: React.ReactNode }) {
 
             const data = await response.json();
             setStrategySummary(data.strategy_summary);
+            setShowSuccessPopup(true); // Show popup on success
         } catch (err: any) {
             setError(err.message || "An error occurred");
         } finally {
@@ -323,6 +328,30 @@ export function TestGenerator({ trigger }: { trigger?: React.ReactNode }) {
                         </div>
                     )}
                 </div>
+
+                {/* Analysis Complete Popup */}
+                {showSuccessPopup && (
+                    <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/20 backdrop-blur-[1px] animate-in fade-in duration-200">
+                        <div className="bg-white p-6 rounded-lg shadow-xl border border-blue-100 max-w-sm w-full text-center space-y-4 animate-in zoom-in-95 duration-200">
+                            <div className="mx-auto bg-blue-100 w-12 h-12 rounded-full flex items-center justify-center">
+                                <Sparkles className="h-6 w-6 text-blue-600" />
+                            </div>
+                            <div className="space-y-1">
+                                <h3 className="text-lg font-semibold text-slate-900">전략 분석 완료!</h3>
+                                <p className="text-sm text-slate-500">
+                                    테스트 대상과 영향도가 분석되었습니다.<br />
+                                    결과를 확인하고 시나리오를 생성하세요.
+                                </p>
+                            </div>
+                            <Button
+                                onClick={() => setShowSuccessPopup(false)}
+                                className="w-full bg-blue-600 hover:bg-blue-700"
+                            >
+                                결과 확인하기
+                            </Button>
+                        </div>
+                    </div>
+                )}
             </DialogContent>
         </Dialog>
     );
