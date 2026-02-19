@@ -80,7 +80,7 @@ Goal: Create a concise Test Strategy Report regarding the changes.
 - Summarize key logic changes briefly.
 
 ### 2. 영향도 분석 (Impact Analysis)
-- List affected API endpoints.
+- List ALL affected API endpoints comprehensively.
 
 ### 3. 주요 테스트 포인트 (Key Test Points)
 - List critical verification items (**Bold** keywords).
@@ -105,7 +105,10 @@ Task: Verify if the generated test scenarios are **Factually Correct** based on 
 1. **Procedure Verification (Url & Method)**:
    - **Review Root Method Code**: Does it have `@RequestMapping`, `@PostMapping`, or `@GetMapping` annotations?
    - **YES**: The `curl` command MUST match these annotations exactly. (**FAIL** if mismatch).
-   - **NO (Missing Annotations)**: Do **NOT** Fail. Assume the scenario inferred the URL from context or naming convention. Treat as **PASS**.
+   - **NO (Missing Annotations)**: Do NOT automatically Pass.
+     - Check if the method has parameters with `@RequestBody` or similar object arguments.
+     - **YES**: The `curl` command MUST include a JSON body matching those arguments. (**FAIL** if body is missing or mismatched).
+     - **NO**: Only then, treat as **PASS** (assuming internal method or GET request).
 
 2. **Expected Result Verification (Logs & Returns)**:
    - **Review Source Code**: Does it contain `logger.info(...)`, `return ...`, or `throw ...` statements?
@@ -120,7 +123,7 @@ Task: Verify if the generated test scenarios are **Factually Correct** based on 
   "thought_process": "1. URL Check: Root code has no annotations -> Skip strict URL check (PASS). 2. Expectation Check: Code has 'logger.info', but scenario validation misses it -> FAIL (Feedback required).",
   "decision": "PASS" | "FAIL",
   "score": <0-100>,
-  "feedback": "구체적인 피드백 (점수가 100점이 아닌 경우 필수). 예: '코드에 로그가 존재하므로 기대 결과에 포함해야 합니다.' (코드에 로그/리턴이 없는 경우 'PASS' 처리)"
+  "feedback": "Specific feedback (Required if score < 100). e.g., 'Code contains logs, so expected result must include them.' (If code has no logs/returns, mark as 'PASS' with no feedback)"
 }}
 """
 )
