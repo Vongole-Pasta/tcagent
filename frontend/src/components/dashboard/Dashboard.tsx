@@ -50,15 +50,75 @@ export function Dashboard() {
         }
     };
 
-    const handleDownload = () => {
-        const dataStr = JSON.stringify(generatedScenarios, null, 2);
-        const blob = new Blob([dataStr], { type: 'application/json' });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = 'test_scenarios.json';
-        a.click();
-        URL.revokeObjectURL(url);
+    const handleDownload = async () => {
+        try {
+            // 동적 import로 xlsx 로드 (클라이언트 사이드에서만 필요)
+            const XLSX = await import("xlsx");
+
+            // 1. Workbook 생성
+            const wb = XLSX.utils.book_new();
+
+            // 2. Summary 시트 생성
+            const cleanSummary = (strategySummary || "요약 정보 없음")
+                .replace(/```markdown/g, "")
+                .replace(/```/g, "")
+                .trim();
+
+            const summaryLines = cleanSummary.split('\n');
+            const summaryData = [
+                ["테스트 전략 요약"],
+                ...summaryLines.map(line => [line])
+            ];
+            const wsSummary = XLSX.utils.aoa_to_sheet(summaryData);
+            // 간단한 컬럼 너비 설정
+            wsSummary['!cols'] = [{ wch: 100 }];
+            XLSX.utils.book_append_sheet(wb, wsSummary, "Summary");
+
+            // 3. VOD 시트 생성
+            // 데이터 매핑
+            const vodData = generatedScenarios.map(s => ({
+                "Test Case ID": s.test_case_id,
+                "Test Case Name": s.test_case_name,
+                "Step No": s.step_no,
+                "Description": s.description,
+                "Pre-condition": s.pre_condition,
+                "Procedure": s.procedure,
+                "Expected Result": s.expected_result,
+                "API Endpoint": s.api_endpoint || s.root_method_signature || "",
+                "Scenario ID": s.scenario_id
+            }));
+            const wsVod = XLSX.utils.json_to_sheet(vodData);
+            // 컬럼 너비 자동 조절 (간단하게)
+            wsVod['!cols'] = [
+                { wch: 15 }, { wch: 20 }, { wch: 8 }, { wch: 30 },
+                { wch: 20 }, { wch: 30 }, { wch: 30 }, { wch: 25 }, { wch: 15 }
+            ];
+            XLSX.utils.book_append_sheet(wb, wsVod, "VOD");
+
+            // 4. Scenario 시트 생성
+            // 중복 제거된 시나리오 목록 (scenario_id 기준)
+            const uniqueScenarios = Array.from(new Set(generatedScenarios.map(s => s.scenario_id)))
+                .map(sid => {
+                    const s = generatedScenarios.find(sc => sc.scenario_id === sid);
+                    return {
+                        "Scenario ID": s?.scenario_id,
+                        "Func Name": s?.root_method_signature,
+                        "Description": s?.description
+                    };
+                }).filter(s => s["Scenario ID"]); // 유효한 데이터만
+
+            const wsScenario = XLSX.utils.json_to_sheet(uniqueScenarios);
+            wsScenario['!cols'] = [{ wch: 15 }, { wch: 40 }, { wch: 50 }];
+            XLSX.utils.book_append_sheet(wb, wsScenario, "시나리오");
+
+            // 5. 파일 다운로드
+            const filename = `integrated_tests_${new Date().toISOString().slice(0, 19).replace(/:/g, "-")}.xlsx`;
+            XLSX.writeFile(wb, filename);
+
+        } catch (err: any) {
+            console.error("Excel export failed:", err);
+            setError(err.message || "Excel export failed");
+        }
     };
 
     return (

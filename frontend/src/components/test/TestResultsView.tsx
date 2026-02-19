@@ -20,6 +20,7 @@ export interface GeneratedScenario {
     expected_result: string;
     scenario_id: string;
     root_method_signature: string;
+    api_endpoint?: string;
 }
 
 interface TestResultsViewProps {

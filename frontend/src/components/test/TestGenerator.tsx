@@ -24,6 +24,8 @@ interface GeneratedScenario {
     procedure: string;
     expected_result: string;
     scenario_id: string;
+    root_method_signature?: string;
+    api_endpoint?: string;
 }
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
@@ -66,45 +68,71 @@ export function TestGenerator({ trigger }: { trigger?: React.ReactNode }) {
 
     const handleDownload = async () => {
         try {
-            const response = await fetch(`${API_BASE_URL}/api/tests/download`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    scenarios,
-                    strategy_summary: strategySummary
-                })
-            });
+            // 동적 import로 xlsx 로드
+            const XLSX = await import("xlsx");
 
-            // Check for JSON error response first
-            const contentType = response.headers.get("content-type");
-            if (!response.ok) {
-                if (contentType && contentType.includes("application/json")) {
-                    const errorData = await response.json();
-                    console.error("Download Error Details:", errorData);
-                    throw new Error(JSON.stringify(errorData) || "Download failed");
-                }
-                throw new Error(`Download failed: ${response.statusText}`);
+            // 1. Workbook 생성
+            const wb = XLSX.utils.book_new();
+
+            // 2. Summary 시트 생성 (Optional)
+            if (strategySummary) {
+                const cleanSummary = strategySummary
+                    .replace(/```markdown/g, "")
+                    .replace(/```/g, "")
+                    .trim();
+
+                const summaryLines = cleanSummary.split('\n');
+                const summaryData = [
+                    ["테스트 전략 요약"],
+                    ...summaryLines.map(line => [line])
+                ];
+                const wsSummary = XLSX.utils.aoa_to_sheet(summaryData);
+                wsSummary['!cols'] = [{ wch: 100 }];
+                XLSX.utils.book_append_sheet(wb, wsSummary, "Summary");
             }
 
-            // Verify it's not JSON (success 200 but JSON content?)
-            if (contentType && contentType.includes("application/json")) {
-                const data = await response.json();
-                console.error("Unexpected JSON response:", data);
-                throw new Error("Server returned JSON instead of file. Check console for details.");
-            }
+            // 3. VOD 시트 생성
+            const vodData = scenarios.map(s => ({
+                "Test Case ID": s.test_case_id,
+                "Test Case Name": s.test_case_name,
+                "Step No": s.step_no,
+                "Description": s.description,
+                "Pre-condition": s.pre_condition,
+                "Procedure": s.procedure,
+                "Expected Result": s.expected_result,
+                "API Endpoint": s.api_endpoint || s.root_method_signature || "",
+                "Scenario ID": s.scenario_id
+            }));
+            const wsVod = XLSX.utils.json_to_sheet(vodData);
+            wsVod['!cols'] = [
+                { wch: 15 }, { wch: 20 }, { wch: 8 }, { wch: 30 },
+                { wch: 20 }, { wch: 30 }, { wch: 30 }, { wch: 25 }, { wch: 15 }
+            ];
+            XLSX.utils.book_append_sheet(wb, wsVod, "VOD");
 
-            const blob = await response.blob();
-            const url = window.URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = `integrated_tests_${new Date().toISOString().slice(0, 19).replace(/:/g, "-")}.xlsx`; // Safe filename
-            document.body.appendChild(a);
-            a.click();
-            window.URL.revokeObjectURL(url);
-            document.body.removeChild(a);
+            // 4. Scenario 시트 생성
+            const uniqueScenarios = Array.from(new Set(scenarios.map(s => s.scenario_id)))
+                .map(sid => {
+                    const s = scenarios.find(sc => sc.scenario_id === sid);
+                    return {
+                        "Scenario ID": s?.scenario_id,
+                        "Func Name": s?.root_method_signature,
+                        "Description": s?.description
+                    };
+                }).filter(s => s["Scenario ID"]);
+
+            const wsScenario = XLSX.utils.json_to_sheet(uniqueScenarios);
+            wsScenario['!cols'] = [{ wch: 15 }, { wch: 40 }, { wch: 50 }];
+            XLSX.utils.book_append_sheet(wb, wsScenario, "시나리오");
+
+            // 5. 파일 다운로드
+            const filename = `integrated_tests_${new Date().toISOString().slice(0, 19).replace(/:/g, "-")}.xlsx`;
+            XLSX.writeFile(wb, filename);
+
             setOpen(false); // Close dialog on success
         } catch (err: any) {
-            setError(err.message);
+            console.error("Excel export failed:", err);
+            setError(err.message || "Excel export failed");
         }
     };
 
