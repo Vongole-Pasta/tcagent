@@ -8,6 +8,7 @@ from langchain_core.output_parsers import JsonOutputParser, StrOutputParser
 
 from config import Config
 from infra.db_client import DBClient
+from graph_db.queries import CypherQueries
 from core.agent.state import AgentState, MethodNode, TestContext, GeneratedScenario
 from core.agent.prompts import SCENARIO_GENERATION_PROMPT, TEST_STRATEGY_PROMPT, SCENARIO_EVALUATION_PROMPT
 
@@ -73,12 +74,7 @@ class IntegratedTestAgentNodes:
         수정되었거나 새로운 메서드를 식별합니다.
         """
         logger.info("대상 메서드(NEW/MODIFIED) 식별 중...")
-        query = """
-        MATCH (m:METHOD)
-        WHERE m.status IN ['NEW', 'MODIFIED']
-        RETURN elementId(m) as id, m.name as name, m.signature as signature, m.status as status
-        """
-        results = self.db_client.execute_query(query)
+        results = self.db_client.execute_query(CypherQueries.GET_TARGET_METHODS)
         
         targets = []
         for row in results:
@@ -112,16 +108,7 @@ class IntegratedTestAgentNodes:
                 # 루트 메서드(프로젝트 컨텍스트 내에서 다른 메서드에 의해 호출되지 않는 메서드)를 찾습니다.
                 # 또는 명시적인 컨트롤러 엔드포인트인 메서드를 찾습니다.
                 # 단순화를 위해 가장 긴 상위 경로를 찾습니다.
-                query = """
-                MATCH path = (root:METHOD)-[:CALLS*0..]->(target:METHOD)
-                WHERE (elementId(target) = $target_id)
-                  AND NOT ()-[:CALLS]->(root)
-                RETURN root, target
-                LIMIT 5
-                """
-                
-                
-                paths = self.db_client.execute_query(query, {"target_id": target.id})
+                paths = self.db_client.execute_query(CypherQueries.TRACE_ROOT_METHODS, {"target_id": target.id})
                 
                 for row in paths:
                     root_node = row['root']
@@ -149,18 +136,7 @@ class IntegratedTestAgentNodes:
                     else:
                         # 루트 메서드 컨텍스트를 위한 파라미터 조회 (루트당 한 번만)
                         # 업데이트된 쿼리: 어노테이션 및 DTO 필드 조회
-                        param_query = """
-                        MATCH (m:METHOD)-[:CONTAINS]->(p:PARAMETER)
-                        WHERE elementId(m) = $root_id
-                        OPTIONAL MATCH (p)-[:OF_TYPE]->(t:TYPE)
-                        OPTIONAL MATCH (t)-[:CONTAINS]->(f:FIELD)
-                        RETURN p.index as param_index, 
-                               p.name as param_name, 
-                               p.type as param_type, 
-                               collect({name: f.name, type: f.type}) as fields
-                        ORDER BY param_index
-                        """
-                        params_result = self.db_client.execute_query(param_query, {"root_id": root_id})
+                        params_result = self.db_client.execute_query(CypherQueries.GET_ROOT_PARAMETERS, {"root_id": root_id})
                         
                         parameter_infos = []
                         for p_row in params_result:

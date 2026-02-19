@@ -45,6 +45,39 @@ class CypherQueries:
     
     # --- Impact Analysis Queries ---
     
+    # [변경/신규 메서드 식별]
+    # 에이전트가 테스트 대상으로 삼을 NEW/MODIFIED 상태의 메서드를 조회합니다.
+    GET_TARGET_METHODS = """
+    MATCH (m:METHOD)
+    WHERE m.status IN ['NEW', 'MODIFIED']
+    RETURN elementId(m) as id, m.name as name, m.signature as signature, m.status as status
+    """
+    
+    # [루트 메서드(진입점) 역추적]
+    # 대상 메서드를 호출하는 최상위 루트 메서드를 찾습니다.
+    # 다른 메서드에 의해 호출되지 않는 메서드(Controller 등)가 루트입니다.
+    TRACE_ROOT_METHODS = """
+    MATCH path = (root:METHOD)-[:CALLS*0..]->(target:METHOD)
+    WHERE (elementId(target) = $target_id)
+      AND NOT ()-[:CALLS]->(root)
+    RETURN root, target
+    LIMIT 5
+    """
+    
+    # [루트 메서드의 파라미터 조회]
+    # 루트 메서드의 입력 파라미터와 DTO 필드 구조를 조회합니다.
+    GET_ROOT_PARAMETERS = """
+    MATCH (m:METHOD)-[:CONTAINS]->(p:PARAMETER)
+    WHERE elementId(m) = $root_id
+    OPTIONAL MATCH (p)-[:OF_TYPE]->(t:TYPE)
+    OPTIONAL MATCH (t)-[:CONTAINS]->(f:FIELD)
+    RETURN p.index as param_index, 
+           p.name as param_name, 
+           p.type as param_type, 
+           collect({name: f.name, type: f.type}) as fields
+    ORDER BY param_index
+    """
+
 
 
     # --- New Frontend Support Queries ---

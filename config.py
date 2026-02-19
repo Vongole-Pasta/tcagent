@@ -1,39 +1,52 @@
 import os
-from dotenv import load_dotenv
+from pydantic_settings import BaseSettings
+from typing import Set
 
-# Load environment variables based on APP_ENV (default: dev)
-import sys
-
+# 환경 변수를 통한 환경 설정 (기본값: dev)
 app_env = os.getenv("APP_ENV", "dev")
-#app_env = os.getenv("APP_ENV", "prd")
 env_file = f".env.{app_env}"
 
-# Fallback to .env if specific file doesn't exist, or just load it
-if os.path.exists(env_file):
-    print(f"Loading configuration from {env_file}")
-    load_dotenv(env_file)
-else:
-    print(f"Warning: {env_file} not found. Loading default .env")
-    load_dotenv()
+class Config(BaseSettings):
+    """
+    앱 설정을 관리하는 Pydantic BaseSettings 클래스.
+    .env 파일에서 자동으로 환경변수를 읽어오며, 누락 시 기본값을 사용합니다.
+    앱 시작 시 타입 유효성 검증이 자동으로 수행됩니다.
+    """
+    # Neo4j 연결 정보
+    NEO4J_URI: str = "bolt://localhost:7687"
+    NEO4J_USER: str = "neo4j"
+    NEO4J_PASSWORD: str = "password"
 
-class Config:
-    NEO4J_URI = os.getenv("NEO4J_URI", "bolt://localhost:7687")
-    NEO4J_USER = os.getenv("NEO4J_USER", "neo4j")
-    NEO4J_PASSWORD = os.getenv("NEO4J_PASSWORD", "password")
-    
-    TARGET_DIR = os.getenv("TARGET_DIR", ".")
-    
-    # 제외할 디렉토리 및 파일 확장자
-    EXCLUDED_DIRS = {".git", "node_modules", "dist", "build", "__pycache__", ".next", ".idea", ".vscode", "uploads_repository"}
-    
-    # JAVA ONLY
-    ALLOWED_EXTENSIONS = {
-        ".java": "java",
+    # 작업 대상 디렉토리
+    TARGET_DIR: str = "."
+
+    # LangSmith & LLM 설정
+    LANGCHAIN_TRACING_V2: str = "true"
+    LANGCHAIN_PROJECT: str = "tcagent-integrated-test"
+    LANGCHAIN_API_KEY: str = ""
+    OPENAI_API_KEY: str = ""
+    MODEL_NAME: str = "gpt-4o"
+
+    # 제외할 디렉토리 (클래스 변수, .env와 무관)
+    EXCLUDED_DIRS: Set[str] = {".git", "node_modules", "dist", "build", "__pycache__", ".next", ".idea", ".vscode", "uploads_repository"}
+
+    # 허용 확장자 (Java Only)
+    ALLOWED_EXTENSIONS: dict = {".java": "java"}
+
+    model_config = {
+        "env_file": env_file if os.path.exists(env_file) else ".env",
+        "env_file_encoding": "utf-8",
+        "extra": "ignore",  # .env에 추가 변수가 있어도 무시
     }
 
-    # LangSmith & LLM
-    LANGCHAIN_TRACING_V2 = os.getenv("LANGCHAIN_TRACING_V2", "true")
-    LANGCHAIN_PROJECT = os.getenv("LANGCHAIN_PROJECT", "tcagent-integrated-test")
-    LANGCHAIN_API_KEY = os.getenv("LANGCHAIN_API_KEY", "")
-    OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
-    MODEL_NAME = os.getenv("MODEL_NAME", "gpt-4o")
+# 싱글톤 인스턴스 (전역에서 Config 속성 접근용)
+_config = Config()
+
+# 기존 코드 호환성을 위해 클래스 레벨 접근도 가능하게 유지
+# 사용법: from config import Config → Config.NEO4J_URI 등
+class _ConfigCompat:
+    """기존 코드와의 호환성을 위한 래퍼 (Config.XXX 형태 접근 지원)"""
+    def __getattr__(self, name):
+        return getattr(_config, name)
+
+Config = _ConfigCompat()

@@ -282,7 +282,7 @@ export function TestGenerator({ trigger }: { trigger?: React.ReactNode }) {
                                 <p className="text-sm text-muted-foreground">
                                     위의 전략 분석을 확인한 후, 상세 시나리오를 생성하세요.
                                 </p>
-                                <Button onClick={handleGenerate} size="lg" className="bg-blue-600 hover:bg-blue-700">
+                                <Button onClick={handleGenerate} size="lg" disabled={loading} className="bg-blue-600 hover:bg-blue-700">
                                     시나리오 생성 시작
                                 </Button>
                             </div>

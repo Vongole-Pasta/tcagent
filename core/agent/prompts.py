@@ -1,5 +1,8 @@
 from langchain_core.prompts import PromptTemplate
 
+# 프롬프트 버전 관리 — 변경 시 버전을 올려 LangSmith 트레이스에서 추적 가능
+PROMPT_VERSION = "v2.1"
+
 SCENARIO_GENERATION_PROMPT = PromptTemplate(
     input_variables=["root_method", "validation_context", "parameters", "feedback", "previous_scenarios"],
     template="""

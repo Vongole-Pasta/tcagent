@@ -45,9 +45,14 @@ class GeneratedScenario(BaseModel):
     api_endpoint: Optional[str] = None
 
 class AgentState(BaseModel):
-    """에이전트 워크플로우를 위한 전역 상태"""
+    """
+    에이전트 워크플로우를 위한 전역 상태.
+    
+    NOTE: LangGraph는 기본적으로 TypedDict를 권장하지만,
+    Pydantic BaseModel도 호환됩니다. 향후 LangGraph 버전 업그레이드 시
+    TypedDict로의 마이그레이션을 고려해야 합니다.
+    """
     target_methods: List[MethodNode] = []
     test_contexts: List[TestContext] = []
     generated_scenarios: List[GeneratedScenario] = []
     test_strategy_summary: Optional[str] = None
-

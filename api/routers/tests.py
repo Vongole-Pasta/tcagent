@@ -1,6 +1,7 @@
 
 from fastapi import APIRouter, Request, HTTPException
 from fastapi.responses import FileResponse
+from starlette.background import BackgroundTask
 from pydantic import BaseModel
 from typing import List, Optional
 import tempfile
@@ -28,14 +29,18 @@ async def generate_tests(request: Request, body: GenerateRequest):
     if not agent_graph:
         raise HTTPException(status_code=500, detail="Agent graph not initialized")
     
-    # Run the graph
+    # 에이전트 그래프 실행
     try:
-        # Initial state
+        # 초기 상태
         initial_input = {"target_methods": [], "trace_results": [], "generated_scenarios": []}
         
-        # Invoke the graph
+        # 비동기 실행 (LLM 호출이 포함되어 있어 블로킹 방지)
+        import asyncio
         config = {"configurable": {"thread_id": "default_thread"}}
-        final_state = agent_graph.invoke(initial_input, config=config)
+        loop = asyncio.get_event_loop()
+        final_state = await loop.run_in_executor(
+            None, lambda: agent_graph.invoke(initial_input, config=config)
+        )
         
         if isinstance(final_state, dict):
             scenarios = final_state.get("generated_scenarios", [])
@@ -58,28 +63,36 @@ async def generate_tests(request: Request, body: GenerateRequest):
 @router.post("/download")
 async def download_tests(body: DownloadRequest):
     """
-    Convert the provided scenarios (JSON) into an Excel file.
+    생성된 시나리오(JSON)를 Excel 파일로 변환하여 다운로드합니다.
+    응답 전송 후 임시 파일은 자동으로 삭제됩니다.
     """
     import logging
     logger = logging.getLogger("api.routers.tests")
-    logger.info(f"Received download request with {len(body.scenarios)} scenarios.")
-    logger.info(f"Summary length: {len(body.strategy_summary) if body.strategy_summary else 0}")
+    logger.info(f"다운로드 요청 수신: {len(body.scenarios)}개 시나리오")
+    logger.info(f"요약 길이: {len(body.strategy_summary) if body.strategy_summary else 0}")
     
+    file_path = None
     try:
-        # Create a temporary file
+        # 임시 파일 생성
         with tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx") as tmp:
             file_path = tmp.name
         
         ExcelExporter.create_workbook(body.scenarios, body.strategy_summary, file_path)
         
-        # Return as file response
+        # 응답 전송 후 임시 파일 자동 삭제
+        def cleanup(path: str):
+            if os.path.exists(path):
+                os.unlink(path)
+        
         return FileResponse(
             path=file_path, 
             filename="integrated_tests.xlsx",
-            media_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+            media_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            background=BackgroundTask(cleanup, file_path)
         )
         
     except Exception as e:
-        if os.path.exists(file_path):
+        # 에러 발생 시 임시 파일 정리
+        if file_path and os.path.exists(file_path):
             os.unlink(file_path)
         raise HTTPException(status_code=500, detail=str(e))
