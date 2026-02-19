@@ -50,5 +50,4 @@ class AgentState(BaseModel):
     test_contexts: List[TestContext] = []
     generated_scenarios: List[GeneratedScenario] = []
     test_strategy_summary: Optional[str] = None
-    excel_file_path: str = ""
-    errors: List[str] = []
+
