@@ -63,8 +63,7 @@ SCENARIO_GENERATION_PROMPT = ChatPromptTemplate.from_messages([
 
 **출력 형식**:
 {format_instructions}
-**핵심 주의사항**: 반드시 유효한 JSON 배열(Array) 하나만 반환해야 합니다. 마크다운 블록, 부연 설명, 사과 문구 등은 절대 포함하지 마십시오.
-**핵심 주의사항**: 제공된 입력 컨텍스트에 대해 최소 한 개(1) 이상의 시나리오를 반드시 생성해야 합니다. 빈 배열 `[]`을 반환하는 것은 엄격히 금지됩니다.
+**핵심 주의사항**: 제공된 입력 컨텍스트에 대해 'scenarios' 배열 내에 최소 한 개(1) 이상의 시나리오를 반드시 생성해야 합니다. 빈 배열을 반환하는 것은 엄격히 금지됩니다.
 
 다음은 원하는 출력 구조의 예시입니다 (Few-Shot Learning).
 **참고**: 아래 예시는 **구조 참조용**으로만 사용하십시오.
@@ -74,19 +73,21 @@ SCENARIO_GENERATION_PROMPT = ChatPromptTemplate.from_messages([
    - **나쁜 예**: "요청이 성공한다." 또는 "200 OK를 반환한다."
 
 ```json
-[
-  {{
-    "test_case_id": "TC-001",
-    "test_case_name": "단기 영상테이블 삭제 (Example)",
-    "step_no": 1,
-    "description": "현재기준 longTableCycle 이전의 날짜의 테이블을 DROP한다.",
-    "pre_condition": "config_properties.xml : vod.table.partition.long.yn 값이 'Y'",
-    "procedure": "curl -X POST -H 'Content-Type:application/json' http://vms-vod:18080/V100/VMS_90002/drop_table? -d '{{\"user_id\":\"9999999999\",\"cam_id\":\"D99999999999999\",\"user_cam_code\":\"999999999\"}}'",
-    "expected_result": "HTTP 200 OK 응답. 서버 로그에 'Drop table VMS_90002 success' 메시지가 출력되어야 함.",
-    "scenario_id": "SC-001",
-    "api_endpoint": "POST /V100/VMS_90002/drop_table"
-  }}
-]
+{{
+  "scenarios": [
+    {{
+      "test_case_id": "TC-001",
+      "test_case_name": "단기 영상테이블 삭제 (Example)",
+      "step_no": 1,
+      "description": "현재기준 longTableCycle 이전의 날짜의 테이블을 DROP한다.",
+      "pre_condition": "config_properties.xml : vod.table.partition.long.yn 값이 'Y'",
+      "procedure": "curl -X POST -H 'Content-Type:application/json' http://vms-vod:18080/V100/VMS_90002/drop_table? -d '{{\"user_id\":\"9999999999\",\"cam_id\":\"D99999999999999\",\"user_cam_code\":\"999999999\"}}'",
+      "expected_result": "HTTP 200 OK 응답. 서버 로그에 'Drop table VMS_90002 success' 메시지가 출력되어야 함.",
+      "scenario_id": "SC-001",
+      "api_endpoint": "POST /V100/VMS_90002/drop_table"
+    }}
+  ]
+}}
 ```"""),
     ("user", 
 """**입력 컨텍스트(Input Context)**:

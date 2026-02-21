@@ -10,7 +10,7 @@ from pydantic import BaseModel, Field
 from config import Config
 from infra.db_client import DBClient
 from graph_db.queries import CypherQueries
-from core.agent.state import AgentState, MethodNode, TestContext, ScenarioGenerationState, GeneratedScenario, PayloadExtractionResult, EvaluationResult, HeaderInfo
+from core.agent.state import AgentState, MethodNode, TestContext, ScenarioGenerationState, GeneratedScenario, PayloadExtractionResult, EvaluationResult, HeaderInfo, GeneratedScenarioResult
 from core.agent.prompts import SCENARIO_GENERATION_PROMPT, TEST_STRATEGY_PROMPT, SCENARIO_EVALUATION_PROMPT, PAYLOAD_EXTRACTION_PROMPT
 
 logger = logging.getLogger(__name__)
@@ -193,11 +193,10 @@ class IntegratedTestAgentNodes:
         Critic 에이전트의 피드백 루프를 처리합니다.
         """
         contexts = state.test_contexts
-        all_generated_scenarios = []
         
         logger.info(f"{len(contexts)}개 루트 그룹에 대한 시나리오 생성 중...")
         
-        parser = StrOutputParser()
+        parser = JsonOutputParser(pydantic_object=GeneratedScenarioResult)
         chain = SCENARIO_GENERATION_PROMPT | self.llm | parser
         
         for i, ctx in enumerate(contexts):
@@ -205,15 +204,12 @@ class IntegratedTestAgentNodes:
             
             # 이미 평가를 통과한 경우 건너뜀
             if scenario_state.evaluation_passed:
-                all_generated_scenarios.extend(scenario_state.generated_scenarios)
                 continue
             
             # 재시도 제한에 도달한 경우 건너뜀 (이전 결과 수용)
             if scenario_state.retry_count >= 2:
                 logger.warning(f"트레이스 {i} 재시도 제한 도달. 현재 시나리오 수용 (빈 시나리오 포함).")
                 scenario_state.evaluation_passed = True
-                if scenario_state.generated_scenarios:
-                    all_generated_scenarios.extend(scenario_state.generated_scenarios)
                 continue
 
             try:
@@ -269,75 +265,53 @@ Target Code:
                     "required_headers": required_headers_json,
                     "feedback": scenario_state.feedback if scenario_state.feedback else "None",
                     "previous_scenarios": previous_scenarios_json,
-                    "format_instructions": "반드시 올바른 JSON 배열(Array) 객체를 반환하십시오. ```json 과 같은 마크다운 블록은 절대 포함하지 마십시오."
+                    "format_instructions": parser.get_format_instructions()
                 }
                 
                 try:
-                    result_text = chain.invoke(inputs)
-                    
-                    # Markdown json block 제거 및 순수 JSON 추출 (StrOutputParser 사용 시 수동 추출)
-                    json_str = result_text.strip()
-                    json_match = re.search(r'\[.*\]', json_str, re.DOTALL)
-                    if json_match:
-                        json_str = json_match.group(0)
-                    else:
-                        dict_match = re.search(r'\{.*\}', json_str, re.DOTALL)
-                        if dict_match:
-                            json_str = "[" + dict_match.group(0) + "]"
-                            
-                    try:
-                        result = json.loads(json_str)
-                    except json.JSONDecodeError as decode_err:
-                        raise Exception(f"JSON 디코딩 에러: {decode_err}. 원본 응답:\n{result_text}")
-
+                    result = chain.invoke(inputs)
                 except Exception as e:
                     logger.error(f"트레이스 {i} 시나리오 생성/파싱 실패: {e}")
-                    scenario_state.feedback = f"JSON 생성 또는 파싱 오류 발생: {e}. 반드시 올바른 구조의 순수 JSON 배열만 반환하세요."
+                    scenario_state.feedback = f"JSON 생성 또는 파싱 오류 발생: {e}. 반드시 형식에 맞는 올바른 순수 JSON만 반환하세요."
                     raise e
                 
-                # 결과를 GeneratedScenario 객체로 파싱
+                # 결과를 GeneratedScenario 객체로 매핑
                 current_scenarios = []
-                # LLM이 지시사항(배열 반환)을 무시하고 단일 객체(dict)만 반환한 경우 배열로 감싸서 처리
-                if isinstance(result, dict):
-                    result = [result]
-                    
-                if isinstance(result, list):
-                    for item in result:
-                        scenario = GeneratedScenario(
-                            test_case_id=f"TC-{len(all_generated_scenarios)+1:03d}",
-                            test_case_name=item.get('test_case_name', 'No Name'),
-                            step_no=item.get('step_no', 1),
-                            description=item.get('description', ''),
-                            pre_condition=item.get('pre_condition', ''),
-                            procedure=item.get('procedure', ''),
-                            expected_result=item.get('expected_result', ''),
-                            scenario_id=f"SC-{i+1:03d}",
-                            root_method_signature=ctx.root_method.signature,
-                            api_endpoint=item.get('api_endpoint')
-                        )
-                        current_scenarios.append(scenario)
+                # JsonOutputParser는 Pydantic 객체의 dict 형태를 반환함
+                raw_scenarios = result.get('scenarios', [])
+                
+                for item in raw_scenarios:
+                    scenario = GeneratedScenario(
+                        test_case_id=f"TC-{len(scenario_state.generated_scenarios)+1:03d}", # Context 기반의 ID 부여로 변경
+                        test_case_name=item.get('test_case_name', 'No Name'),
+                        step_no=item.get('step_no', 1),
+                        description=item.get('description', ''),
+                        pre_condition=item.get('pre_condition', ''),
+                        procedure=item.get('procedure', ''),
+                        expected_result=item.get('expected_result', ''),
+                        scenario_id=f"SC-{i+1:03d}",
+                        root_method_signature=ctx.root_method.signature,
+                        api_endpoint=item.get('api_endpoint')
+                    )
+                    current_scenarios.append(scenario)
                 
                 # Update Trace Result
                 scenario_state.generated_scenarios = current_scenarios
-                all_generated_scenarios.extend(current_scenarios)
                 logger.info(f"루트 그룹 {i+1}에 대해 {len(current_scenarios)}개의 시나리오 생성됨")
                 
             except Exception as e:
                 logger.error(f"트레이스 {i} 시나리오 생성 실패: {e}")
                 if not scenario_state.feedback or "JSON 생성 또는 파싱 오류" not in scenario_state.feedback:
                     scenario_state.feedback = f"시나리오 생성 중 알 수 없는 오류 발생: {e}"
-                # 이전 결과가 있으면 유지
-                if scenario_state.generated_scenarios:
-                    all_generated_scenarios.extend(scenario_state.generated_scenarios)
                     
-        return {"generated_scenarios": all_generated_scenarios, "scenario_states": state.scenario_states}
+        return {"scenario_states": state.scenario_states}
 
     def evaluate_scenarios(self, state: AgentState) -> Dict[str, Any]:
         """
         Critic 노드: 생성된 시나리오를 평가하고 피드백을 제공합니다.
         """
         contexts = state.test_contexts
-        logger.info("시나리오 평가 중 (Critic 모드)...")
+        logger.info("시나리오 평가 중...")
         
         parser = JsonOutputParser(pydantic_object=EvaluationResult)
         chain = SCENARIO_EVALUATION_PROMPT | self.llm | parser
@@ -400,33 +374,9 @@ Target Code:
                     logger.error(f"트레이스 {i} 평가 파싱 실패: {e}")
                     raise e
                 
-                # 리스트 형태로 반환된 경우 처리 (여러 시나리오에 대한 개별 평가일 수 있음)
-                if isinstance(result, list):
-                    # 가장 보수적인 평가(최저 점수/FAIL)를 채택
-                    final_decision = "PASS"
-                    min_score = 100
-                    feedbacks = []
-                    
-                    for item in result:
-                        if isinstance(item, dict):
-                            d = item.get("decision", "PASS")
-                            s = item.get("score", 100)
-                            f = item.get("feedback", "")
-                            
-                            if d == "FAIL":
-                                final_decision = "FAIL"
-                            if s < min_score:
-                                min_score = s
-                            if f:
-                                feedbacks.append(f)
-                    
-                    decision = final_decision
-                    score = min_score
-                    feedback = "\n".join(feedbacks)
-                else:
-                    decision = result.get("decision", "PASS")
-                    score = result.get("score", 100)
-                    feedback = result.get("feedback", "")
+                decision = result.get("decision", "PASS")
+                score = result.get("score", 100)
+                feedback = result.get("feedback", "")
                 
                 if decision == "FAIL" or score < 80:
                     logger.warning(f"트레이스 {i} 평가 실패. 점수: {score}. 피드백: {feedback}")
@@ -441,10 +391,11 @@ Target Code:
             
             except Exception as e:
                 logger.error(f"트레이스 {i} 평가 시스템/파싱 에러: {e}")
-                # Critic 자체 에러 시 통과시키지 않고 재시도 유도
+                # Critic 에러 발생 시 재시도 루프를 탈 수 있도록 실패 처리하되,
+                # 이전 단계의 생성자에게 다시 시도하라는 명확한 피드백을 전달합니다.
                 scenario_state.evaluation_passed = False
-                scenario_state.feedback = f"평가 시스템 오류 (출력 형식 위반 등): JSON 구조 확인 후 다시 생성할 것."
-                scenario_state.retry_count += 1
+                scenario_state.feedback = f"평가 중 시스템 오류 발생 (형식 위반 등). 안전을 위해 시나리오 생성을 처음부터 다시 시도해주세요. (에러: {e})"
+                scenario_state.retry_count -= 1
                 has_failure = True
 
         return {"scenario_states": state.scenario_states} # 피드백 상태 반영을 위한 업데이트

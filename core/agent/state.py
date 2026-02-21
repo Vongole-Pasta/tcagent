@@ -47,6 +47,11 @@ class GeneratedScenario(BaseModel):
     root_method_signature: Optional[str] = None
     api_endpoint: Optional[str] = None
 
+class GeneratedScenarioResult(BaseModel):
+    """LLM이 생성한 시나리오 목록 결과 래퍼"""
+    scenarios: List[GeneratedScenario] = Field(description="이 로직 검증을 위해 생성된 실제 실행 가능한 테스트 시나리오 목록. 반드시 최소 1개 이상 존재해야 합니다.")
+
+
 class TestContext(BaseModel):
     """테스트 생성을 위한 변하지 않는 구조적 컨텍스트 (Root Method와 연관된 Target Methods 및 Schema)"""
     context_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
@@ -75,5 +80,4 @@ class AgentState(BaseModel):
     target_methods: List[MethodNode] = []
     test_contexts: List[TestContext] = []
     scenario_states: Dict[str, ScenarioGenerationState] = {} # context_id를 키로 가지는 맵
-    generated_scenarios: List[GeneratedScenario] = []
     test_strategy_summary: Optional[str] = None
