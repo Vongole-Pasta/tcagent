@@ -1,10 +1,17 @@
 import os
 from pydantic_settings import BaseSettings
 from typing import Set
+from dotenv import load_dotenv
 
 # 환경 변수를 통한 환경 설정 (기본값: dev)
 app_env = os.getenv("APP_ENV", "dev")
 env_file = f".env.{app_env}"
+
+# 실제 OS 환경 변수에 .env 값을 주입 (LangSmith 등 외부 라이브러리가 자동 인식하도록)
+if os.path.exists(env_file):
+    load_dotenv(env_file, override=True)
+else:
+    load_dotenv(".env", override=True)
 
 class Config(BaseSettings):
     """
