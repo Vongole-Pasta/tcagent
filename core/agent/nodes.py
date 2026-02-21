@@ -10,7 +10,7 @@ from pydantic import BaseModel, Field
 from config import Config
 from infra.db_client import DBClient
 from graph_db.queries import CypherQueries
-from core.agent.state import AgentState, MethodNode, TestContext, GeneratedScenario, PayloadExtractionResult, EvaluationResult
+from core.agent.state import AgentState, MethodNode, TestContext, ScenarioGenerationState, GeneratedScenario, PayloadExtractionResult, EvaluationResult, HeaderInfo
 from core.agent.prompts import SCENARIO_GENERATION_PROMPT, TEST_STRATEGY_PROMPT, SCENARIO_EVALUATION_PROMPT, PAYLOAD_EXTRACTION_PROMPT
 
 logger = logging.getLogger(__name__)
@@ -132,8 +132,14 @@ class IntegratedTestAgentNodes:
             raise e
 
         test_contexts = list(grouped_contexts.values())
+        
+        # ScenarioGenerationState 초기화
+        scenario_states = {}
+        for ctx in test_contexts:
+            scenario_states[ctx.context_id] = ScenarioGenerationState(context_id=ctx.context_id)
+
         logger.info(f"여러 대상을 포괄하는 {len(test_contexts)}개의 고유 루트 경로를 추적했습니다.")
-        return {"test_contexts": test_contexts}
+        return {"test_contexts": test_contexts, "scenario_states": scenario_states}
 
     def extract_payloads(self, state: AgentState) -> Dict[str, Any]:
         """
@@ -146,8 +152,9 @@ class IntegratedTestAgentNodes:
         chain = PAYLOAD_EXTRACTION_PROMPT | self.llm | parser
         
         for i, ctx in enumerate(contexts):
+            scenario_state = state.scenario_states[ctx.context_id]
             # 이미 추출되었거나 평가 통과한 경우 스킵
-            if ctx.filtered_payloads is not None or ctx.evaluation_passed:
+            if ctx.filtered_payloads is not None or scenario_state.evaluation_passed:
                 continue
                 
             try:
@@ -194,16 +201,19 @@ class IntegratedTestAgentNodes:
         chain = SCENARIO_GENERATION_PROMPT | self.llm | parser
         
         for i, ctx in enumerate(contexts):
+            scenario_state = state.scenario_states[ctx.context_id]
+            
             # 이미 평가를 통과한 경우 건너뜀
-            if ctx.evaluation_passed:
-                all_generated_scenarios.extend(ctx.generated_scenarios)
+            if scenario_state.evaluation_passed:
+                all_generated_scenarios.extend(scenario_state.generated_scenarios)
                 continue
             
             # 재시도 제한에 도달한 경우 건너뜀 (이전 결과 수용)
-            if ctx.retry_count >= 2 and ctx.generated_scenarios:
-                logger.warning(f"트레이스 {i} 재시도 제한 도달. 현재 시나리오 수용.")
-                ctx.evaluation_passed = True
-                all_generated_scenarios.extend(ctx.generated_scenarios)
+            if scenario_state.retry_count >= 2:
+                logger.warning(f"트레이스 {i} 재시도 제한 도달. 현재 시나리오 수용 (빈 시나리오 포함).")
+                scenario_state.evaluation_passed = True
+                if scenario_state.generated_scenarios:
+                    all_generated_scenarios.extend(scenario_state.generated_scenarios)
                 continue
 
             try:
@@ -234,13 +244,15 @@ Target Code:
                 
                 # 1. 파라미터 최적화 (이전에는 전체를 보냈지만 이제 필터링된 페이로드와 헤더를 보냄)
                 payload_schema_json = json.dumps(ctx.filtered_payloads if ctx.filtered_payloads is not None else {}, indent=2, ensure_ascii=False)
-                required_headers_json = json.dumps(ctx.required_headers if ctx.required_headers else [], indent=2, ensure_ascii=False)
                 
+                # HeaderInfo 모델 리스트를 딕셔너리 리스트로 변환하여 json.dumps 직렬화 문제 해결
+                headers_list = [h.model_dump() for h in ctx.required_headers] if ctx.required_headers else []
+                required_headers_json = json.dumps(headers_list, indent=2, ensure_ascii=False)
                 # 2. 이전 시나리오 요약 (재시도 시 전체 덤프 대신 핵심 필드만 전달)
                 previous_scenarios_json = "None"
-                if ctx.generated_scenarios:
+                if scenario_state.generated_scenarios:
                     summary_list = []
-                    for s in ctx.generated_scenarios:
+                    for s in scenario_state.generated_scenarios:
                         summary_list.append({
                             "test_case_name": s.test_case_name,
                             "description": s.description,
@@ -255,7 +267,7 @@ Target Code:
                     "validation_context": validation_context,
                     "payload_schema": payload_schema_json,
                     "required_headers": required_headers_json,
-                    "feedback": ctx.feedback if ctx.feedback else "None",
+                    "feedback": scenario_state.feedback if scenario_state.feedback else "None",
                     "previous_scenarios": previous_scenarios_json,
                     "format_instructions": "Return a valid JSON array of objects. Do NOT include markdown blocks like ```json."
                 }
@@ -268,6 +280,10 @@ Target Code:
                 
                 # 결과를 GeneratedScenario 객체로 파싱
                 current_scenarios = []
+                # LLM이 지시사항(배열 반환)을 무시하고 단일 객체(dict)만 반환한 경우 배열로 감싸서 처리
+                if isinstance(result, dict):
+                    result = [result]
+                    
                 if isinstance(result, list):
                     for item in result:
                         scenario = GeneratedScenario(
@@ -285,17 +301,17 @@ Target Code:
                         current_scenarios.append(scenario)
                 
                 # Update Trace Result
-                ctx.generated_scenarios = current_scenarios
+                scenario_state.generated_scenarios = current_scenarios
                 all_generated_scenarios.extend(current_scenarios)
                 logger.info(f"루트 그룹 {i+1}에 대해 {len(current_scenarios)}개의 시나리오 생성됨")
                 
             except Exception as e:
                 logger.error(f"트레이스 {i} 시나리오 생성 실패: {e}")
                 # 이전 결과가 있으면 유지
-                if ctx.generated_scenarios:
-                    all_generated_scenarios.extend(ctx.generated_scenarios)
+                if scenario_state.generated_scenarios:
+                    all_generated_scenarios.extend(scenario_state.generated_scenarios)
                     
-        return {"generated_scenarios": all_generated_scenarios, "test_contexts": contexts}
+        return {"generated_scenarios": all_generated_scenarios, "scenario_states": state.scenario_states}
 
     def evaluate_scenarios(self, state: AgentState) -> Dict[str, Any]:
         """
@@ -310,15 +326,21 @@ Target Code:
         has_failure = False
         
         for i, ctx in enumerate(contexts):
-            if ctx.evaluation_passed:
+            scenario_state = state.scenario_states[ctx.context_id]
+            if scenario_state.evaluation_passed:
                 continue
                 
-            if not ctx.generated_scenarios:
+            # 재시도 제한 도달 시 건너뜀
+            if scenario_state.retry_count >= 2:
+                scenario_state.evaluation_passed = True
                 continue
 
-            # 재시도 제한 도달 시 건너뜀
-            if ctx.retry_count >= 2:
-                ctx.evaluation_passed = True
+            if not scenario_state.generated_scenarios:
+                logger.warning(f"트레이스 {i} 생성된 시나리오가 없습니다. 평가 실패로 처리하고 재시도를 요청합니다.")
+                scenario_state.evaluation_passed = False
+                scenario_state.feedback = "LLM이 시나리오를 하나도 생성하지 않았습니다. 유효한 테스트 시나리오 객체의 JSON 배열을 반환해야 합니다."
+                scenario_state.retry_count += 1
+                has_failure = True
                 continue
 
             try:
@@ -343,7 +365,7 @@ Target Code:
                     else:
                         validation_context += "Code: (Not Available)\n\n"
                 
-                scenarios_text = json.dumps([s.model_dump() for s in ctx.generated_scenarios], indent=2, ensure_ascii=False)
+                scenarios_text = json.dumps([s.model_dump() for s in scenario_state.generated_scenarios], indent=2, ensure_ascii=False)
                 
                 try:
                     result = chain.invoke({
@@ -385,21 +407,24 @@ Target Code:
                 
                 if decision == "FAIL" or score < 80:
                     logger.warning(f"트레이스 {i} 평가 실패. 점수: {score}. 피드백: {feedback}")
-                    ctx.evaluation_passed = False
-                    ctx.feedback = feedback
-                    ctx.retry_count += 1
+                    scenario_state.evaluation_passed = False
+                    scenario_state.feedback = feedback
+                    scenario_state.retry_count += 1
                     has_failure = True
                 else:
                     logger.info(f"트레이스 {i} 평가 통과. 점수: {score}.")
-                    ctx.evaluation_passed = True
-                    ctx.feedback = None
+                    scenario_state.evaluation_passed = True
+                    scenario_state.feedback = None
             
             except Exception as e:
-                logger.error(f"트레이스 {i} 평가 실패: {e}")
-                # Critic 실패 시 통과로 가정
-                ctx.evaluation_passed = True
+                logger.error(f"트레이스 {i} 평가 시스템/파싱 에러: {e}")
+                # Critic 자체 에러 시 통과시키지 않고 재시도 유도
+                scenario_state.evaluation_passed = False
+                scenario_state.feedback = f"평가 시스템 오류 (출력 형식 위반 등): JSON 구조 확인 후 다시 생성할 것."
+                scenario_state.retry_count += 1
+                has_failure = True
 
-        return {"test_contexts": contexts} # 피드백 상태 반영을 위한 업데이트
+        return {"scenario_states": state.scenario_states} # 피드백 상태 반영을 위한 업데이트
 
     def synthesize_strategy(self, state: AgentState) -> Dict[str, Any]:
         """
@@ -422,9 +447,10 @@ Target Code:
             
             # API Endpoint 정보 추가 (시나리오 생성 결과 기반)
             api_info = ""
-            if ctx.generated_scenarios:
+            scenario_state = state.scenario_states.get(ctx.context_id)
+            if scenario_state and scenario_state.generated_scenarios:
                 # 첫 번째 시나리오의 엔드포인트를 사용하거나, 고유한 엔드포인트들을 나열
-                endpoints = set(s.api_endpoint for s in ctx.generated_scenarios if s.api_endpoint)
+                endpoints = set(s.api_endpoint for s in scenario_state.generated_scenarios if s.api_endpoint)
                 if endpoints:
                     api_info = f" (API: {', '.join(endpoints)})"
             

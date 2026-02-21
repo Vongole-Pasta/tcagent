@@ -144,7 +144,9 @@ Task: Verify if the generated test scenarios are **Factually Correct** based on 
    - Does the input payload appear to target the specific logic parameters in the **Target Method**?
 
 **Output Format**:
-{format_instructions}"""),
+{format_instructions}
+**CRITICAL**: You MUST return a SINGLE JSON object evaluating ALL scenarios collectively. Do NOT return an array of objects. Provide the lowest score and worst decision if evaluating multiple scenarios.
+"""),
     ("user", 
 """**Input Context**:
 {validation_context}
