@@ -197,7 +197,7 @@ class IntegratedTestAgentNodes:
         
         logger.info(f"{len(contexts)}개 루트 그룹에 대한 시나리오 생성 중...")
         
-        parser = JsonOutputParser()
+        parser = StrOutputParser()
         chain = SCENARIO_GENERATION_PROMPT | self.llm | parser
         
         for i, ctx in enumerate(contexts):
@@ -269,13 +269,30 @@ Target Code:
                     "required_headers": required_headers_json,
                     "feedback": scenario_state.feedback if scenario_state.feedback else "None",
                     "previous_scenarios": previous_scenarios_json,
-                    "format_instructions": "Return a valid JSON array of objects. Do NOT include markdown blocks like ```json."
+                    "format_instructions": "반드시 올바른 JSON 배열(Array) 객체를 반환하십시오. ```json 과 같은 마크다운 블록은 절대 포함하지 마십시오."
                 }
                 
                 try:
-                    result = chain.invoke(inputs)
+                    result_text = chain.invoke(inputs)
+                    
+                    # Markdown json block 제거 및 순수 JSON 추출 (StrOutputParser 사용 시 수동 추출)
+                    json_str = result_text.strip()
+                    json_match = re.search(r'\[.*\]', json_str, re.DOTALL)
+                    if json_match:
+                        json_str = json_match.group(0)
+                    else:
+                        dict_match = re.search(r'\{.*\}', json_str, re.DOTALL)
+                        if dict_match:
+                            json_str = "[" + dict_match.group(0) + "]"
+                            
+                    try:
+                        result = json.loads(json_str)
+                    except json.JSONDecodeError as decode_err:
+                        raise Exception(f"JSON 디코딩 에러: {decode_err}. 원본 응답:\n{result_text}")
+
                 except Exception as e:
                     logger.error(f"트레이스 {i} 시나리오 생성/파싱 실패: {e}")
+                    scenario_state.feedback = f"JSON 생성 또는 파싱 오류 발생: {e}. 반드시 올바른 구조의 순수 JSON 배열만 반환하세요."
                     raise e
                 
                 # 결과를 GeneratedScenario 객체로 파싱
@@ -307,6 +324,8 @@ Target Code:
                 
             except Exception as e:
                 logger.error(f"트레이스 {i} 시나리오 생성 실패: {e}")
+                if not scenario_state.feedback or "JSON 생성 또는 파싱 오류" not in scenario_state.feedback:
+                    scenario_state.feedback = f"시나리오 생성 중 알 수 없는 오류 발생: {e}"
                 # 이전 결과가 있으면 유지
                 if scenario_state.generated_scenarios:
                     all_generated_scenarios.extend(scenario_state.generated_scenarios)
@@ -338,7 +357,11 @@ Target Code:
             if not scenario_state.generated_scenarios:
                 logger.warning(f"트레이스 {i} 생성된 시나리오가 없습니다. 평가 실패로 처리하고 재시도를 요청합니다.")
                 scenario_state.evaluation_passed = False
-                scenario_state.feedback = "LLM이 시나리오를 하나도 생성하지 않았습니다. 유효한 테스트 시나리오 객체의 JSON 배열을 반환해야 합니다."
+                
+                # generate_scenarios 단계에서 에러 피드백이 이미 설정되어 있다면 덮어쓰지 않음
+                if not scenario_state.feedback or "오류 발생" not in scenario_state.feedback:
+                    scenario_state.feedback = "LLM이 시나리오를 하나도 생성하지 않았거나 빈 배열을 반환했습니다. 최소 1개 이상의 유효한 테스트 시나리오 객체가 포함된 JSON 배열을 반환해야 합니다."
+                    
                 scenario_state.retry_count += 1
                 has_failure = True
                 continue
