@@ -5,12 +5,13 @@ import re
 from typing import List, Dict, Any
 from langchain_openai import ChatOpenAI
 from langchain_core.output_parsers import JsonOutputParser, StrOutputParser
+from pydantic import BaseModel, Field
 
 from config import Config
 from infra.db_client import DBClient
 from graph_db.queries import CypherQueries
-from core.agent.state import AgentState, MethodNode, TestContext, GeneratedScenario
-from core.agent.prompts import SCENARIO_GENERATION_PROMPT, TEST_STRATEGY_PROMPT, SCENARIO_EVALUATION_PROMPT
+from core.agent.state import AgentState, MethodNode, TestContext, GeneratedScenario, PayloadExtractionResult, EvaluationResult
+from core.agent.prompts import SCENARIO_GENERATION_PROMPT, TEST_STRATEGY_PROMPT, SCENARIO_EVALUATION_PROMPT, PAYLOAD_EXTRACTION_PROMPT
 
 logger = logging.getLogger(__name__)
 
@@ -22,52 +23,6 @@ class IntegratedTestAgentNodes:
             temperature=0,
             api_key=Config.OPENAI_API_KEY
         )
-
-    def _parse_json_safely(self, text: str) -> Any:
-        # 1. 직접 파싱 시도
-        try:
-            return json.loads(text)
-        except json.JSONDecodeError:
-            pass
-            
-        # 2. 마크다운 코드 블록에서 JSON 추출 (선택적 "json" 태그 처리)
-        # 백틱 사이의 모든 내용을 캡처하는, 더 관대한 정규식 사용
-        match = re.search(r"```(json)?(.*?)```", text, re.DOTALL)
-        if match:
-            clean_text = match.group(2).strip()
-            try:
-                return json.loads(clean_text)
-            except json.JSONDecodeError:
-                pass # 백틱 내부 내용이 유효한 JSON이 아닌 경우 통과
- 
-        # 3. 대체 방법: 첫 번째 '[' 또는 '{'와 마지막 ']' 또는 '}' 찾기
-        # 백틱이 없거나 잘못된 형식인 경우를 처리
-        try:
-            # 리스트 또는 객체 찾기
-            list_start = text.find('[')
-            list_end = text.rfind(']')
-            obj_start = text.find('{')
-            obj_end = text.rfind('}')
-            
-            start = -1
-            end = -1
-            
-            # 리스트인지 객체인지 판단하고 먼저 나오는 것을 선택
-            if list_start != -1 and (obj_start == -1 or list_start < obj_start):
-                start = list_start
-                end = list_end
-            elif obj_start != -1:
-                start = obj_start
-                end = obj_end
-                
-            if start != -1 and end != -1 and end > start:
-                json_candidate = text[start:end+1]
-                return json.loads(json_candidate)
-        except json.JSONDecodeError:
-            pass
-            
-        raise ValueError(f"Failed to parse JSON from text: {text[:100]}...")
-
 
     def identify_targets(self, state: AgentState) -> Dict[str, Any]:
         """
@@ -180,6 +135,49 @@ class IntegratedTestAgentNodes:
         logger.info(f"여러 대상을 포괄하는 {len(test_contexts)}개의 고유 루트 경로를 추적했습니다.")
         return {"test_contexts": test_contexts}
 
+    def extract_payloads(self, state: AgentState) -> Dict[str, Any]:
+        """
+        루트 메서드의 전체 파라미터에서 클라이언트가 전송해야 하는 순수 페이로드와 필수 헤더를 추출합니다.
+        """
+        contexts = state.test_contexts
+        logger.info(f"{len(contexts)}개 루트 그룹에 대한 Payload 추출 중...")
+        
+        parser = JsonOutputParser(pydantic_object=PayloadExtractionResult)
+        chain = PAYLOAD_EXTRACTION_PROMPT | self.llm | parser
+        
+        for i, ctx in enumerate(contexts):
+            # 이미 추출되었거나 평가 통과한 경우 스킵
+            if ctx.filtered_payloads is not None or ctx.evaluation_passed:
+                continue
+                
+            try:
+                root_code = ctx.root_method.code if ctx.root_method.code else "(No Code)"
+                params_json = json.dumps([p.model_dump(exclude_none=True) for p in ctx.parameters], indent=2, ensure_ascii=False)
+                
+                inputs = {
+                    "root_method_code": root_code[:2000],
+                    "raw_parameters": params_json,
+                    "format_instructions": parser.get_format_instructions()
+                }
+                
+                result = chain.invoke(inputs)
+                
+                # PayloadExtractionResult 형태로 저장
+                ctx.filtered_payloads = result.get('payload_schema', {})
+                
+                # Pydantic v2 Serialization Warning 방지: dict를 HeaderInfo 객체로 명시적 변환
+                raw_headers = result.get('required_headers', [])
+                ctx.required_headers = [HeaderInfo(**h) if isinstance(h, dict) else h for h in raw_headers]
+                
+                logger.info(f"트레이스 {i} Payload 추출 성공. headers: {len(ctx.required_headers)}개")
+                
+            except Exception as e:
+                logger.error(f"트레이스 {i} Payload 추출 실패: {e}")
+                # 기본값 폴백 (원본 유지)
+                ctx.filtered_payloads = {}
+                ctx.required_headers = []
+                
+        return {"test_contexts": contexts}
 
     def generate_scenarios(self, state: AgentState) -> Dict[str, Any]:
         """
@@ -192,7 +190,8 @@ class IntegratedTestAgentNodes:
         
         logger.info(f"{len(contexts)}개 루트 그룹에 대한 시나리오 생성 중...")
         
-        chain = SCENARIO_GENERATION_PROMPT | self.llm | StrOutputParser()
+        parser = JsonOutputParser()
+        chain = SCENARIO_GENERATION_PROMPT | self.llm | parser
         
         for i, ctx in enumerate(contexts):
             # 이미 평가를 통과한 경우 건너뜀
@@ -233,8 +232,9 @@ Target Code:
 
                 # LLM 입력 준비 (최적화: None 값 제외 및 불필요 메타데이터 제거)
                 
-                # 1. 파라미터 최적화
-                params_json = json.dumps([p.model_dump(exclude_none=True) for p in ctx.parameters], indent=2, ensure_ascii=False)
+                # 1. 파라미터 최적화 (이전에는 전체를 보냈지만 이제 필터링된 페이로드와 헤더를 보냄)
+                payload_schema_json = json.dumps(ctx.filtered_payloads if ctx.filtered_payloads is not None else {}, indent=2, ensure_ascii=False)
+                required_headers_json = json.dumps(ctx.required_headers if ctx.required_headers else [], indent=2, ensure_ascii=False)
                 
                 # 2. 이전 시나리오 요약 (재시도 시 전체 덤프 대신 핵심 필드만 전달)
                 previous_scenarios_json = "None"
@@ -253,17 +253,17 @@ Target Code:
                 inputs = {
                     "root_method": root_context,
                     "validation_context": validation_context,
-                    "parameters": params_json,
+                    "payload_schema": payload_schema_json,
+                    "required_headers": required_headers_json,
                     "feedback": ctx.feedback if ctx.feedback else "None",
-                    "previous_scenarios": previous_scenarios_json
+                    "previous_scenarios": previous_scenarios_json,
+                    "format_instructions": "Return a valid JSON array of objects. Do NOT include markdown blocks like ```json."
                 }
                 
-                result_text = chain.invoke(inputs)
-                
                 try:
-                    result = self._parse_json_safely(result_text)
+                    result = chain.invoke(inputs)
                 except Exception as e:
-                    logger.error(f"트레이스 {i} 시나리오 파싱 실패: {e}")
+                    logger.error(f"트레이스 {i} 시나리오 생성/파싱 실패: {e}")
                     raise e
                 
                 # 결과를 GeneratedScenario 객체로 파싱
@@ -304,7 +304,8 @@ Target Code:
         contexts = state.test_contexts
         logger.info("시나리오 평가 중 (Critic 모드)...")
         
-        chain = SCENARIO_EVALUATION_PROMPT | self.llm | StrOutputParser()
+        parser = JsonOutputParser(pydantic_object=EvaluationResult)
+        chain = SCENARIO_EVALUATION_PROMPT | self.llm | parser
         
         has_failure = False
         
@@ -344,13 +345,12 @@ Target Code:
                 
                 scenarios_text = json.dumps([s.model_dump() for s in ctx.generated_scenarios], indent=2, ensure_ascii=False)
                 
-                result_text = chain.invoke({
-                    "validation_context": validation_context,
-                    "scenarios": scenarios_text
-                })
-                
                 try:
-                    result = self._parse_json_safely(result_text)
+                    result = chain.invoke({
+                        "validation_context": validation_context,
+                        "scenarios": scenarios_text,
+                        "format_instructions": parser.get_format_instructions()
+                    })
                 except Exception as e:
                     logger.error(f"트레이스 {i} 평가 파싱 실패: {e}")
                     raise e
