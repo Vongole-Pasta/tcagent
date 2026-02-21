@@ -34,9 +34,9 @@ def create_agent_graph(db_client: DBClient):
 
     def should_retry(state: AgentState):
         """피드백에 기반하여 트레이스 재생성이 필요한지 확인합니다."""
-        for ctx in state.test_contexts:
+        for scenario_state in state.scenario_states.values():
             # 평가 실패 AND 재시도 횟수 제한 미만인 경우
-            if not ctx.evaluation_passed and ctx.retry_count < 2:
+            if not scenario_state.evaluation_passed and scenario_state.retry_count < 2:
                 return "retry"
         return "end"
 
