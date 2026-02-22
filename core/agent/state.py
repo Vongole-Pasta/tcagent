@@ -3,27 +3,28 @@ import uuid
 from pydantic import BaseModel, Field
 
 class ParameterInfo(BaseModel):
-    """타입 세부 정보를 포함한 파라미터 정보"""
+    """Neo4j PARAMETER 노드 사양과 일치하는 파라미터 정보 및 연관 DTO 구조"""
     name: str
     type: str
-    fields: List[Dict[str, str]] = []  # 내부 필드의 플랫 리스트 (사용되지 않음 또는 단순 사용)
-    dto_schema: Optional[Dict[str, Any]] = None # 복잡한 DTO 구조를 위한 재귀적인 딕셔너리
+    types: List[str] = Field(default_factory=list) # 파라미터 타입 리스트 (Logic용, 연결대상 분해)
+    index: int = 0 # 인자 순서
+    dto_schema: Optional[Dict[str, Any]] = None # 복잡한 DTO 구조를 위한 딕셔너리
 
 class HeaderInfo(BaseModel):
-    key: str = Field(description="The name of the HTTP header (e.g., 'Authorization', 'X-API-Key')")
-    value: str = Field(description="A sample value or placeholder for the header")
+    key: str = Field(description="HTTP header name (e.g. 'Authorization')")
+    value: str = Field(description="Header value or placeholder")
 
 class PayloadExtractionResult(BaseModel):
     """LLM이 추출한 순수 클라이언트 전송용 페이로드 및 헤더 정보"""
-    payload_schema: Dict[str, Any] = Field(description="The JSON schema structure representing ONLY the data the client needs to send in the body or query.")
-    required_headers: List[HeaderInfo] = Field(description="List of HTTP headers required for this request (e.g., Authorization due to interceptors/filters, or explicit @RequestHeader args).", default_factory=list)
+    payload_schema: Dict[str, Any] = Field(description="Pure JSON schema for client payload body/query")
+    required_headers: List[HeaderInfo] = Field(description="List of required HTTP headers", default_factory=list)
 
 class EvaluationResult(BaseModel):
     """LLM이 시나리오 평가 후 반환하는 결과 형식"""
-    thought_process: str = Field(description="Step by step reasoning for the evaluation")
+    thought_process: str = Field(description="Step-by-step reasoning")
     decision: str = Field(description="'PASS' or 'FAIL'")
-    score: int = Field(description="Score from 0 to 100")
-    feedback: str = Field(description="Specific feedback if score < 100, otherwise empty")
+    score: int = Field(description="Score (0-100)")
+    feedback: str = Field(description="Feedback if score < 100")
 
 
 class MethodNode(BaseModel):
@@ -36,20 +37,20 @@ class MethodNode(BaseModel):
 
 class GeneratedScenario(BaseModel):
     """Excel 'VOD' 시트 컬럼 매핑"""
-    test_case_id: str = Field(description="Column 1: Test Case ID")
-    test_case_name: str = Field(description="Column 2: Test Case Name")
-    step_no: int = Field(description="Column 3: Step No")
-    description: str = Field(description="Column 4: Description")
-    pre_condition: str = Field(description="Column 5: Pre-condition")
-    procedure: str = Field(description="Column 6: Procedure")
-    expected_result: str = Field(description="Column 7: Expected Result")
-    scenario_id: str = Field(description="Column 17: Scenario ID")    
+    test_case_id: str = Field(description="Test Case ID")
+    test_case_name: str = Field(description="Test Case Name")
+    step_no: int = Field(description="Step No")
+    description: str = Field(description="Description")
+    pre_condition: str = Field(description="Pre-condition")
+    procedure: str = Field(description="Procedure")
+    expected_result: str = Field(description="Expected Result")
+    scenario_id: str = Field(description="Scenario ID")    
     root_method_signature: Optional[str] = None
     api_endpoint: Optional[str] = None
 
 class GeneratedScenarioResult(BaseModel):
     """LLM이 생성한 시나리오 목록 결과 래퍼"""
-    scenarios: List[GeneratedScenario] = Field(description="이 로직 검증을 위해 생성된 실제 실행 가능한 테스트 시나리오 목록. 반드시 최소 1개 이상 존재해야 합니다.")
+    scenarios: List[GeneratedScenario] = Field(description="List of executable test scenarios (min 1)")
 
 
 class TestContext(BaseModel):

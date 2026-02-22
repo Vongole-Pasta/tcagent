@@ -106,6 +106,8 @@ class IntegratedTestAgentNodes:
                             parameter_infos.append({
                                 "name": p_row['param_name'],
                                 "type": p_row['param_type'],
+                                "types": p_row.get('param_types', []),
+                                "index": p_row.get('param_index', 0),
                                 "dto_schema": clean_fields if clean_fields else None
                             })
 
@@ -159,7 +161,7 @@ class IntegratedTestAgentNodes:
                 
             try:
                 root_code = ctx.root_method.code if ctx.root_method.code else "(No Code)"
-                params_json = json.dumps([p.model_dump(exclude_none=True) for p in ctx.parameters], indent=2, ensure_ascii=False)
+                params_json = json.dumps([p.model_dump(exclude_none=True, exclude={'types', 'index'}) for p in ctx.parameters], indent=2, ensure_ascii=False)
                 
                 inputs = {
                     "root_method_code": root_code[:2000],
@@ -357,12 +359,29 @@ Target Code:
                 for tm in ctx.target_methods:
                     validation_context += f"--- Target Method (Changed Logic: {tm.name}) ---\n"
                     validation_context += f"Signature: {tm.signature}\n"
-                    if tm.code:
-                        validation_context += f"Code:\n{tm.code[:2000]}\n\n"
+                    
+                    tm_code = tm.code
+                    if not tm_code and tm.id == ctx.root_method.id:
+                        tm_code = "(Root 메서드와 동일하므로 위의 Root Code를 참조하세요.)"
+                    elif not tm_code:
+                        tm_code = "(Not Available)"
                     else:
-                        validation_context += "Code: (Not Available)\n\n"
+                        tm_code = tm_code[:2000]
+                        
+                    validation_context += f"Code:\n{tm_code}\n\n"
                 
-                scenarios_text = json.dumps([s.model_dump() for s in scenario_state.generated_scenarios], indent=2, ensure_ascii=False)
+                # 불필요한 메타데이터(엑셀 매핑용 ID 등)를 제외하고 평가에 꼭 필요한 핵심 정보만 추출
+                eval_scenarios = [
+                    {
+                        "test_case_name": s.test_case_name,
+                        "description": s.description,
+                        "procedure": s.procedure,
+                        "expected_result": s.expected_result,
+                        "api_endpoint": s.api_endpoint
+                    }
+                    for s in scenario_state.generated_scenarios
+                ]
+                scenarios_text = json.dumps(eval_scenarios, indent=2, ensure_ascii=False)
                 
                 try:
                     result = chain.invoke({

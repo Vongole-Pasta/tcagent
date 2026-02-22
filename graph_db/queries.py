@@ -65,6 +65,7 @@ class CypherQueries:
     RETURN p.index as param_index, 
            p.name as param_name, 
            p.type as param_type, 
+           p.types as param_types,
            collect({name: f.name, type: f.type}) as fields
     ORDER BY param_index
     """
