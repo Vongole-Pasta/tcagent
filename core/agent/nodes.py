@@ -10,8 +10,8 @@ from pydantic import BaseModel, Field
 from config import Config
 from infra.db_client import DBClient
 from graph_db.queries import CypherQueries
-from core.agent.state import AgentState, MethodNode, TestContext, ScenarioGenerationState, GeneratedScenario, PayloadExtractionResult, EvaluationResult, HeaderInfo, GeneratedScenarioResult
-from core.agent.prompts import SCENARIO_GENERATION_PROMPT, TEST_STRATEGY_PROMPT, SCENARIO_EVALUATION_PROMPT, PAYLOAD_EXTRACTION_PROMPT
+from core.agent.state import AgentState, MethodNode, TestContext, ScenarioGenerationState, GeneratedScenario, EvaluationResult, GeneratedScenarioResult
+from core.agent.prompts import SCENARIO_GENERATION_PROMPT, SCENARIO_EVALUATION_PROMPT
 
 logger = logging.getLogger(__name__)
 
@@ -143,50 +143,7 @@ class IntegratedTestAgentNodes:
         logger.info(f"여러 대상을 포괄하는 {len(test_contexts)}개의 고유 루트 경로를 추적했습니다.")
         return {"test_contexts": test_contexts, "scenario_states": scenario_states}
 
-    def extract_payloads(self, state: AgentState) -> Dict[str, Any]:
-        """
-        루트 메서드의 전체 파라미터에서 클라이언트가 전송해야 하는 순수 페이로드와 필수 헤더를 추출합니다.
-        """
-        contexts = state.test_contexts
-        logger.info(f"{len(contexts)}개 루트 그룹에 대한 Payload 추출 중...")
-        
-        parser = JsonOutputParser(pydantic_object=PayloadExtractionResult)
-        chain = PAYLOAD_EXTRACTION_PROMPT | self.llm | parser
-        
-        for i, ctx in enumerate(contexts):
-            scenario_state = state.scenario_states[ctx.context_id]
-            # 이미 추출되었거나 평가 통과한 경우 스킵
-            if ctx.filtered_payloads is not None or scenario_state.evaluation_passed:
-                continue
-                
-            try:
-                root_code = ctx.root_method.code if ctx.root_method.code else "(No Code)"
-                params_json = json.dumps([p.model_dump(exclude_none=True, exclude={'types', 'index'}) for p in ctx.parameters], indent=2, ensure_ascii=False)
-                
-                inputs = {
-                    "root_method_code": root_code[:2000],
-                    "raw_parameters": params_json,
-                    "format_instructions": parser.get_format_instructions()
-                }
-                
-                result = chain.invoke(inputs)
-                
-                # PayloadExtractionResult 형태로 저장
-                ctx.filtered_payloads = result.get('payload_schema', {})
-                
-                # Pydantic v2 Serialization Warning 방지: dict를 HeaderInfo 객체로 명시적 변환
-                raw_headers = result.get('required_headers', [])
-                ctx.required_headers = [HeaderInfo(**h) if isinstance(h, dict) else h for h in raw_headers]
-                
-                logger.info(f"트레이스 {i} Payload 추출 성공. headers: {len(ctx.required_headers)}개")
-                
-            except Exception as e:
-                logger.error(f"트레이스 {i} Payload 추출 실패: {e}")
-                # 기본값 폴백 (원본 유지)
-                ctx.filtered_payloads = {}
-                ctx.required_headers = []
-                
-        return {"test_contexts": contexts}
+
 
     def generate_scenarios(self, state: AgentState) -> Dict[str, Any]:
         """
@@ -240,12 +197,7 @@ Target Code:
 
                 # LLM 입력 준비 (최적화: None 값 제외 및 불필요 메타데이터 제거)
                 
-                # 1. 파라미터 최적화 (이전에는 전체를 보냈지만 이제 필터링된 페이로드와 헤더를 보냄)
-                payload_schema_json = json.dumps(ctx.filtered_payloads if ctx.filtered_payloads is not None else {}, indent=2, ensure_ascii=False)
-                
-                # HeaderInfo 모델 리스트를 딕셔너리 리스트로 변환하여 json.dumps 직렬화 문제 해결
-                headers_list = [h.model_dump() for h in ctx.required_headers] if ctx.required_headers else []
-                required_headers_json = json.dumps(headers_list, indent=2, ensure_ascii=False)
+
                 # 2. 이전 시나리오 요약 (재시도 시 전체 덤프 대신 핵심 필드만 전달)
                 previous_scenarios_json = "None"
                 if scenario_state.generated_scenarios:
@@ -263,8 +215,6 @@ Target Code:
                 inputs = {
                     "root_method": root_context,
                     "validation_context": validation_context,
-                    "payload_schema": payload_schema_json,
-                    "required_headers": required_headers_json,
                     "feedback": scenario_state.feedback if scenario_state.feedback else "None",
                     "previous_scenarios": previous_scenarios_json,
                     "format_instructions": parser.get_format_instructions()
@@ -419,52 +369,4 @@ Target Code:
 
         return {"scenario_states": state.scenario_states} # 피드백 상태 반영을 위한 업데이트
 
-    def synthesize_strategy(self, state: AgentState) -> Dict[str, Any]:
-        """
-        식별된 대상 및 루트를 기반으로 테스트 전략 요약을 생성합니다.
-        """
-        targets = state.target_methods
-        contexts = state.test_contexts
-        
-        logger.info(f"{len(targets)}개 대상 및 {len(contexts)}개 루트에 대한 전략 합성 중...")
-        
-        # 1. 대상 요약
-        target_summary = ""
-        for t in targets:
-            target_summary += f"- [{t.status}] {t.name} ({t.signature})\n"
-        
-        # 2. 루트 요약
-        trace_summary = ""
-        for ctx in contexts:
-            entry_point = ctx.root_method.signature
-            
-            # API Endpoint 정보 추가 (시나리오 생성 결과 기반)
-            api_info = ""
-            scenario_state = state.scenario_states.get(ctx.context_id)
-            if scenario_state and scenario_state.generated_scenarios:
-                # 첫 번째 시나리오의 엔드포인트를 사용하거나, 고유한 엔드포인트들을 나열
-                endpoints = set(s.api_endpoint for s in scenario_state.generated_scenarios if s.api_endpoint)
-                if endpoints:
-                    api_info = f" (API: {', '.join(endpoints)})"
-            
-            trace_summary += f"- Entry Point: {entry_point}{api_info}\n"
-            trace_summary += f"  - Target Methods: {len(ctx.target_methods)} methods\n"
-        
-        if not targets:
-            return {"test_strategy_summary": "변경된 사항이 감지되지 않았습니다."}
 
-        # 3. LLM 호출
-        chain = TEST_STRATEGY_PROMPT | self.llm | StrOutputParser()
-        
-        inputs = {
-            "target_summary": target_summary,
-            "trace_summary": trace_summary
-        }
-        
-        try:
-            strategy_text = chain.invoke(inputs)
-            logger.info("전략 합성 성공.")
-            return {"test_strategy_summary": strategy_text}
-        except Exception as e:
-            logger.error(f"전략 합성 실패: {e}")
-            return {"test_strategy_summary": f"전략 수립 중 오류 발생: {e}"}

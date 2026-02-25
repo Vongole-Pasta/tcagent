@@ -10,14 +10,7 @@ class ParameterInfo(BaseModel):
     index: int = 0 # 인자 순서
     dto_schema: Optional[Dict[str, Any]] = None # 복잡한 DTO 구조를 위한 딕셔너리
 
-class HeaderInfo(BaseModel):
-    key: str = Field(description="HTTP header name (e.g. 'Authorization')")
-    value: str = Field(description="Header value or placeholder")
 
-class PayloadExtractionResult(BaseModel):
-    """LLM이 추출한 순수 클라이언트 전송용 페이로드 및 헤더 정보"""
-    payload_schema: Dict[str, Any] = Field(description="Pure JSON schema for client payload body/query")
-    required_headers: List[HeaderInfo] = Field(description="List of required HTTP headers", default_factory=list)
 
 class EvaluationResult(BaseModel):
     """LLM이 시나리오 평가 후 반환하는 결과 형식"""
@@ -59,8 +52,6 @@ class TestContext(BaseModel):
     root_method: MethodNode
     target_methods: List[MethodNode] = [] # 이 Root Method를 통해 도달 가능한 검증 대상 메서드들
     parameters: List[ParameterInfo] = []
-    filtered_payloads: Optional[Dict[str, Any]] = None # 순수 클라이언트 데이터 스키마
-    required_headers: List[HeaderInfo] = [] # 인증 등을 위한 필수 헤더 목록
 
 class ScenarioGenerationState(BaseModel):
     """LLM 워크플로우를 거치며 생성, 평가, 갱신되는 가변적인 상태값"""
@@ -81,4 +72,3 @@ class AgentState(BaseModel):
     target_methods: List[MethodNode] = []
     test_contexts: List[TestContext] = []
     scenario_states: Dict[str, ScenarioGenerationState] = {} # context_id를 키로 가지는 맵
-    test_strategy_summary: Optional[str] = None
