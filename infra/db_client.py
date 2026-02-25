@@ -2,7 +2,8 @@ from neo4j import GraphDatabase
 import logging
 from config import Config
 
-logging.basicConfig(level=logging.INFO)
+# 주의: logging.basicConfig()는 앱 진입점(api/main.py)에서 한 번만 호출해야 합니다.
+# 모듈 레벨에서 호출하면 다른 모듈의 로깅 설정을 덮어쓸 수 있습니다.
 logger = logging.getLogger(__name__)
 
 class DBClient:
@@ -54,7 +55,7 @@ class DBClient:
         queries = [
             "CREATE CONSTRAINT IF NOT EXISTS FOR (f:FILE) REQUIRE f.path IS UNIQUE",
             "CREATE INDEX IF NOT EXISTS FOR (f:FILE) ON (f.name)",
-            "CREATE INDEX IF NOT EXISTS FOR (t:TYPE_DECL) ON (t.fullName)",
+            "CREATE INDEX IF NOT EXISTS FOR (t:TYPE) ON (t.fullName)",
             "CREATE INDEX IF NOT EXISTS FOR (m:METHOD) ON (m.signature)"
         ]
         for q in queries:
