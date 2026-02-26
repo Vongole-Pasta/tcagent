@@ -12,6 +12,8 @@ eggs/
 .eggs/
 lib/
 lib64/
+# 이건 frontend에서 버전관리 해야합니다. 버전관리 무시 예외사항으로 두겠습니다.
+!frontend/src/lib/
 parts/
 sdist/
 var/
