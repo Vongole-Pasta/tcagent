@@ -55,3 +55,11 @@ tests/
 # Data
 *.xlsx
 *.csv
+
+# Node.js / Frontend
+node_modules/
+.next/
+next-env.d.ts
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
