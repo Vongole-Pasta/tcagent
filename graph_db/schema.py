@@ -3,6 +3,10 @@ Graph Database Schema Definition
 Auto-generated from GrahpRag Database Inspection
 """
 
+class ParamInfo:
+    name: str           # 파라미터 이름
+    type: TypeInfo      # 파라미터 타입
+
 # generic 타입 포함, 타입을 나타내는 정보
 class TypeInfo:
     given:  str         # type 그대로 (예: List<User>)
@@ -10,8 +14,8 @@ class TypeInfo:
 
 # Enum Constant 내부 값을 나타내는 정보
 class ConstantInfo:
-    name:   str
-    value:  str
+    name:   str         # 상수 이름
+    value:  str         # 상수 값
 
 NODE_SCHEMA = {
     # [FILE] (파일 노드)
@@ -48,7 +52,7 @@ NODE_SCHEMA = {
         "hash":         str,            # 메서드 바디 해시값 (변경 감지용)
         "signature":    str,            # 함수 시그니처 (예: public ResponseEntity<UserDto> getUserById(String id))
         "name":         str,            # 메서드 이름
-        "params":       list[TypeInfo], # 파라미터 정보(JSON 배열)
+        "params":       list[ParamInfo],# 파라미터 정보(JSON 배열)
         "return_type":  TypeInfo,       # 리턴타입 정보(JSON)
         "endpoint_uri": str,            # API 엔드포인트 URL (Controller인 경우)
         "http_method":  str,            # HTTP 메서드: [GET, POST, PUT, DELETE, PATCH, '']
