@@ -41,8 +41,10 @@ NODE_SCHEMA = {
     # [FIELD] (필드 노드): 클래스/객체의 멤버 변수, Enum 상수,
     # - 식별자(Identifier): 없음 (TYPE에 종속적)
     "FIELD": {
-        "name": str,        # 필드명 (예: email, ACTIVE)
-        "type": TypeInfo    # 필드 타입 (JSON)
+        "qualname":   str,      # 고유 식별자: com.example.model.User.email
+        "name": str,            # 필드명 (예: email, ACTIVE)
+        "type": TypeInfo,       # 필드 타입 (JSON)
+        "constraint": str       # 유효성 제약조건 (예: "@NotBlank", "@Pattern" 등)
     },
 
     # [METHOD] (메서드 노드)
