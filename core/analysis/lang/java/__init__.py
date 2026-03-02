@@ -1,1 +1,1 @@
-from .java_parser import JavaFlowStrategy
+from .java_parser import JavaParser
