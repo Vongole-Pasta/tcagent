@@ -23,7 +23,7 @@ def serve():
 
 def init_db():
     """DB 인덱스 및 제약조건을 생성합니다."""
-    from infra.db_client import DBClient
+    from graph_db.client import DBClient
     client = DBClient()
     client.create_constraints()
     print("✅ DB 인덱스 및 제약조건 생성 완료")

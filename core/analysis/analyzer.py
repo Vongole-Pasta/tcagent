@@ -1,7 +1,7 @@
 import logging
 import os
 import hashlib
-from infra.db_client import DBClient
+from graph_db.client import DBClient
 from .flow import Builder as FlowBuilder
 from config import Config
 from graph_db.queries import CypherQueries

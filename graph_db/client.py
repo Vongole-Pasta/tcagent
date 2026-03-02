@@ -35,7 +35,7 @@ class DBClient:
         """Cypher 쿼리를 실행하고 결과를 리스트 형태로 반환합니다."""
         if not self.driver:
             raise ConnectionError("Neo4j driver is not connected")
-        
+
         try:
             with self.driver.session() as session:
                 result = session.run(query, parameters)

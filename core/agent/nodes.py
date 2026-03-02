@@ -8,7 +8,7 @@ from langchain_core.output_parsers import JsonOutputParser, StrOutputParser
 from pydantic import BaseModel, Field
 
 from config import Config
-from infra.db_client import DBClient
+from graph_db.client import DBClient
 from graph_db.queries import CypherQueries
 from core.agent.state import AgentState, MethodNode, TestContext, ScenarioGenerationState, GeneratedScenario, EvaluationResult, GeneratedScenarioResult
 from core.agent.prompts import SCENARIO_GENERATION_PROMPT, SCENARIO_EVALUATION_PROMPT

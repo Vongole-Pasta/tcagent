@@ -1,4 +1,4 @@
-from infra.db_client import DBClient
+from graph_db.client import DBClient
 import hashlib
 import uuid
 

@@ -2,7 +2,7 @@
 from langgraph.graph import StateGraph, END
 from langgraph.checkpoint.memory import MemorySaver
 
-from infra.db_client import DBClient
+from graph_db.client import DBClient
 from core.agent.state import AgentState
 from core.agent.nodes import IntegratedTestAgentNodes
 
