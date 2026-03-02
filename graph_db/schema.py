@@ -1,21 +1,30 @@
 """
 Graph Database Schema Definition
-Auto-generated from GrahpRag Database Inspection
+Neo4j 그래프 DB의 노드/관계 스키마와 프로퍼티에 사용되는 JSON 타입을 정의합니다.
 """
+from typing import TypedDict
 
-class ParamInfo:
-    name: str           # 파라미터 이름
-    type: TypeInfo      # 파라미터 타입
 
-# generic 타입 포함, 타입을 나타내는 정보
-class TypeInfo:
-    given:  str         # type 그대로 (예: List<User>)
-    layout: list[str]   # type의 배치 (예 ['List', 'User'])
+# -----------------------------------------------------------------------
+# 프로퍼티 JSON 타입 (TypedDict)
+# -----------------------------------------------------------------------
 
-# Enum Constant 내부 값을 나타내는 정보
-class ConstantInfo:
-    name:   str         # 상수 이름
-    value:  str         # 상수 값
+class TypeInfo(TypedDict):
+    """제네릭 타입 포함, 타입을 나타내는 정보. DB에 JSON 문자열로 저장됩니다."""
+    given: str              # 원본 타입 문자열 (예: "List<User>")
+    layout: list[str]       # 개별 타입명 목록 (예: ["List", "User"])
+
+
+class ParamInfo(TypedDict):
+    """파라미터 정보. METHOD.params의 원소로 사용됩니다."""
+    name: str               # 파라미터명
+    type: TypeInfo           # 타입 정보
+
+
+class ConstantInfo(TypedDict):
+    """Enum 상수 정보. TYPE.constants의 원소로 사용됩니다."""
+    name: str               # 상수 이름
+    value: str              # 상수 값
 
 NODE_SCHEMA = {
     # [FILE] (파일 노드)
