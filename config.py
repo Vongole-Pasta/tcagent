@@ -1,4 +1,5 @@
 import os
+from pathlib import Path
 from pydantic_settings import BaseSettings
 from typing import Set
 from dotenv import load_dotenv
@@ -35,7 +36,7 @@ class Config(BaseSettings):
     MODEL_NAME: str = "gpt-4o"
 
     # 제외할 디렉토리 (클래스 변수, .env와 무관)
-    EXCLUDED_DIRS: Set[str] = {".git", "node_modules", "dist", "build", "__pycache__", ".next", ".idea", ".vscode", "uploads_repository"}
+    EXCLUDED_DIRS: Set[str] = {".git", "node_modules", "dist", "build", "__pycache__", ".next", ".idea", ".vscode", "uploads_repository", "src/test"}
 
     # 허용 확장자 (Java Only)
     ALLOWED_EXTENSIONS: dict = {".java": "java"}
@@ -57,3 +58,78 @@ class _ConfigCompat:
         return getattr(_config, name)
 
 Config = _ConfigCompat()
+
+
+def should_exclude_path(file_path: str, excluded_patterns: Set[str]) -> bool:
+    """
+    Determine if a file path should be excluded based on glob patterns.
+
+    Supports multiple pattern types:
+    - Exact paths: "src/test" matches "src/test/Main.java"
+    - Wildcards: "*/test/*" matches "any/test/Main.java"
+    - Recursive: "**/node_modules/**" matches at any depth
+
+    Args:
+        file_path: Path to check (e.g., "src/test/Main.java")
+        excluded_patterns: Set of patterns (e.g., {"src/test", "*/test/*"})
+
+    Returns:
+        True if path should be excluded, False otherwise
+
+    Examples:
+        >>> should_exclude_path("src/test/Main.java", {"src/test"})
+        True
+        >>> should_exclude_path("project/src/test/Foo.java", {"src/test"})
+        True
+        >>> should_exclude_path("src/main/Main.java", {"src/test"})
+        False
+        >>> should_exclude_path("any/test/Main.java", {"*/test/*"})
+        True
+        >>> should_exclude_path("a/b/node_modules/c.js", {"**/node_modules/**"})
+        True
+    """
+    if not file_path or not excluded_patterns:
+        return False
+
+    # Normalize path to use forward slashes
+    normalized_path = file_path.replace('\\', '/').strip('/')
+    path_obj = Path(normalized_path)
+    path_parts = path_obj.parts
+
+    for pattern in excluded_patterns:
+        # Normalize pattern
+        normalized_pattern = pattern.replace('\\', '/').strip('/')
+
+        # Strategy 1: Use pathlib's match for glob patterns
+        # This handles *, **, and other glob patterns automatically
+        try:
+            if path_obj.match(normalized_pattern):
+                return True
+
+            # Also try matching with pattern/* to catch directory contents
+            if path_obj.match(f"{normalized_pattern}/*"):
+                return True
+
+            # Try matching with **/pattern/** for nested matches
+            if path_obj.match(f"**/{normalized_pattern}/**"):
+                return True
+
+            # Try matching with **/pattern/* for nested matches
+            if path_obj.match(f"**/{normalized_pattern}/*"):
+                return True
+        except (ValueError, Exception):
+            # If pattern matching fails, fall back to segment matching
+            pass
+
+        # Strategy 2: Segment-based matching for non-wildcard patterns
+        # This handles cases like "a/b/c/src/test/Main.java" matching "src/test"
+        if '**' not in pattern and '*' not in pattern:
+            pattern_parts = tuple(normalized_pattern.split('/'))
+            pattern_len = len(pattern_parts)
+
+            # Check if pattern appears as consecutive segments in path
+            for i in range(len(path_parts) - pattern_len + 1):
+                if path_parts[i:i+pattern_len] == pattern_parts:
+                    return True
+
+    return False
