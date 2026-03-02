@@ -4,7 +4,7 @@ import uuid
 
 import os
 import logging
-from core.analysis.strategies.java import JavaFlowStrategy
+from core.analysis.lang.java.java_parser import JavaFlowStrategy
 from .parser import Factory
 
 logger = logging.getLogger(__name__)
