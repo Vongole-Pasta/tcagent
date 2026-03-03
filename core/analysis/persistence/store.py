@@ -12,7 +12,7 @@ from dataclasses import asdict
 from graph_db.client import DBClient
 
 from .models import (
-    ParsedType, ParsedField, ParsedFileResult,
+    ParsedType, ParsedField, ParsedMethod, ParsedFileResult,
 )
 
 logger = logging.getLogger(__name__)
@@ -36,6 +36,7 @@ class GraphWriter:
         # --- 메모리 저장소 ---
         self._types: dict[str, ParsedType] = {}         # qualname → ParsedType
         self._fields: dict[str, ParsedField] = {}       # qualname → ParsedField
+        self._methods: dict[str, ParsedMethod] = {}     # qualname → ParsedMethod
 
     # -----------------------------------------------------------------------
     # 수집 (DB 접근 없음)
@@ -47,6 +48,8 @@ class GraphWriter:
             self._types[t.qualname] = t
         for f in result.fields:
             self._fields[f.qualname] = f
+        for m in result.methods:
+            self._methods[m.qualname] = m
 
     # -----------------------------------------------------------------------
     # 일괄 기록
@@ -54,11 +57,12 @@ class GraphWriter:
 
     def flush(self):
         """메모리에 축적된 전체 데이터를 일괄 DB에 기록합니다."""
-        logger.info(f"Flushing to DB: {len(self._types)} types, {len(self._fields)} fields")
+        logger.info(f"Flushing to DB: {len(self._types)} types, {len(self._fields)} fields, {len(self._methods)} methods")
 
         # 1단계: 노드 생성
         self._flush_types()
         self._flush_fields()
+        self._flush_methods()
 
         # 메모리 정리
         self._clear()
@@ -73,6 +77,11 @@ class GraphWriter:
         """축적된 FIELD 노드를 일괄 DB에 기록합니다."""
         for f in self._fields.values():
             self._upsert_field(f)
+
+    def _flush_methods(self):
+        """축적된 METHOD 노드를 일괄 DB에 기록합니다."""
+        for m in self._methods.values():
+            self._upsert_method(m)
 
     # -----------------------------------------------------------------------
     # 개별 Upsert
@@ -122,6 +131,46 @@ class GraphWriter:
         except Exception as e:
             logger.error(f"Failed to upsert FIELD {parsed.qualname}: {e}")
 
+    def _upsert_method(self, parsed: ParsedMethod):
+        """METHOD 노드 upsert + TYPE→CONTAINS→METHOD 관계 연결."""
+        try:
+            params = asdict(parsed)
+            # list[ParamInfo] → JSON 문자열로 직렬화
+            params["params"] = json.dumps(params["params"], ensure_ascii=False)
+            # TypeInfo|None → JSON 문자열로 직렬화
+            params["return_type"] = json.dumps(params["return_type"], ensure_ascii=False) if params["return_type"] else ""
+            # 키명을 DB 스키마에 맞춤 (method_hash → hash, scan_id → last_scan_id)
+            params["hash"] = params.pop("method_hash")
+            params["last_scan_id"] = params.pop("scan_id") or ""
+
+            self.connector.execute_query("""
+                // qualname을 PK로 사용하여 METHOD 노드를 생성하거나 갱신합니다.
+                // status: NEW(신규생성), MODIFIED(변경됨), AS-IS(동일)
+                MERGE (m:METHOD {qualname: $qualname})
+                ON CREATE SET m.status = 'NEW'
+                ON MATCH SET m.status = CASE
+                    WHEN m.hash = $hash THEN 'AS-IS'
+                    ELSE 'MODIFIED'
+                END
+
+                SET m.name = $name,
+                    m.signature = $signature,
+                    m.source = $source,
+                    m.hash = $hash,
+                    m.params = $params,
+                    m.return_type = $return_type,
+                    m.endpoint_uri = $endpoint_uri,
+                    m.http_method = $http_method,
+                    m.last_scan_id = $last_scan_id
+
+                // 해당 METHOD가 속한 TYPE과 CONTAINS 관계를 연결합니다.
+                WITH m
+                MATCH (t:TYPE {qualname: $class_qualname})
+                MERGE (t)-[:CONTAINS]->(m)
+            """, params)
+        except Exception as e:
+            logger.error(f"Failed to upsert METHOD {parsed.qualname}: {e}")
+
     # -----------------------------------------------------------------------
     # 메모리 정리
     # -----------------------------------------------------------------------
@@ -130,3 +179,4 @@ class GraphWriter:
         """메모리 저장소를 초기화합니다."""
         self._types.clear()
         self._fields.clear()
+        self._methods.clear()
