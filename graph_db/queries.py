@@ -81,7 +81,7 @@ class CypherQueries:
     # Usage: api/routers/projects.py:38
     GET_ALL_METHODS = """
     MATCH (m:METHOD)<-[:CONTAINS]-(c:TYPE)
-    RETURN elementId(m) as id, m.name as name, m.signature as signature, m.endpoint as endpoint, m.http_method as http_method, m.status as status, c.name as class_name
+    RETURN elementId(m) as id, m.name as name, m.signature as signature, m.endpoint_uri as endpoint, m.http_method as http_method, m.status as status, c.name as class_name
     ORDER BY c.name, m.name
     """
     
@@ -91,11 +91,11 @@ class CypherQueries:
     # Usage: api/routers/projects.py:38
     GET_ALL_ENDPOINTS = """
     MATCH (m:METHOD)<-[:CONTAINS]-(c:TYPE)
-    WHERE m.endpoint IS NOT NULL
+    WHERE m.endpoint_uri IS NOT NULL
     OPTIONAL MATCH (m)-[:CALLS*0..]->(d:METHOD)
     WITH m, c, collect(DISTINCT d.status) as statuses
-    RETURN elementId(m) as id, m.name as name, m.endpoint as endpoint, m.http_method as http_method, statuses, c.name as class_name
-    ORDER BY m.endpoint
+    RETURN elementId(m) as id, m.name as name, m.endpoint_uri as endpoint, m.http_method as http_method, statuses, c.name as class_name
+    ORDER BY m.endpoint_uri
     """
 
 
@@ -134,10 +134,10 @@ class CypherQueries:
     # Happy Case 에이전트의 영향도 분석(Planner)에 사용됩니다.
     # Usage: core/agent/happy_case_agent.py:39
     GET_PATHS_TO_ENDPOINTS = """
-    MATCH path = (target:METHOD)-[:CALLS*0..]->(endpoint_m:METHOD)
+    MATCH path = (endpoint_m:METHOD)-[:CALLS*0..]->(target:METHOD)
     WHERE (elementId(target) = $method_id OR target.id = $method_id)
-      AND endpoint_m.endpoint IS NOT NULL
-    RETURN endpoint_m.endpoint as endpoint, 
+      AND endpoint_m.endpoint_uri IS NOT NULL
+    RETURN endpoint_m.endpoint_uri as endpoint, 
            endpoint_m.http_method as http_method, 
            endpoint_m.name as endpoint_method_name, 
            path
@@ -150,7 +150,7 @@ class CypherQueries:
     GET_1_DEPTH_DOWNSTREAM_METHODS = """
     MATCH (m:METHOD)-[:CALLS]->(d:METHOD)
     WHERE (elementId(m) = $method_id OR m.id = $method_id)
-    RETURN d.name as name, elementId(d) as id, d.signature as signature, d.source as source, d.returnType as returnType
+    RETURN d.name as name, elementId(d) as id, d.signature as signature, d.source as source, d.return_type as returnType
     """
 
     # --- Change Detection Helpers ---

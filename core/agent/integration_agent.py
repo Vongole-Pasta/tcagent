@@ -142,7 +142,8 @@ class IntegrationAgent:
                 source_node = path.nodes[0]
                 if "METHOD" in source_node.labels and source_node.get("signature") not in processed_signatures:
                     # 응답 DTO 추출 (ResponseEntity<T> 대응)
-                    ret_type = source_node.get("returnType")
+                    ret_type_obj = source_node.get("return_type")
+                    ret_type = ret_type_obj.get("given") if isinstance(ret_type_obj, dict) else ret_type_obj
                     if ret_type and "ResponseEntity<" in ret_type:
                         try:
                             # ResponseEntity<LoginResDto> -> LoginResDto
@@ -155,7 +156,7 @@ class IntegrationAgent:
                     
                     # 요청 DTO 추출
                     param_query = """
-                    MATCH (m:METHOD {signature: $signature})-[:HAS_PARAMETER]->(p:PARAMETER)-[:OF_TYPE]->(t:TYPE)
+                    MATCH (m:METHOD {signature: $signature})-[:HAS_PARAMETER]->(t:TYPE)
                     RETURN t.fullName as type_name LIMIT 1
                     """
                     param_res = self.db_client.execute_query(param_query, {"signature": source_node.get("signature")})
@@ -170,7 +171,7 @@ class IntegrationAgent:
                                 "name": node.get("name"),
                                 "signature": sig,
                                 "source": node.get("source"),
-                                "returnType": node.get("returnType")
+                                "returnType": node.get("return_type") # JSON object
                             })
                             processed_signatures.add(sig)
                             self._collect_dto_info(sig, all_dtos)
@@ -189,7 +190,7 @@ class IntegrationAgent:
                             "name": row["name"],
                             "signature": sig,
                             "source": row["source"],
-                            "returnType": row["returnType"]
+                            "returnType": row["returnType"] # JSON from query alias
                         })
                         processed_signatures.add(sig)
                         self._collect_dto_info(sig, all_dtos)
@@ -478,10 +479,10 @@ class IntegrationAgent:
         """메서드의 파라미터 및 리턴 타입과 연관된 DTO 필드 정보를 수집합니다."""
         query = """
         MATCH (m:METHOD {signature: $signature})
-        OPTIONAL MATCH (m)-[:HAS_PARAMETER]->(p:PARAMETER)-[:OF_TYPE]->(pt:TYPE)
-        OPTIONAL MATCH (pt)-[:HAS_FIELD]->(pf:FIELD)
+        OPTIONAL MATCH (m)-[:HAS_PARAMETER]->(pt:TYPE)
+        OPTIONAL MATCH (pt)-[:CONTAINS]->(pf:FIELD)
         OPTIONAL MATCH (m)-[:RETURNS]->(rt:TYPE)
-        OPTIONAL MATCH (rt)-[:HAS_FIELD]->(rf:FIELD)
+        OPTIONAL MATCH (rt)-[:CONTAINS]->(rf:FIELD)
         RETURN 
             pt.fullName as pt_name, pf.name as pf_name, pf.type as pf_type,
             rt.fullName as rt_name, rf.name as rf_name, rf.type as rf_type
@@ -495,7 +496,9 @@ class IntegrationAgent:
                 if t_name not in dtos_context:
                     dtos_context[t_name] = []
                 if row["pf_name"] and not any(f["name"] == row["pf_name"] for f in dtos_context[t_name]):
-                    dtos_context[t_name].append({"name": row["pf_name"], "type": row["pf_type"]})
+                    # Check if pf_type is dict
+                    p_f_type = row["pf_type"].get("given") if isinstance(row["pf_type"], dict) else row["pf_type"]
+                    dtos_context[t_name].append({"name": row["pf_name"], "type": p_f_type})
             
             # 리턴 타입 DTO 처리 (Response)
             if row["rt_name"]:
@@ -503,4 +506,6 @@ class IntegrationAgent:
                 if t_name not in dtos_context:
                     dtos_context[t_name] = []
                 if row["rf_name"] and not any(f["name"] == row["rf_name"] for f in dtos_context[t_name]):
-                    dtos_context[t_name].append({"name": row["rf_name"], "type": row["rf_type"]})
+                    # Check if rf_type is dict
+                    r_f_type = row["rf_type"].get("given") if isinstance(row["rf_type"], dict) else row["rf_type"]
+                    dtos_context[t_name].append({"name": row["rf_name"], "type": r_f_type})

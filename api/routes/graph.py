@@ -28,9 +28,9 @@ def process_path_result(results):
                     "labels": list(node.labels),
                     "name": node.get('name', 'Unknown'),
                     "signature": node.get('signature', ''),
-                    "endpoint": node.get('endpoint'),
+                    "endpoint": node.get('endpoint_uri'),
                     "http_method": node.get('http_method'),
-                    "type": "ENDPOINT" if node.get('endpoint') else "METHOD"
+                    "type": "ENDPOINT" if node.get('endpoint_uri') else "METHOD"
                 }
                 nodes[node_id] = node_data
         
