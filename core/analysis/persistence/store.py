@@ -12,7 +12,7 @@ from dataclasses import asdict
 from graph_db.client import DBClient
 
 from .models import (
-    ParsedType, ParsedFileResult,
+    ParsedType, ParsedField, ParsedFileResult,
 )
 
 logger = logging.getLogger(__name__)
@@ -35,6 +35,7 @@ class GraphWriter:
 
         # --- 메모리 저장소 ---
         self._types: dict[str, ParsedType] = {}         # qualname → ParsedType
+        self._fields: dict[str, ParsedField] = {}       # qualname → ParsedField
 
     # -----------------------------------------------------------------------
     # 수집 (DB 접근 없음)
@@ -44,6 +45,8 @@ class GraphWriter:
         """파싱 결과를 메모리에 축적합니다. DB 접근 없음."""
         for t in result.types:
             self._types[t.qualname] = t
+        for f in result.fields:
+            self._fields[f.qualname] = f
 
     # -----------------------------------------------------------------------
     # 일괄 기록
@@ -51,10 +54,11 @@ class GraphWriter:
 
     def flush(self):
         """메모리에 축적된 전체 데이터를 일괄 DB에 기록합니다."""
-        logger.info(f"Flushing to DB: {len(self._types)} types")
+        logger.info(f"Flushing to DB: {len(self._types)} types, {len(self._fields)} fields")
 
         # 1단계: 노드 생성
         self._flush_types()
+        self._flush_fields()
 
         # 메모리 정리
         self._clear()
@@ -64,6 +68,11 @@ class GraphWriter:
         """축적된 TYPE 노드를 일괄 DB에 기록합니다."""
         for t in self._types.values():
             self._upsert_type(t)
+
+    def _flush_fields(self):
+        """축적된 FIELD 노드를 일괄 DB에 기록합니다."""
+        for f in self._fields.values():
+            self._upsert_field(f)
 
     # -----------------------------------------------------------------------
     # 개별 Upsert
@@ -91,6 +100,28 @@ class GraphWriter:
         except Exception as e:
             logger.error(f"Failed to upsert TYPE {parsed.qualname}: {e}")
 
+    def _upsert_field(self, parsed: ParsedField):
+        """FIELD 노드 upsert + TYPE→CONTAINS→FIELD 관계 연결."""
+        try:
+            params = asdict(parsed)
+            # TypeInfo → JSON 문자열로 직렬화, 키명을 DB 스키마에 맞춤 (field_type → type)
+            params["type"] = json.dumps(params.pop("field_type"), ensure_ascii=False)
+
+            self.connector.execute_query("""
+                // qualname을 PK로 사용하여 FIELD 노드를 생성하거나 갱신합니다.
+                MERGE (f:FIELD {qualname: $qualname})
+                SET f.name = $name,
+                    f.type = $type,
+                    f.constraint = $constraint
+
+                // 해당 FIELD가 속한 TYPE과 CONTAINS 관계를 연결합니다.
+                WITH f
+                MATCH (t:TYPE {qualname: $type_qualname})
+                MERGE (t)-[:CONTAINS]->(f)
+            """, params)
+        except Exception as e:
+            logger.error(f"Failed to upsert FIELD {parsed.qualname}: {e}")
+
     # -----------------------------------------------------------------------
     # 메모리 정리
     # -----------------------------------------------------------------------
@@ -98,3 +129,4 @@ class GraphWriter:
     def _clear(self):
         """메모리 저장소를 초기화합니다."""
         self._types.clear()
+        self._fields.clear()

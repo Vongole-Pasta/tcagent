@@ -24,9 +24,10 @@ class ParsedType:
 @dataclass
 class ParsedField:
     """FIELD 노드로 변환될 파싱 결과."""
+    qualname: str           # 고유 식별자 (예: com.example.model.User.email)
     type_qualname: str      # 부모 TYPE의 qualname
     name: str               # 필드명
-    field_type: str         # TypeInfo JSON 문자열: {"given": ..., "layout": [...]}
+    field_type: TypeInfo    # TypeInfo JSON 문자열: {"given": ..., "layout": [...]}
     constraint: str = ""    # 유효성 제약조건 (예: "@NotBlank")
 
 

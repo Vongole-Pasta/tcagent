@@ -7,7 +7,7 @@ import logging
 import re
 
 from core.analysis.persistence.models import (
-    TypeInfo, ConstantInfo, ParsedType, ParsedFileResult,
+    TypeInfo, ConstantInfo, ParsedType, ParsedField, ParsedFileResult,
 )
 
 logger = logging.getLogger(__name__)
@@ -122,18 +122,105 @@ class JavaParser:
             constants=constants,
         ))
 
-        # body 탐색
-        body_node = node.child_by_field_name("body")
+        # 클래스 body 부분 탐색
+        body_node = node.child_by_field_name("body_node")
         if not body_node:
             for child in node.children:
                 if child.type in ["class_body", "interface_body", "enum_body"]:
                     body_node = child
                     break
 
+        # Record 컴포넌트를 필드로 변환 (formal_parameters는 node 자체에 존재)
+        if kind == "RECORD":
+            self._process_record(node, source_code, qualname, result)
+
+        # body_node가 존재하면 필드 추출과 내부 클래스 재귀 탐색을 수행합니다.
         if body_node:
+            # 필드 추출
+            self._process_field(body_node, source_code, qualname, result)
+
             # Inner Class 재귀 호출
             self._traverse_types(body_node, source_code, file_path, package_name,
                                  result, qualname, scan_id)
+
+    # -----------------------------------------------------------------------
+    # 필드 처리
+    # -----------------------------------------------------------------------
+    def _process_field(self, class_body_node, source_code: bytes, type_qualname: str, result: ParsedFileResult):
+        """클래스 바디에서 field_declaration 노드를 찾아 ParsedField로 수집합니다."""
+        for child in class_body_node.children:
+            if child.type == "field_declaration":
+                # 타입 추출
+                type_node = child.child_by_field_name("type")
+                if not type_node:
+                    continue
+                field_type_str = source_code[type_node.start_byte:type_node.end_byte].decode("utf-8")
+                field_type = self._build_typeinfo(field_type_str)
+
+                # 제약조건(어노테이션) 추출
+                constraint = self._extract_constraint(child, source_code)
+
+                # 변수 선언자 처리 (int a, b; 같은 다중 선언도 경우의 수에 포함)
+                for declarator in child.children:
+                    if declarator.type == "variable_declarator":
+                        name_node = declarator.child_by_field_name("name")
+                        if name_node:
+                            field_name = source_code[name_node.start_byte:name_node.end_byte].decode("utf-8")
+                            result.fields.append(ParsedField(
+                                qualname=f"{type_qualname}.{field_name}",
+                                type_qualname=type_qualname,
+                                name=field_name,
+                                field_type=field_type,
+                                constraint=constraint,
+                            ))
+
+    # RECORD를 필드로 변환 (다른 kind와 구조가 달라서 처리 방식도 다릅니다.)
+    def _process_record(self, record_node, source_code: bytes, type_qualname: str, result: ParsedFileResult):
+        """Record의 컴포넌트(파라미터)를 필드로 변환합니다."""
+        params_node = None
+        for child in record_node.children:
+            if child.type == "formal_parameters":
+                params_node = child
+                break
+
+        if not params_node:
+            return
+
+        for param in params_node.children:
+            if param.type == "formal_parameter":
+                type_node = None
+                name_node = None
+                for grandchild in param.children:
+                    if grandchild.type == "identifier":
+                        name_node = grandchild
+                    elif grandchild.type not in [",", "(", ")", "block_comment", "line_comment", "modifiers"]:
+                        type_node = grandchild
+
+                if name_node and type_node:
+                    field_name = source_code[name_node.start_byte:name_node.end_byte].decode("utf-8")
+                    field_type_str = source_code[type_node.start_byte:type_node.end_byte].decode("utf-8")
+                    result.fields.append(ParsedField(
+                        qualname=f"{type_qualname}.{field_name}",
+                        type_qualname=type_qualname,
+                        name=field_name,
+                        field_type=self._build_typeinfo(field_type_str),
+                    ))
+
+    # FIELD.constraint 추출 (어노테이션 기반)
+    def _extract_constraint(self, field_node, source_code: bytes) -> str:
+        """필드의 어노테이션을 추출합니다. (예: "@NotBlank", "@Size(max=100)")"""
+        modifiers_node = field_node.child_by_field_name("modifiers")
+        if not modifiers_node:
+            return ""
+
+        annotations = []
+        for child in modifiers_node.children:
+            if child.type in ["annotation", "marker_annotation"]:
+                annotations.append(
+                    source_code[child.start_byte:child.end_byte].decode("utf-8")
+                )
+
+        return ", ".join(annotations) if annotations else ""
 
     # -----------------------------------------------------------------------
     # Enum 상수 처리
