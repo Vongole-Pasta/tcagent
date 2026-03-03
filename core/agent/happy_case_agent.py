@@ -147,15 +147,17 @@ class HappyCaseAgent:
 
 [DTO 매핑 및 헤더 지침]
 - **중요**: `expected_result` (응답 바디)에는 오직 **[Public API DTO 구조]**에 정의된 필드만 포함해야 합니다.
-- **헤더 분리**: `token`이나 `Authorization` 키와 같이 코드상에서 헤더(`response.setHeader`, `HttpHeaders` 등)로 처리되는 정보는 절대 응답 바디(JSON)에 포함하지 마세요.
-- 만약 헤더 정보가 중요하다면, `expected_result` 문자열 내에 "Header: token=..." 과 같은 형식으로 바디 JSON 앞에 명시해 주세요.
-- **Login 관련**: 로그인 성공 시 발급되는 토큰은 대부분 헤더에 위치합니다. 이를 바디에 섞지 않도록 각별히 주의하세요.
+- **헤더 지침**: 
+  - `Content-Type: application/json`과 같이 모든 응답에 공통적이고 당연한 정보는 절대 포함하지 마세요.
+  - `Location` 헤더(리소스 생성 시)나 `Set-Cookie` 등 **비즈니스적으로 의미 있는 특정 헤더**가 코드상에서 확인될 경우에만, `expected_result`의 JSON 바디 앞에 "Header: Key=Value" 형식으로 명시하세요.
+  - 헤더 정보가 없다면 오직 순수한 JSON 바디만 반환하세요.
+- **보안/토큰**: `token`이나 `Authorization`과 같은 보안 정보는 헤더로 명시하되, 실제 값이 아닌 `<TOKEN>`과 같은 플레이스홀더를 사용하세요.
 
 [요구사항]
-1. 반드시 200 OK가 발생하는 성공 시나리오만 작성하세요.
+1. 반드시 200 OK(또는 생성 시 201 Created)가 발생하는 성공 시나리오만 작성하세요.
 2. `test_case`: "OOO 기능을 보장하기 위해 유효한 데이터를 전송함"과 같이 해당 API의 기능 위주로 한국어로 설명하세요.
 3. `input_data`: API 호출에 필요한 입력 데이터 JSON을 작성하세요.
-4. `expected_result`: 성공 시 예상되는 응답 데이터를 작성하세요. (헤더 정보가 있다면 바디 JSON 위에 명시)
+4. `expected_result`: 성공 시 예상되는 응답 데이터를 작성하세요. (의미 있는 헤더가 있다면 JSON 위에 명시)
 """
             try:
                 result = self.structured_llm.invoke(prompt)
