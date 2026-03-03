@@ -12,23 +12,33 @@ from graph_db.queries import CypherQueries
 
 logger = logging.getLogger(__name__)
 
+class ImpactGroup(TypedDict):
+    """엔드포인트별 식별 및 컨텍스트 정보 (Path 객체 제외)"""
+    url: str
+    http_method: str
+    name: str
+    related_signatures: List[str]  # Path 노드들의 시그니처 목록
+    source_methods: List[str]     # 영향을 준 소스 메서드 ID 목록
+
 class HappyCaseState(TypedDict):
     """
     에이전트의 전체 State를 정의합니다.
-    NotRequired를 사용하여 LangGraph Studio 등에서 필수 입력값이 아닌 필드들을 구분합니다.
+    NotRequired를 사용하여 필수 입력값이 아닌 필드들을 구분합니다.
     """
-    source_method_ids: List[str]
-    impact_groups: NotRequired[Dict[str, Any]]
-    scenarios: Annotated[NotRequired[List[Dict[str, Any]]], operator.add]
+    source_method_ids: List[str]                 # 입력: 영향도 분석 시작점 (또는 직접 선택한 엔드포인트)
+    
+    impact_groups: NotRequired[Dict[str, ImpactGroup]] # 분석 결과: 식별된 엔드포인트 그룹
+    worker_results: Annotated[NotRequired[List[Dict[str, Any]]], operator.add] # 워커 중간 결과물
+    scenarios: NotRequired[List[Dict[str, Any]]]       # 최종 결과물 (ID 부여 등 전처리 완료)
     errors: Annotated[NotRequired[List[str]], operator.add]
 
 class WorkerState(TypedDict):
     """
     개별 엔드포인트 작업을 위한 State입니다.
-    Send API를 통해 각 병렬 노드에 전달될 데이터 구조를 정의합니다.
+    데이터 전송 오버헤드를 줄이기 위해 필요한 필드만 포함합니다.
     """
-    endpoint: str
-    group: Dict[str, Any]
+    endpoint_url: str
+    group: ImpactGroup
 
 class HappyCaseOutput(BaseModel):
     """LLM이 생성할 Happy Case 시나리오 구조 (요구사항 반영)"""
@@ -44,113 +54,114 @@ class HappyCaseAgent:
         self.graph = self._build_graph()
 
     def planner_node(self, state: HappyCaseState):
-        """변경된 메서드들로부터 영향받는 엔드포인트를 식별합니다."""
+        """
+        입력된 메서드들로부터 영향을 받는(또는 직접 선택된) 엔드포인트를 식별합니다.
+        """
         raw_ids = state.get('source_method_ids', [])
-        logger.info(f"Targeting raw method IDs: {raw_ids}")
-
-        # 입력값 정제 (Sanitization): 문자열 리스트나 따옴표 래핑 처리
-        clean_ids = []
-        for rid in raw_ids:
-            if not isinstance(rid, str): continue
-            rid = rid.strip()
-            # 1. JSON 리스트 형태 감지 (예: '["id1"]')
-            if rid.startswith('[') and rid.endswith(']'):
-                try:
-                    parsed = json.loads(rid)
-                    if isinstance(parsed, list):
-                        clean_ids.extend([str(i).strip(" '\"") for i in parsed])
-                        continue
-                except: pass
-            # 2. 단순 따옴표/괄호 제거
-            clean_ids.append(rid.strip(" '\"[]"))
+        clean_ids = self._sanitize_ids(raw_ids)
+        logger.info(f"Cleaned IDs for planning: {clean_ids}")
         
-        logger.info(f"Cleaned method IDs: {clean_ids}")
-        
-        impact_groups = {}
+        # 2. 엔드포인트 식별 및 경로 시그니처 추출
+        impact_groups: Dict[str, ImpactGroup] = {}
         for m_id in clean_ids:
+            # GET_PATHS_TO_ENDPOINTS: m_id를 향해 호출하거나 m_id 자체가 엔드포인트인 경우 모두 식별
             results = self.db_client.execute_query(
                 CypherQueries.GET_PATHS_TO_ENDPOINTS,
                 {"method_id": m_id}
             )
-            logger.info(f"Method {m_id}: Found {len(results)} paths to endpoints")
+            
             for row in results:
                 endpoint = row["endpoint"]
                 if not endpoint: continue
+                
                 if endpoint not in impact_groups:
                     impact_groups[endpoint] = {
-                        "url": endpoint,
-                        "http_method": row["http_method"],
-                        "name": row["endpoint_method_name"],
-                        "paths": [],
-                        "source_methods": set()
+                        "url": endpoint,"http_method": row["http_method"],"name": row["endpoint_method_name"],
+                        "related_signatures": [],"source_methods": []
                     }
-                impact_groups[endpoint]["paths"].append(row["path"])
-                impact_groups[endpoint]["source_methods"].add(m_id)
+                
+                # Path 객체에서 시그니처만 추출
+                path_signatures = [node.get("signature") for node in row["path"].nodes if "METHOD" in node.labels]
+                
+                existing_sigs = set(impact_groups[endpoint]["related_signatures"])
+                impact_groups[endpoint]["related_signatures"].extend([s for s in path_signatures if s not in existing_sigs])
+                
+                if m_id not in impact_groups[endpoint]["source_methods"]:
+                    impact_groups[endpoint]["source_methods"].append(m_id)
 
-        for ep in impact_groups:
-            impact_groups[ep]["source_methods"] = list(impact_groups[ep]["source_methods"])
+        return {
+            "source_method_ids": clean_ids, 
+            "impact_groups": impact_groups
+        }
 
-        if not impact_groups:
-            logger.warning("No impact groups found. Graph may end here.")
-        
-        return {"impact_groups": impact_groups}
+    def _sanitize_ids(self, ids: List[str]) -> List[str]:
+        """ID 리스트를 정제합니다 (따옴표 제거 등)."""
+        clean = []
+        for rid in ids:
+            if not isinstance(rid, str): continue
+            rid = rid.strip()
+            if rid.startswith('[') and rid.endswith(']'):
+                try:
+                    parsed = json.loads(rid)
+                    if isinstance(parsed, list):
+                        clean.extend([str(i).strip(" '\"") for i in parsed]); continue
+                except: pass
+            clean.append(rid.strip(" '\"[]"))
+        return list(set(clean))
 
     def generator_worker_node(self, state: WorkerState):
         """
-        단일 엔드포인트에 대한 컨텍스트 수집(Retriever) 및 시나리오 생성(Generator)을 수행합니다.
-        병렬 처리 시 오버헤드를 줄이기 위해 두 단계를 하나의 노드로 통합했습니다.
+        정제된 시그니처 목록을 사용하여 컨텍스트 수집(Retriever) 및 시나리오 생성(Generator)을 수행합니다.
+        Neo4j Path 객체 대신 문자열 리스트를 사용하여 데이터 파싱 비용을 줄입니다.
         """
-        endpoint = state["endpoint"]
+        endpoint_url = state["endpoint_url"]
         group = state["group"]
         
-        # 1. 컨텍스트 수집 (기존 retriever_node 로직 통합)
+        # 1. 컨텍스트 수집 (시그니처 기반)
         methods_context = []
         all_dtos = {}
         processed_signatures = set()
         public_dto_names = set()
         
-        for path in group["paths"]:
-            source_node = path.nodes[0]
-            if "METHOD" in source_node.labels:
-                # 응답 DTO 추출
-                ret_type_obj = source_node.get("return_type")
-                ret_type = ret_type_obj.get("given") if isinstance(ret_type_obj, dict) else ret_type_obj
-                if ret_type and "ResponseEntity<" in ret_type:
-                    try:
-                        actual_dto = ret_type.split('<')[1].split('>')[0]
-                        public_dto_names.add(actual_dto)
-                    except: pass
-                elif ret_type and ret_type != "void":
-                    public_dto_names.add(ret_type)
-                
-                # 요청 DTO 추출
-                param_query = """
-                MATCH (m:METHOD {signature: $signature})-[:HAS_PARAMETER]->(t:TYPE)
-                RETURN t.fullName as type_name LIMIT 1
-                """
-                param_res = self.db_client.execute_query(param_query, {"signature": source_node.get("signature")})
-                if param_res:
-                    public_dto_names.add(param_res[0]["type_name"])
+        for sig in group["related_signatures"]:
+            if sig in processed_signatures: continue
+            
+            # 메서드 기본 정보 조회
+            method_res = self.db_client.execute_query(
+                "MATCH (m:METHOD {signature: $signature}) RETURN m", 
+                {"signature": sig}
+            )
+            if not method_res: continue
+            method_node = method_res[0]["m"]
+            
+            # 요청/응답 DTO 이름 추출
+            ret_type_obj = method_node.get("return_type")
+            ret_type = ret_type_obj.get("given") if isinstance(ret_type_obj, dict) else ret_type_obj
+            if ret_type and "ResponseEntity<" in ret_type:
+                try: actual_dto = ret_type.split('<')[1].split('>')[0]; public_dto_names.add(actual_dto)
+                except: pass
+            elif ret_type and ret_type != "void":
+                public_dto_names.add(ret_type)
+            
+            param_query = "MATCH (m:METHOD {signature: $signature})-[:HAS_PARAMETER]->(t:TYPE) RETURN t.fullName as type_name LIMIT 1"
+            param_res = self.db_client.execute_query(param_query, {"signature": sig})
+            if param_res: public_dto_names.add(param_res[0]["type_name"])
 
-            for node in path.nodes:
-                if "METHOD" in node.labels:
-                    sig = node.get("signature")
-                    if sig not in processed_signatures:
-                        methods_context.append({
-                            "name": node.get("name"),
-                            "signature": sig,
-                            "source": node.get("source"),
-                            "returnType": node.get("return_type")
-                        })
-                        processed_signatures.add(sig)
-                        self._collect_dto_info(sig, all_dtos)
+            # 컨텍스트 추가
+            methods_context.append({
+                "name": method_node.get("name"),
+                "signature": sig,
+                "source": method_node.get("source"),
+                "returnType": method_node.get("return_type")
+            })
+            processed_signatures.add(sig)
+            self._collect_dto_info(sig, all_dtos)
         
-        # DTO 분류
+        # DTO 분류 (Public vs Internal)
         public_dtos = {}
         internal_dtos = {}
         for t_name, fields in all_dtos.items():
-            is_public = any(p in t_name for p in public_dto_names)
-            if is_public: public_dtos[t_name] = fields
+            if any(p in t_name for p in public_dto_names): public_dtos[t_name] = fields
             else: internal_dtos[t_name] = fields
 
         context = {
@@ -159,12 +170,12 @@ class HappyCaseAgent:
             "internal_dtos": internal_dtos
         }
 
-        # 2. 시나리오 생성 (기존 generator_node 로직)
+        # 2. 시나리오 생성
         prompt = f"""
         당신은 백엔드 개발자이자 QA 엔지니어입니다. 제공된 코드 문맥을 분석하여 해당 API의 **Happy Case (성공 케이스, 200 OK)** 테스트 데이터를 생성해 주세요.
 
         [대상 엔드포인트]
-        - URL: {endpoint}
+        - URL: {endpoint_url}
         - Method: {group['http_method']}
         - Name: {group['name']}
 
@@ -182,7 +193,6 @@ class HappyCaseAgent:
         - **헤더 지침**: 
           - `Content-Type: application/json`과 같이 모든 응답에 공통적이고 당연한 정보는 절대 포함하지 마세요.
           - `Location` 헤더(리소스 생성 시)나 `Set-Cookie` 등 **비즈니스적으로 의미 있는 특정 헤더**가 코드상에서 확인될 경우에만, `expected_result`의 JSON 바디 앞에 "Header: Key=Value" 형식으로 명시하세요.
-          - 헤더 정보가 없다면 오직 순수한 JSON 바디만 반환하세요.
         - **보안/토큰**: `token`이나 `Authorization`과 같은 보안 정보는 헤더로 명시하되, 실제 값이 아닌 `<TOKEN>`과 같은 플레이스홀더를 사용하세요.
 
         [요구사항]
@@ -194,19 +204,31 @@ class HappyCaseAgent:
         
         try:
             result = self.structured_llm.invoke(prompt)
-            # test_case_id는 최종 취합 후 부여하거나 고유하게 생성
             scenario = {
-                "endpoint": endpoint,
+                "endpoint": endpoint_url,
                 "http_method": group['http_method'],
-                "test_case_id": f"TC-GEN", 
                 "test_case": result.test_case,
                 "input_data": result.input_data,
                 "expected_result": result.expected_result
             }
-            return {"scenarios": [scenario]}
+            return {"worker_results": [scenario]}
         except Exception as e:
-            logger.error(f"Failed for {endpoint}: {e}")
-            return {"errors": [f"{endpoint}: {str(e)}"]}
+            logger.error(f"Failed for {endpoint_url}: {e}")
+            return {"errors": [f"{endpoint_url}: {str(e)}"]}
+
+    def formatter_node(self, state: HappyCaseState):
+        """
+        수집된 모든 중간 결과(`worker_results`)에 최종 ID를 부여하여 `scenarios`에 저장합니다.
+        """
+        raw_results = state.get("worker_results", [])
+        scenarios = []
+        for i, scenario in enumerate(raw_results):
+            # 복사하여 ID 부여
+            final_scen = scenario.copy()
+            final_scen["test_case_id"] = f"TC-{i+1:03d}"
+            scenarios.append(final_scen)
+        
+        return {"scenarios": scenarios}
 
     def _build_graph(self):
         def continue_to_workers(state: HappyCaseState):
@@ -223,19 +245,21 @@ class HappyCaseAgent:
             
             logger.info(f"Sending to {len(impact_groups)} workers for endpoints: {list(impact_groups.keys())}")
             return [
-                Send("generator_worker", {"endpoint": ep, "group": group})
+                Send("generator_worker", {"endpoint_url": ep, "group": group})
                 for ep, group in impact_groups.items()
             ]
 
         workflow = StateGraph(HappyCaseState)
         workflow.add_node("planner", self.planner_node)
         workflow.add_node("generator_worker", self.generator_worker_node)
+        workflow.add_node("formatter", self.formatter_node) # 마무리 노드 추가
         
         workflow.set_entry_point("planner")
-        # planner -> continue_to_workers 로직을 통해 n개의 병렬 worker로 분기
         workflow.add_conditional_edges("planner", continue_to_workers, ["generator_worker"])
-        # 각 worker의 응답은 HappyCaseState의 리스트에 자동으로 추가(operator.add)됨
-        workflow.add_edge("generator_worker", END)
+        
+        # worker들이 모두 종료되면 formatter로 집결
+        workflow.add_edge("generator_worker", "formatter")
+        workflow.add_edge("formatter", END)
         
         return workflow.compile()
 
@@ -246,17 +270,11 @@ class HappyCaseAgent:
         initial_state = {
             "source_method_ids": source_method_ids,
             "impact_groups": {},
+            "worker_results": [],
             "scenarios": [],
             "errors": []
         }
-        # 그래프 실행 (내부적으로 병렬 처리 및 결과 취합 발생)
-        final_state = self.graph.invoke(initial_state)
-        
-        # 취합된 전체 시나리오 결과에 최종 ID(TC-001...) 부여
-        for i, scenario in enumerate(final_state.get("scenarios", [])):
-            scenario["test_case_id"] = f"TC-{i+1:03d}"
-            
-        return final_state
+        return self.graph.invoke(initial_state)
 
     def _collect_dto_info(self, method_signature, dtos_context):
         query = """

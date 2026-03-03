@@ -77,7 +77,8 @@ async def get_batch_integration_test_scenarios(request: Request, method_ids: str
 @router.get("/happy-case/batch")
 async def get_happy_case_scenarios(request: Request, method_ids: str = None):
     """
-    프로젝트 내 지정된 메서드 또는 모든 변경(MODIFIED)된 메서드들을 취합하여 Happy Case(200 OK) 시나리오를 일괄 생성합니다.
+    지정된 메서드를 취합하여 Happy Case(200 OK) 시나리오를 일괄 생성합니다.
+    (메서드가 엔드포인트인 경우와 서비스 레이어인 경우를 모두 지원)
     """
     analyzer = getattr(request.app.state, "analyzer", None)
     if not analyzer:
@@ -102,7 +103,7 @@ async def get_happy_case_scenarios(request: Request, method_ids: str = None):
         logger.info(f"Generating happy-case scenarios for {len(target_ids)} methods...")
         
         agent = HappyCaseAgent(analyzer.connector)
-        result = agent.run(target_ids)
+        result = agent.run(source_method_ids=target_ids)
         
         return {
             "source_method_count": len(target_ids),
