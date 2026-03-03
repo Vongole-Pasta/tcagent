@@ -19,6 +19,7 @@ class ParamInfo(TypedDict):
     """파라미터 정보. METHOD.params의 원소로 사용됩니다."""
     name: str               # 파라미터명
     type: TypeInfo           # 타입 정보
+    annotation: str         # 어노테이션 (예: "@RequestAttribute", "@NotBlank") 등
 
 
 class ConstantInfo(TypedDict):
