@@ -1,0 +1,8 @@
+{
+  "dependencies": ["."],
+  "graphs": {
+    "integration_agent": "./core/agent/entrypoints.py:integration_graph",
+    "happy_case_agent": "./core/agent/entrypoints.py:happy_case_graph"
+  },
+  "env": ".env.dev"
+}

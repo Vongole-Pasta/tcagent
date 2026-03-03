@@ -13,15 +13,6 @@ def process_path_result(results):
     
     for row in results:
         path = row.get('path')
-        metadata = row.get('metadata', []) # Check for metadata
-        # Handle metadata which defaults to list of dicts from collect()
-        # Create map from id -> className
-        metadata_map = {}
-        if metadata:
-            for m in metadata:
-                if m and isinstance(m, dict):
-                     metadata_map[m.get('id')] = m.get('className')
-
         if not path:
             continue
             
@@ -39,8 +30,7 @@ def process_path_result(results):
                     "signature": node.get('signature', ''),
                     "endpoint": node.get('endpoint'),
                     "http_method": node.get('http_method'),
-                    "type": "ENDPOINT" if node.get('endpoint') else "METHOD",
-                    "className": metadata_map.get(node_id) # Add className
+                    "type": "ENDPOINT" if node.get('endpoint') else "METHOD"
                 }
                 nodes[node_id] = node_data
         
@@ -59,37 +49,6 @@ def process_path_result(results):
         "edges": list(edges.values())
     }
 
-def process_single_node(results):
-    """
-    Helper to convert single node result into 1-node graph
-    """
-    if not results:
-        return {"nodes": [], "edges": []}
-    
-    row = results[0]
-    node = row.get('m')
-    class_name = row.get('className')
-    
-    if not node:
-        return {"nodes": [], "edges": []}
-        
-    node_id = node.element_id
-    node_data = {
-        "id": node_id,
-        "labels": list(node.labels),
-        "name": node.get('name', 'Unknown'),
-        "signature": node.get('signature', ''),
-        "endpoint": node.get('endpoint'),
-        "http_method": node.get('http_method'),
-        "type": "ENDPOINT" if node.get('endpoint') else "METHOD",
-        "className": class_name
-    }
-    
-    return {
-        "nodes": [node_data],
-        "edges": []
-    }
-
 @router.get("/upstream/{method_id}")
 async def get_upstream_graph(method_id: str, request: Request):
     """
@@ -104,22 +63,8 @@ async def get_upstream_graph(method_id: str, request: Request):
             CypherQueries.GET_UPSTREAM_IMPACT, 
             {"method_id": method_id}
         )
-        
-        # If no results (empty list), try to fetch the single node
-        processed_graph = process_path_result(results)
-        
-        # If no nodes found (either no results or path processing yielded 0 nodes), try fallback
-        if not processed_graph['nodes']:
-            single_node_results = analyzer.connector.execute_query(
-                CypherQueries.GET_NODE_METADATA,
-                {"method_id": method_id}
-            )
-            return process_single_node(single_node_results)
-            
-        return processed_graph
+        return process_path_result(results)
     except Exception as e:
-        import traceback
-        traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/downstream/{method_id}")
@@ -136,18 +81,7 @@ async def get_downstream_graph(method_id: str, request: Request):
             CypherQueries.GET_DOWNSTREAM_FLOW, 
             {"method_id": method_id}
         )
-        
-        processed_graph = process_path_result(results)
-        
-        # If no nodes found, try fallback
-        if not processed_graph['nodes']:
-            single_node_results = analyzer.connector.execute_query(
-                CypherQueries.GET_NODE_METADATA,
-                {"method_id": method_id}
-            )
-            return process_single_node(single_node_results)
-            
-        return processed_graph
+        return process_path_result(results)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
