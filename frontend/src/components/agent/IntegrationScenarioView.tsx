@@ -11,8 +11,13 @@ import { Badge } from "@/components/ui/badge";
 import { FlaskConical, Code2, CheckCircle2, AlertCircle, ChevronDown, ChevronUp } from "lucide-react";
 
 export function IntegrationScenarioView() {
-    const { integrationScenarios, isAgentRunning, error } = useStore();
+    const { integrationScenarios, isAgentRunning, error, projectNodes } = useStore();
     const [openIndex, setOpenIndex] = useState<number | null>(0);
+
+    const getMethodName = (methodId: string) => {
+        const node = projectNodes.find(n => n.id === methodId);
+        return node ? node.name : methodId;
+    };
 
     if (isAgentRunning) {
         return (
@@ -48,11 +53,11 @@ export function IntegrationScenarioView() {
                 {integrationScenarios.map((scenario, index) => {
                     const isOpen = openIndex === index;
                     return (
-                        <div 
-                            key={index} 
+                        <div
+                            key={index}
                             className="border rounded-xl bg-card overflow-hidden shadow-sm"
                         >
-                            <button 
+                            <button
                                 className="w-full hover:bg-muted/50 transition-colors py-4 px-6 flex items-center justify-between group"
                                 onClick={() => setOpenIndex(isOpen ? null : index)}
                             >
@@ -63,13 +68,13 @@ export function IntegrationScenarioView() {
                                     <div className="space-y-1">
                                         <div className="font-mono text-sm font-bold">{scenario.endpoint}</div>
                                         <div className="text-xs text-muted-foreground line-clamp-1">
-                                            원인 메서드: {scenario.trigger_methods.map(m => `${m}()`).join(", ")}
+                                            원인 메서드: {scenario.trigger_methods.map(m => `${getMethodName(m)}()`).join(", ")}
                                         </div>
                                     </div>
                                 </div>
                                 {isOpen ? <ChevronUp className="h-4 w-4 text-muted-foreground" /> : <ChevronDown className="h-4 w-4 text-muted-foreground" />}
                             </button>
-                            
+
                             {isOpen && (
                                 <div className="px-6 pt-2 pb-6 space-y-6 border-t bg-muted/5">
 
@@ -104,13 +109,13 @@ export function IntegrationScenarioView() {
                                             <Code2 className="h-4 w-4" />
                                             <span>Request & Response</span>
                                         </div>
-                                        
+
                                         {/* Request */}
                                         <div className="space-y-2">
                                             <div className="flex items-center justify-between px-3 py-1.5 bg-blue-500/10 border-l-4 border-blue-500 rounded">
                                                 <span className="text-sm font-semibold text-blue-600">Request</span>
                                             </div>
-                                            
+
                                             {/* Request Headers */}
                                             {scenario.result.request.headers && (
                                                 <div className="bg-muted/50 p-3 rounded-lg border border-dashed">

@@ -17,7 +17,12 @@ import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { vscDarkPlus, prism } from 'react-syntax-highlighter/dist/esm/styles/prism';
 
 export function HappyCaseTableView() {
-    const { happyCaseScenarios } = useStore();
+    const { happyCaseScenarios, projectNodes } = useStore();
+
+    const getMethodName = (methodId: string) => {
+        const node = projectNodes.find(n => n.id === methodId);
+        return node ? node.name : methodId;
+    };
 
     if (happyCaseScenarios.length === 0) {
         return null;
@@ -46,6 +51,7 @@ export function HappyCaseTableView() {
                     <TableHeader className="bg-muted/50">
                         <TableRow>
                             <TableHead className="w-[80px] font-bold text-center">ID</TableHead>
+                            <TableHead className="w-[150px] font-bold text-center">Target 메서드</TableHead>
                             <TableHead className="w-auto font-bold text-center">테스트 케이스</TableHead>
                             <TableHead className="w-[30%] font-bold text-center">입력 데이터</TableHead>
                             <TableHead className="w-[30%] font-bold text-center">예상 결과</TableHead>
@@ -56,6 +62,21 @@ export function HappyCaseTableView() {
                             <TableRow key={index} className="hover:bg-muted/30 transition-colors">
                                 <TableCell className="font-mono text-xs font-bold text-center align-top pt-4">
                                     <Badge variant="secondary">{scenario.test_case_id}</Badge>
+                                </TableCell>
+                                <TableCell className="align-top pt-4 text-center">
+                                    <div className="flex flex-col gap-1 items-center">
+                                        {scenario.trigger_methods?.slice(0, 3).map((id, i) => (
+                                            <Badge key={i} variant="outline" className="bg-blue-50/50 text-blue-700 border-blue-200 text-[10px] py-0 px-1.5 font-medium max-w-[130px] truncate">
+                                                {getMethodName(id)}
+                                            </Badge>
+                                        ))}
+                                        {scenario.trigger_methods && scenario.trigger_methods.length > 3 && (
+                                            <span className="text-[10px] text-muted-foreground">외 {scenario.trigger_methods.length - 3}개</span>
+                                        )}
+                                        {(!scenario.trigger_methods || scenario.trigger_methods.length === 0) && (
+                                            <span className="text-[10px] text-muted-foreground">-</span>
+                                        )}
+                                    </div>
                                 </TableCell>
                                 <TableCell className="align-top pt-4 pb-4">
                                     <div className="space-y-2 min-w-0">
@@ -77,9 +98,9 @@ export function HappyCaseTableView() {
                                         <SyntaxHighlighter
                                             language="json"
                                             style={vscDarkPlus}
-                                            customStyle={{ 
-                                                margin: 0, 
-                                                padding: '12px', 
+                                            customStyle={{
+                                                margin: 0,
+                                                padding: '12px',
                                                 fontSize: '12px',
                                                 fontFamily: '"JetBrains Mono", "Fira Code", monospace',
                                                 textAlign: 'left'
@@ -101,9 +122,9 @@ export function HappyCaseTableView() {
                                         <SyntaxHighlighter
                                             language="json"
                                             style={prism}
-                                            customStyle={{ 
-                                                margin: 0, 
-                                                padding: '12px', 
+                                            customStyle={{
+                                                margin: 0,
+                                                padding: '12px',
                                                 fontSize: '12px',
                                                 fontFamily: '"JetBrains Mono", "Fira Code", monospace',
                                                 backgroundColor: '#f8fafc',

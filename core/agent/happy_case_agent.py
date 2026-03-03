@@ -165,7 +165,9 @@ class HappyCaseAgent:
                     "test_case_id": f"TC-{tc_count:03d}", # LLM 결과 대신 코드에서 직접 부여
                     "test_case": result.test_case,
                     "input_data": result.input_data,
-                    "expected_result": result.expected_result
+                    "expected_result": result.expected_result,
+                    "trigger_methods": list(group['source_methods']), # 영향 준 메서드 ID들
+                    "trigger_method_name": group['name']              # 엔드포인트 메서드명
                 })
                 tc_count += 1
             except Exception as e:
