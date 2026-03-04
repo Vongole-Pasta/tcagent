@@ -17,7 +17,12 @@ import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { vscDarkPlus, prism } from 'react-syntax-highlighter/dist/esm/styles/prism';
 
 export function HappyCaseTableView() {
-    const { happyCaseScenarios } = useStore();
+    const { happyCaseScenarios, projectNodes } = useStore();
+
+    const getMethodName = (methodId: string) => {
+        const node = projectNodes.find(n => n.id === methodId);
+        return node ? node.name : methodId;
+    };
 
     if (happyCaseScenarios.length === 0) {
         return null;
@@ -57,6 +62,7 @@ export function HappyCaseTableView() {
                                 <TableCell className="font-mono text-xs font-bold text-center align-top pt-4">
                                     <Badge variant="secondary">{scenario.test_case_id}</Badge>
                                 </TableCell>
+
                                 <TableCell className="align-top pt-4 pb-4">
                                     <div className="space-y-2 min-w-0">
                                         <div className="flex flex-wrap items-center gap-2">
@@ -77,9 +83,9 @@ export function HappyCaseTableView() {
                                         <SyntaxHighlighter
                                             language="json"
                                             style={vscDarkPlus}
-                                            customStyle={{ 
-                                                margin: 0, 
-                                                padding: '12px', 
+                                            customStyle={{
+                                                margin: 0,
+                                                padding: '12px',
                                                 fontSize: '12px',
                                                 fontFamily: '"JetBrains Mono", "Fira Code", monospace',
                                                 textAlign: 'left'
@@ -101,9 +107,9 @@ export function HappyCaseTableView() {
                                         <SyntaxHighlighter
                                             language="json"
                                             style={prism}
-                                            customStyle={{ 
-                                                margin: 0, 
-                                                padding: '12px', 
+                                            customStyle={{
+                                                margin: 0,
+                                                padding: '12px',
                                                 fontSize: '12px',
                                                 fontFamily: '"JetBrains Mono", "Fira Code", monospace',
                                                 backgroundColor: '#f8fafc',

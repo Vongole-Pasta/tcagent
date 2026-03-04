@@ -25,11 +25,11 @@ import { Activity, LayoutDashboard, Share2, TestTube } from "lucide-react";
 
 
 export default function Home() {
-  const { 
-    selectedNodeId, 
-    clearSelection, 
-    isLoading, 
-    viewMode, 
+  const {
+    selectedNodeId,
+    clearSelection,
+    isLoading,
+    viewMode,
     setViewMode,
     happyCaseScenarios,
     integrationScenarios,
@@ -48,9 +48,9 @@ export default function Home() {
 
       {/* Main Content */}
       <div className="flex-1 flex flex-col h-full relative min-w-0">
-        <Tabs 
-          value={viewMode} 
-          onValueChange={(v) => setViewMode(v as any)} 
+        <Tabs
+          value={viewMode}
+          onValueChange={(v) => setViewMode(v as any)}
           className="flex-1 flex flex-col h-full"
         >
           <div className="h-14 border-b flex items-center px-4 bg-background shrink-0 justify-between">
@@ -118,48 +118,48 @@ export default function Home() {
 
           <TabsContent value="results" className="flex-1 m-0 overflow-auto">
             <div className="p-8 h-full bg-slate-50">
-                <div className="max-w-5xl mx-auto space-y-8">
-                    <div className="space-y-1">
-                        <h2 className="text-2xl font-bold tracking-tight">Test Results</h2>
-                        <p className="text-muted-foreground">생성된 테스트 시나리오 및 케이스 목록입니다.</p>
-                    </div>
-
-                    {isAgentRunning && happyCaseScenarios.length === 0 && integrationScenarios.length === 0 ? (
-                        <Card className="border-2 border-primary/20 shadow-xl overflow-hidden bg-white/50 backdrop-blur-sm">
-                            <LoadingProgress />
-                        </Card>
-                    ) : (happyCaseScenarios.length > 0 || integrationScenarios.length > 0) ? (
-                        <div className="space-y-8">
-                            {happyCaseScenarios.length > 0 && (
-                                <div className="animate-in fade-in slide-in-from-bottom-4 duration-500">
-                                    <HappyCaseTableView />
-                                </div>
-                            )}
-
-                            {integrationScenarios.length > 0 && (
-                                <div className="animate-in fade-in slide-in-from-bottom-4 duration-500">
-                                    <h3 className="text-lg font-semibold mb-3 flex items-center gap-2">
-                                        <Activity className="h-5 w-5 text-blue-500" />
-                                        Integration Scenarios
-                                    </h3>
-                                    <Card className="border-2 border-primary/20 shadow-lg overflow-hidden">
-                                        <IntegrationScenarioView />
-                                    </Card>
-                                </div>
-                            )}
-                        </div>
-                    ) : (
-                        <Card className="items-center justify-center flex flex-col p-20 border-dashed border-2 bg-slate-50/50">
-                            <div className="bg-muted p-4 rounded-full mb-4">
-                                <TestTube className="h-8 w-8 text-muted-foreground" />
-                            </div>
-                            <h3 className="text-xl font-semibold mb-2">생성된 결과가 없습니다</h3>
-                            <p className="text-muted-foreground text-center max-w-md">
-                                왼쪽 사이드바에서 메서드를 선택한 후 <strong>Happy Case 생성</strong> 버튼을 클릭하여 테스트 데이터를 생성해 보세요.
-                            </p>
-                        </Card>
-                    )}
+              <div className="mx-auto space-y-8">
+                <div className="space-y-1">
+                  <h2 className="text-2xl font-bold tracking-tight">Test Results</h2>
+                  <p className="text-muted-foreground">생성된 테스트 시나리오 및 케이스 목록입니다.</p>
                 </div>
+
+                {isAgentRunning && happyCaseScenarios.length === 0 && integrationScenarios.length === 0 ? (
+                  <Card className="border-2 border-primary/20 shadow-xl overflow-hidden bg-white/50 backdrop-blur-sm">
+                    <LoadingProgress />
+                  </Card>
+                ) : (happyCaseScenarios.length > 0 || integrationScenarios.length > 0) ? (
+                  <div className="space-y-8">
+                    {happyCaseScenarios.length > 0 && (
+                      <div className="animate-in fade-in slide-in-from-bottom-4 duration-500">
+                        <HappyCaseTableView />
+                      </div>
+                    )}
+
+                    {integrationScenarios.length > 0 && (
+                      <div className="animate-in fade-in slide-in-from-bottom-4 duration-500">
+                        <h3 className="text-lg font-semibold mb-3 flex items-center gap-2">
+                          <Activity className="h-5 w-5 text-blue-500" />
+                          Integration Scenarios
+                        </h3>
+                        <Card className="border-2 border-primary/20 shadow-lg overflow-hidden">
+                          <IntegrationScenarioView />
+                        </Card>
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  <Card className="items-center justify-center flex flex-col p-20 border-dashed border-2 bg-slate-50/50">
+                    <div className="bg-muted p-4 rounded-full mb-4">
+                      <TestTube className="h-8 w-8 text-muted-foreground" />
+                    </div>
+                    <h3 className="text-xl font-semibold mb-2">생성된 결과가 없습니다</h3>
+                    <p className="text-muted-foreground text-center max-w-md">
+                      왼쪽 사이드바에서 메서드를 선택한 후 <strong>Happy Case 생성</strong> 버튼을 클릭하여 테스트 데이터를 생성해 보세요.
+                    </p>
+                  </Card>
+                )}
+              </div>
             </div>
           </TabsContent>
         </Tabs>

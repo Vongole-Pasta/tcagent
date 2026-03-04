@@ -5,6 +5,7 @@ interface MethodNode {
     id: string;
     name: string;
     signature?: string;
+    source?: string;
     endpoint?: string;
     http_method?: string;
     type: 'METHOD' | 'ENDPOINT';
@@ -41,6 +42,8 @@ interface HappyCaseScenario {
     expected_result: string;
     endpoint: string;
     http_method: string;
+    trigger_methods?: string[];
+    trigger_method_name?: string;
 }
 
 interface AppState {
@@ -59,6 +62,7 @@ interface AppState {
     isAgentRunning: boolean;
     selectedMethodIds: string[];
     viewMode: 'dashboard' | 'graph' | 'results';
+    codeSnapshots: Record<string, string>; // Diff를 위한 코드 스냅샷 (signature -> source)
 
     // Actions
     fetchProjectNodes: (projectId?: string) => Promise<void>;
@@ -102,6 +106,7 @@ export const useStore = create<AppState>((set, get) => ({
     isAgentRunning: false,
     selectedMethodIds: [],
     viewMode: 'dashboard',
+    codeSnapshots: {}, // 초기 스냅샷은 빈 객체
 
     // Project Management
     projects: [],
@@ -138,6 +143,22 @@ export const useStore = create<AppState>((set, get) => ({
             if (!res.ok) throw new Error('Failed to fetch nodes');
             const data = await res.json();
             set({ projectNodes: data.nodes });
+
+            // [Diff 기능] 초기 로딩 시 모든 메서드의 소스 코드를 스냅샷에 저장
+            // 이미 저장된 스냅샷은 덮어쓰지 않아 원본 코드를 보존합니다.
+            const { codeSnapshots } = get();
+            const newSnapshots: Record<string, string> = { ...codeSnapshots };
+            let addedCount = 0;
+            for (const node of data.nodes) {
+                if (node.signature && node.source && !newSnapshots[node.signature]) {
+                    newSnapshots[node.signature] = node.source;
+                    addedCount++;
+                }
+            }
+            if (addedCount > 0) {
+                console.log(`%c[Snapshot] %c${addedCount}개 메서드 소스 코드 캐싱 완료`, 'color: #4CAF50; font-weight: bold;', 'color: #2196F3;');
+                set({ codeSnapshots: newSnapshots });
+            }
         } catch (err: any) {
             set({ error: err.message });
         } finally {
@@ -157,11 +178,11 @@ export const useStore = create<AppState>((set, get) => ({
     setViewMode: (mode) => set({ viewMode: mode }),
 
     fetchUpstreamGraph: async (nodeId) => {
-        set((state) => ({ 
-            isLoading: true, 
-            error: null, 
-            selectedNodeId: nodeId, 
-            integrationScenarios: state.scenarioCache[nodeId] || [] 
+        set((state) => ({
+            isLoading: true,
+            error: null,
+            selectedNodeId: nodeId,
+            integrationScenarios: state.scenarioCache[nodeId] || []
         }));
         try {
             const res = await fetch(`${API_BASE}/graph/upstream/${nodeId}`);
@@ -182,11 +203,11 @@ export const useStore = create<AppState>((set, get) => ({
     },
 
     fetchDownstreamGraph: async (nodeId) => {
-        set((state) => ({ 
-            isLoading: true, 
-            error: null, 
-            selectedNodeId: nodeId, 
-            integrationScenarios: state.scenarioCache[nodeId] || [] 
+        set((state) => ({
+            isLoading: true,
+            error: null,
+            selectedNodeId: nodeId,
+            integrationScenarios: state.scenarioCache[nodeId] || []
         }));
         try {
             const res = await fetch(`${API_BASE}/graph/downstream/${nodeId}`);
@@ -209,6 +230,31 @@ export const useStore = create<AppState>((set, get) => ({
             if (res.ok) {
                 const data = await res.json();
                 set({ selectedNodeDetail: data });
+
+                // [Diff 기능] 소스 코드를 처음 가져왔을 때 스냅샷에 저장 (이력이 없을 때만)
+                if (data.signature && data.source) {
+                    const { codeSnapshots } = get();
+                    const currentNode = get().projectNodes.find(n => n.id === nodeId);
+                    const hasSnapshot = !!codeSnapshots[data.signature];
+                    const isAlreadyModified = currentNode?.status === 'MODIFIED';
+
+                    if (!hasSnapshot && !isAlreadyModified) {
+                        // 저장이 가능한 경우
+                        console.log(`%c[Snapshot Saved] %c${data.signature}`, 'color: #4CAF50; font-weight: bold;', 'color: #2196F3;');
+                        set({
+                            codeSnapshots: {
+                                ...codeSnapshots,
+                                [data.signature]: data.source
+                            }
+                        });
+                    } else if (hasSnapshot) {
+                        // 이미 저장된 경우
+                        console.log(`%c[Snapshot Skipped] %c이미 저장된 스냅샷이 있습니다: ${data.signature}`, 'color: #FFA000; font-weight: bold;', 'color: #999;');
+                    } else if (isAlreadyModified) {
+                        // 이미 MODIFIED 상태라 저장을 안 하는 경우
+                        console.log(`%c[Snapshot Skipped] %c이미 MODIFIED 상태라 원본으로 저장하지 않습니다: ${data.signature}`, 'color: #F44336; font-weight: bold;', 'color: #999;');
+                    }
+                }
             }
         } catch (err) {
             console.error(err);
@@ -222,7 +268,7 @@ export const useStore = create<AppState>((set, get) => ({
             const res = await fetch(`${API_BASE}/agent/integration-scenario/${methodId}`);
             if (!res.ok) throw new Error('Failed to generate integration scenario');
             const data = await res.json();
-            set((state) => ({ 
+            set((state) => ({
                 integrationScenarios: data.scenarios,
                 scenarioCache: {
                     ...state.scenarioCache,
@@ -305,3 +351,8 @@ export const useStore = create<AppState>((set, get) => ({
     uploadSuccess: false,
     setUploadSuccess: (v: boolean) => set({ uploadSuccess: v }),
 }));
+
+// [디버깅용] 브라우저 콘솔에서 window.store.getState()로 상태 확인 가능
+if (typeof window !== 'undefined') {
+    (window as any).store = useStore;
+}
