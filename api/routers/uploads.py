@@ -93,7 +93,7 @@ async def upload_files(request: Request, project: Optional[str] = Form(None), fi
         for rel_path in result_files:
              methods = analyzer.connector.execute_query(
                 """
-                MATCH (f:FILE {path: $path, project: $project})-[:AST|CONTAINS|DEFINES*]->(m:METHOD)
+                MATCH (f:FILE {path: $path, project: $project})-[:CONTAINS*]->(m:METHOD)
                 WITH DISTINCT m, f
                 RETURN m.name as name, m.signature as sig, elementId(m) as id, f.path as file
                 """,

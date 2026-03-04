@@ -86,35 +86,6 @@ class IntegratedTestAgentNodes:
                     if root_id in grouped_contexts:
                         # 고유한 경우 기존 컨텍스트에 추가
                         existing = grouped_contexts[root_id]
-                        if not any(tm.id == target_method_node.id for tm in existing.target_methods):
-                            existing.target_methods.append(target_method_node)
-                    else:
-                        # 루트 메서드 컨텍스트를 위한 파라미터 조회 (루트당 한 번만)
-                        # 업데이트된 쿼리: 어노테이션 및 DTO 필드 조회
-                        params_result = self.db_client.execute_query(CypherQueries.GET_ROOT_PARAMETERS, {"root_id": root_id})
-                        
-                        parameter_infos = []
-                        for p_row in params_result:
-                            # 현재는 간단한 스키마 구성 (재귀적 조회는 비용이 큼)
-                            # 'fields'가 DTO 구조를 나타낸다고 가정
-                            raw_fields = p_row['fields']
-                            clean_fields = {}
-                            for f in raw_fields:
-                                if f.get('name') and f.get('type'):
-                                    clean_fields[f['name']] = f['type']
-                            
-                            parameter_infos.append({
-                                "name": p_row['param_name'],
-                                "type": p_row['param_type'],
-                                "types": p_row.get('param_types', []),
-                                "index": p_row.get('param_index', 0),
-                                "dto_schema": clean_fields if clean_fields else None
-                            })
-
-
-
-                        root_method_node = MethodNode(
-                            id=root_id,
                             name=root_node.get('name', ''),
                             signature=root_node.get('signature', ''),
                             code=root_node.get('source', ''),
