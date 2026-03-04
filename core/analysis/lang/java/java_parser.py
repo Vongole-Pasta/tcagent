@@ -7,6 +7,8 @@ import hashlib
 import logging
 import re
 
+from tree_sitter_languages import get_parser
+
 from core.analysis.persistence.models import (
     TypeInfo, ParamInfo, ConstantInfo,
     ParsedType, ParsedField, ParsedMethod, ParsedFileResult,
@@ -34,6 +36,8 @@ class JavaParser:
     Side effect 없음 — 결과는 ParsedFileResult로 반환됩니다.
     """
 
+    _ts_parser = get_parser("java")
+
     def __init__(self):
         self.generic_pattern = re.compile(r"<.*>")
         self.type_split_pattern = re.compile(r"[<>, \t]+")
@@ -41,12 +45,12 @@ class JavaParser:
     # -----------------------------------------------------------------------
     # 진입점
     # -----------------------------------------------------------------------
-    def parse(self, tree, source_code: bytes, file_path: str, scan_id: str | None = None) -> ParsedFileResult:
+    def parse(self, source_code: bytes, file_path: str, scan_id: str | None = None) -> ParsedFileResult:
         """
-        Tree-sitter 파싱 트리를 순회하며 패키지, 클래스, 메서드 정보를 추출합니다.
+        tree-sitter java parser가 파일을 파싱한 결과로 얻은 AST 트리를 순회탐색하면서
+        공통으로 정의한 스키마에 맞게 관계를 추출합니다.
 
         Args:
-            tree: 파싱된 구문 트리
             source_code: 원본 소스 코드
             file_path: 파일 경로
             scan_id: 이번 분석 세션의 고유 아이디 (삭제된 노드 식별용)
@@ -55,6 +59,7 @@ class JavaParser:
             ParsedFileResult: 파싱 결과 (타입, 메서드, 필드, 호출 등)
         """
         result = ParsedFileResult()
+        tree = self._ts_parser.parse(source_code)
         root_node = tree.root_node
 
         package_name = self._get_package_name(root_node, source_code)
