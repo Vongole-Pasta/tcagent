@@ -50,10 +50,9 @@ class ParsedMethod:
 @dataclass
 class ParsedCallEdge:
     """CALLS 엣지로 변환될 파싱 결과."""
-    caller_qualname: str    # 호출자 METHOD의 qualname
-    target_method_name: str # 호출 대상 메서드 이름
-    object_name: str        # 호출 대상 객체/클래스 이름
-    count: int              # 호출 횟수
+    caller_qualname: str    # 호출자 METHOD의 qualname (com.example.MemberController.login(String))
+    target_method_name: str # 호출 대상 메서드 이름 (getUser)
+    object_name: str        # 호출 대상 객체/클래스 이름 (userRepo)
 
 
 @dataclass

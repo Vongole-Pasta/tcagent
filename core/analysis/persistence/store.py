@@ -13,6 +13,7 @@ from graph_db.client import DBClient
 
 from .models import (
     ParsedType, ParsedField, ParsedMethod, ParsedFileResult,
+    ParsedCallEdge, ParsedParameterEdge, ParsedReturnEdge,
 )
 
 logger = logging.getLogger(__name__)
@@ -33,10 +34,15 @@ class GraphWriter:
     def __init__(self, connector: DBClient):
         self.connector = connector
 
-        # --- 메모리 저장소 ---
+        # --- 노드 메모리 저장소 ---
         self._types: dict[str, ParsedType] = {}         # qualname → ParsedType
         self._fields: dict[str, ParsedField] = {}       # qualname → ParsedField
         self._methods: dict[str, ParsedMethod] = {}     # qualname → ParsedMethod
+
+        # --- 엣지 메모리 저장소 ---
+        self._calls: list[ParsedCallEdge] = []
+        self._param_edges: list[ParsedParameterEdge] = []
+        self._return_edges: list[ParsedReturnEdge] = []
 
     # -----------------------------------------------------------------------
     # 수집 (DB 접근 없음)
@@ -50,6 +56,9 @@ class GraphWriter:
             self._fields[f.qualname] = f
         for m in result.methods:
             self._methods[m.qualname] = m
+        self._calls.extend(result.calls)
+        self._param_edges.extend(result.parameter_edges)
+        self._return_edges.extend(result.return_edges)
 
     # -----------------------------------------------------------------------
     # 일괄 기록
@@ -57,12 +66,25 @@ class GraphWriter:
 
     def flush(self):
         """메모리에 축적된 전체 데이터를 일괄 DB에 기록합니다."""
-        logger.info(f"Flushing to DB: {len(self._types)} types, {len(self._fields)} fields, {len(self._methods)} methods")
+        logger.info(
+            f"Flushing to DB: {len(self._types)} types, "
+            f"{len(self._fields)} fields, {len(self._methods)} methods, "
+            f"{len(self._calls)} calls, {len(self._param_edges)} params, "
+            f"{len(self._return_edges)} returns"
+        )
 
         # 1단계: 노드 생성
         self._flush_types()
         self._flush_fields()
         self._flush_methods()
+
+        # 2단계: 엣지 해석을 위한 인메모리 인덱스 구축
+        self._build_indexes()
+
+        # 3단계: 엣지 생성
+        self._flush_parameter_edges()
+        self._flush_return_edges()
+        self._flush_calls()
 
         # 메모리 정리
         self._clear()
@@ -84,7 +106,105 @@ class GraphWriter:
             self._upsert_method(m)
 
     # -----------------------------------------------------------------------
-    # 개별 Upsert
+    # 인메모리 인덱스 구축
+    # -----------------------------------------------------------------------
+
+    def _build_indexes(self):
+        """엣지 해석에 필요한 인메모리 인덱스를 구축합니다."""
+        # name → qualname (동명 타입 시 마지막 등록이 우선 — 향후 개선 대상)
+        self._type_by_name: dict[str, str] = {
+            t.name: t.qualname for t in self._types.values()
+        }
+        # class_qualname → {method_name → [ParsedMethod]}
+        self._methods_by_class: dict[str, dict[str, list[ParsedMethod]]] = {}
+        for m in self._methods.values():
+            cls = self._methods_by_class.setdefault(m.class_qualname, {})
+            cls.setdefault(m.name, []).append(m)
+
+        # class_qualname → {field_name → ParsedField}
+        self._fields_by_class: dict[str, dict[str, ParsedField]] = {}
+        for f in self._fields.values():
+            cls = self._fields_by_class.setdefault(f.type_qualname, {})
+            cls[f.name] = f
+
+    # -----------------------------------------------------------------------
+    # 엣지 Flush
+    # -----------------------------------------------------------------------
+
+    def _flush_parameter_edges(self):
+        """HAS_PARAMETER 엣지를 DB에 기록합니다. METHOD → HAS_PARAMETER → TYPE."""
+        for edge in self._param_edges:
+            for type_name in edge.param_info["type"]["layout"]:
+                type_qualname = self._type_by_name.get(type_name)
+                if type_qualname:
+                    self._upsert_has_parameter(edge, type_qualname)
+
+    def _flush_return_edges(self):
+        """RETURNS 엣지를 DB에 기록합니다. METHOD → RETURNS → TYPE."""
+        for edge in self._return_edges:
+            for type_name in edge.return_info["layout"]:
+                type_qualname = self._type_by_name.get(type_name)
+                if type_qualname:
+                    self._upsert_returns(edge, type_qualname)
+
+    def _flush_calls(self):
+        """CALLS 엣지를 해석하고 DB에 기록합니다."""
+        resolved, external = 0, 0
+        for call in self._calls:
+            target_qualname = self._resolve_call_target(
+                call.caller_qualname, call.target_method_name, call.object_name,
+            )
+            if target_qualname:
+                self._upsert_calls_method(call, target_qualname)
+                resolved += 1
+            else:
+                self._upsert_calls_external(call)
+                external += 1
+        logger.info(f"CALLS edges: {resolved} resolved, {external} external")
+
+    # -----------------------------------------------------------------------
+    # CALLS 관계 찾기
+    # -----------------------------------------------------------------------
+
+    def _resolve_call_target(
+        self, caller_qualname: str, target_name: str, obj_name: str,
+    ) -> str | None:
+        """호출 대상을 인메모리 인덱스로 해석하여 METHOD qualname을 반환합니다."""
+        if obj_name:
+            # Case 1a: obj_name이 타입명 → 해당 타입의 메서드 탐색
+            type_q = self._type_by_name.get(obj_name)
+            if type_q:
+                methods = self._methods_by_class.get(type_q, {}).get(target_name, [])
+                if methods:
+                    return methods[0].qualname
+
+            # Case 1b: obj_name이 필드명 → 필드 타입의 메서드 탐색
+            caller_method = self._methods.get(caller_qualname)
+            if caller_method:
+                field = self._fields_by_class.get(
+                    caller_method.class_qualname, {},
+                ).get(obj_name)
+                if field and field.field_type.get("layout"):
+                    field_type_name = field.field_type["layout"][0]
+                    type_q = self._type_by_name.get(field_type_name)
+                    if type_q:
+                        methods = self._methods_by_class.get(type_q, {}).get(target_name, [])
+                        if methods:
+                            return methods[0].qualname
+        else:
+            # Case 2: obj_name 없음 → 같은 클래스의 형제 메서드 탐색
+            caller_method = self._methods.get(caller_qualname)
+            if caller_method:
+                methods = self._methods_by_class.get(
+                    caller_method.class_qualname, {},
+                ).get(target_name, [])
+                if methods:
+                    return methods[0].qualname
+
+        return None
+
+    # -----------------------------------------------------------------------
+    # 개별 Upsert — 노드
     # -----------------------------------------------------------------------
 
     def _upsert_type(self, parsed: ParsedType):
@@ -172,6 +292,71 @@ class GraphWriter:
             logger.error(f"Failed to upsert METHOD {parsed.qualname}: {e}")
 
     # -----------------------------------------------------------------------
+    # 개별 Upsert — 엣지
+    # -----------------------------------------------------------------------
+
+    def _upsert_has_parameter(self, parsed: ParsedParameterEdge, type_qualname: str):
+        """METHOD → HAS_PARAMETER → TYPE 엣지를 DB에 기록합니다."""
+        try:
+            params = asdict(parsed)
+            params["type_qualname"] = type_qualname
+
+            self.connector.execute_query("""
+                MATCH (m:METHOD {qualname: $method_qualname})
+                MATCH (t:TYPE {qualname: $type_qualname})
+                MERGE (m)-[:HAS_PARAMETER]->(t)
+            """, params)
+        except Exception as e:
+            logger.error(f"Failed to upsert HAS_PARAMETER {parsed.method_qualname} → {type_qualname}: {e}")
+
+    def _upsert_returns(self, parsed: ParsedReturnEdge, type_qualname: str):
+        """METHOD → RETURNS → TYPE 엣지를 DB에 기록합니다."""
+        try:
+            params = asdict(parsed)
+            params["type_qualname"] = type_qualname
+
+            self.connector.execute_query("""
+                MATCH (m:METHOD {qualname: $method_qualname})
+                MATCH (t:TYPE {qualname: $type_qualname})
+                MERGE (m)-[:RETURNS]->(t)
+            """, params)
+        except Exception as e:
+            logger.error(f"Failed to upsert RETURNS {parsed.method_qualname} → {type_qualname}: {e}")
+
+    def _upsert_calls_method(self, parsed: ParsedCallEdge, callee_qualname: str):
+        """METHOD → CALLS → METHOD 엣지를 DB에 기록합니다."""
+        try:
+            params = asdict(parsed)
+            params["callee_qualname"] = callee_qualname
+
+            self.connector.execute_query("""
+                MATCH (caller:METHOD {qualname: $caller_qualname})
+                MATCH (callee:METHOD {qualname: $callee_qualname})
+                MERGE (caller)-[:CALLS]->(callee)
+            """, params)
+        except Exception as e:
+            logger.error(f"Failed to upsert CALLS {parsed.caller_qualname} → {callee_qualname}: {e}")
+
+    def _upsert_calls_external(self, parsed: ParsedCallEdge):
+        """METHOD → CALLS → EXTERNAL_CALL 엣지를 DB에 기록합니다."""
+        try:
+            params = asdict(parsed)
+            # 키명을 DB 스키마에 맞춤
+            params["ext_qualname"] = f"{parsed.object_name}.{parsed.target_method_name}" if parsed.object_name else parsed.target_method_name
+            params["name"] = parsed.target_method_name
+            params["signature"] = f"{params['ext_qualname']}()"
+
+            self.connector.execute_query("""
+                MATCH (caller:METHOD {qualname: $caller_qualname})
+                MERGE (ext:EXTERNAL_CALL {qualname: $ext_qualname})
+                SET ext.name = $name,
+                    ext.signature = $signature
+                MERGE (caller)-[:CALLS]->(ext)
+            """, params)
+        except Exception as e:
+            logger.error(f"Failed to upsert EXTERNAL_CALL {parsed.caller_qualname} → {parsed.target_method_name}: {e}")
+
+    # -----------------------------------------------------------------------
     # 메모리 정리
     # -----------------------------------------------------------------------
 
@@ -180,3 +365,6 @@ class GraphWriter:
         self._types.clear()
         self._fields.clear()
         self._methods.clear()
+        self._calls.clear()
+        self._param_edges.clear()
+        self._return_edges.clear()

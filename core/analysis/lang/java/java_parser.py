@@ -10,6 +10,7 @@ import re
 from core.analysis.persistence.models import (
     TypeInfo, ParamInfo, ConstantInfo,
     ParsedType, ParsedField, ParsedMethod, ParsedFileResult,
+    ParsedCallEdge, ParsedParameterEdge, ParsedReturnEdge,
 )
 
 logger = logging.getLogger(__name__)
@@ -294,6 +295,84 @@ class JavaParser:
             endpoint_uri=endpoint_uri,
             http_method=http_method,
         ))
+
+        # --- 엣지 정보 수집 ---
+        self._collect_call_edges(method_node, source_code, qualname, result)
+        self._collect_parameter_edges(params, qualname, result)
+        self._collect_return_edge(return_type, qualname, result)
+
+    # -----------------------------------------------------------------------
+    # 엣지 수집
+    # -----------------------------------------------------------------------
+
+    def _collect_call_edges(
+        self, method_node, source_code: bytes, qualname: str, result: ParsedFileResult,
+    ):
+        """CALLS 엣지: 메서드 바디에서 호출 관계를 추출합니다."""
+        body_node = method_node.child_by_field_name("body")
+        if not body_node:
+            return
+        calls: set[tuple[str, str]] = set()
+        self._extract_method_calls(body_node, source_code, calls)
+        for target_name, obj_name in calls:
+            result.calls.append(ParsedCallEdge(
+                caller_qualname=qualname,
+                target_method_name=target_name,
+                object_name=obj_name,
+            ))
+
+    def _collect_parameter_edges(
+        self, params: list, qualname: str, result: ParsedFileResult,
+    ):
+        """HAS_PARAMETER 엣지: 사용자 정의 타입을 가진 파라미터만 수집합니다."""
+        for param in params:
+            if any(not self._is_primitive_type(t) for t in param["type"]["layout"]):
+                result.parameter_edges.append(ParsedParameterEdge(
+                    method_qualname=qualname,
+                    param_info=param,
+                ))
+
+    def _collect_return_edge(
+        self, return_type, qualname: str, result: ParsedFileResult,
+    ):
+        """RETURNS 엣지: 사용자 정의 타입을 포함한 리턴 타입만 수집합니다."""
+        if return_type and return_type["layout"]:
+            if any(not self._is_primitive_type(t) for t in return_type["layout"]):
+                result.return_edges.append(ParsedReturnEdge(
+                    method_qualname=qualname,
+                    return_info=return_type,
+                ))
+
+    # -----------------------------------------------------------------------
+    # CALLS 엣지 추출 (내부)
+    # -----------------------------------------------------------------------
+
+    def _extract_method_calls(self, node, source_code: bytes, calls: set):
+        """AST를 재귀 순회하며 메서드 호출(method_invocation)을 수집합니다."""
+        for child in node.children:
+            if child.type == "method_invocation":
+                self._process_invocation(child, source_code, calls)
+            # 내부 클래스/메서드 선언은 별도 스코프이므로 진입하지 않음
+            if child.type not in ("class_declaration", "interface_declaration", "method_declaration"):
+                self._extract_method_calls(child, source_code, calls)
+
+    def _process_invocation(self, invocation_node, source_code: bytes, calls: set):
+        """하나의 method_invocation 노드에서 호출 정보를 추출합니다."""
+        obj_node = invocation_node.child_by_field_name("object")
+        name_node = invocation_node.child_by_field_name("name")
+        if not name_node:
+            return
+
+        method_name = source_code[name_node.start_byte:name_node.end_byte].decode("utf-8")
+
+        obj_name = ""
+        if obj_node:
+            if obj_node.type == "method_invocation":
+                obj_name = ""  # 체이닝 호출: 중간 수신 타입을 알 수 없으므로 빈 문자열
+            else:
+                obj_name = source_code[obj_node.start_byte:obj_node.end_byte].decode("utf-8")
+
+        calls.add((method_name, obj_name))
 
     # -----------------------------------------------------------------------
     # 파라미터 속성 처리 (METHOD.params)
