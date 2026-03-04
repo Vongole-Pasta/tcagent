@@ -7,7 +7,7 @@ import hashlib
 import logging
 import re
 
-from tree_sitter_languages import get_parser
+from tree_sitter_language_pack import get_parser
 
 from core.analysis.persistence.models import (
     TypeInfo, ParamInfo, ConstantInfo,
