@@ -86,7 +86,7 @@ async def upload_files(request: Request, project: Optional[str] = Form(None), fi
 
     try:
         # Calls IncrementalAnalyzer.process_files_from_memory
-        result_files = analyzer.process_files_from_memory(files_data, project=safe_project)
+        result_files = analyzer.analyze(files_data, project=safe_project)
         
         # Get processed method list for UI response
         method_list = []

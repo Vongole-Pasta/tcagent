@@ -86,6 +86,56 @@ class IntegratedTestAgentNodes:
                     if root_id in grouped_contexts:
                         # 고유한 경우 기존 컨텍스트에 추가
                         existing = grouped_contexts[root_id]
+                        if not any(tm.id == target_method_node.id for tm in existing.target_methods):
+                            existing.target_methods.append(target_method_node)
+                    else:
+                        # 루트 메서드의 파라미터 + DTO 필드 조회 (루트당 한 번만)
+                        # params는 METHOD 노드에 JSON 문자열로 저장되어 있고,
+                        # HAS_PARAMETER로 연결된 TYPE의 FIELD가 DTO 구조를 나타냅니다.
+                        params_result = self.db_client.execute_query(CypherQueries.GET_ROOT_PARAMETERS, {"root_id": root_id})
+
+                        parameter_infos = []
+                        if params_result:
+                            row = params_result[0]
+                            # METHOD.params (JSON 문자열) 파싱
+                            raw_params = row.get('params', '[]')
+                            import json
+                            params_list = json.loads(raw_params) if isinstance(raw_params, str) else (raw_params or [])
+
+                            # HAS_PARAMETER로 연결된 TYPE의 FIELD → DTO 스키마 구축
+                            # {type_name → {field_name: field_type}}
+                            type_fields_raw = row.get('type_fields', [])
+                            dto_schemas = {}
+                            for tf in type_fields_raw:
+                                t_name = tf.get('type_name')
+                                f_name = tf.get('field_name')
+                                f_type = tf.get('field_type')
+                                if t_name and f_name and f_type:
+                                    dto_schemas.setdefault(t_name, {})[f_name] = f_type
+
+                            for i, param in enumerate(params_list):
+                                # param: {"name": "...", "type": {"given": "...", "layout": [...]}, "annotation": "..."}
+                                param_type = param.get('type', {})
+                                type_names = param_type.get('layout', [])
+                                # layout의 타입명 중 DTO 스키마가 있는 것을 찾아 연결
+                                dto_schema = None
+                                for t_name in type_names:
+                                    if t_name in dto_schemas:
+                                        dto_schema = dto_schemas[t_name]
+                                        break
+
+                                parameter_infos.append({
+                                    "name": param.get('name', ''),
+                                    "type": param_type.get('given', ''),
+                                    "types": type_names,
+                                    "index": i,
+                                    "dto_schema": dto_schema
+                                })
+
+
+
+                        root_method_node = MethodNode(
+                            id=root_id,
                             name=root_node.get('name', ''),
                             signature=root_node.get('signature', ''),
                             code=root_node.get('source', ''),
