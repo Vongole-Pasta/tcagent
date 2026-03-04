@@ -72,22 +72,26 @@ class HappyCaseAgent:
             
             for row in results:
                 endpoint = row["endpoint"]
+                http_method = row["http_method"]
                 if not endpoint: continue
                 
-                if endpoint not in impact_groups:
-                    impact_groups[endpoint] = {
-                        "url": endpoint,"http_method": row["http_method"],"name": row["endpoint_method_name"],
+                # 같은 URL이라도 HTTP Method가 다르면 별개의 엔드포인트로 취급
+                group_key = f"{http_method}:{endpoint}"
+                
+                if group_key not in impact_groups:
+                    impact_groups[group_key] = {
+                        "url": endpoint,"http_method": http_method,"name": row["endpoint_method_name"],
                         "related_signatures": [],"source_methods": []
                     }
                 
                 # Path 객체에서 시그니처만 추출
                 path_signatures = [node.get("signature") for node in row["path"].nodes if "METHOD" in node.labels]
                 
-                existing_sigs = set(impact_groups[endpoint]["related_signatures"])
-                impact_groups[endpoint]["related_signatures"].extend([s for s in path_signatures if s not in existing_sigs])
+                existing_sigs = set(impact_groups[group_key]["related_signatures"])
+                impact_groups[group_key]["related_signatures"].extend([s for s in path_signatures if s not in existing_sigs])
                 
-                if m_id not in impact_groups[endpoint]["source_methods"]:
-                    impact_groups[endpoint]["source_methods"].append(m_id)
+                if m_id not in impact_groups[group_key]["source_methods"]:
+                    impact_groups[group_key]["source_methods"].append(m_id)
 
         return {
             "source_method_ids": clean_ids, 
@@ -245,8 +249,8 @@ class HappyCaseAgent:
             
             logger.info(f"Sending to {len(impact_groups)} workers for endpoints: {list(impact_groups.keys())}")
             return [
-                Send("generator_worker", {"endpoint_url": ep, "group": group})
-                for ep, group in impact_groups.items()
+                Send("generator_worker", {"endpoint_url": group["url"], "group": group})
+                for group in impact_groups.values()
             ]
 
         workflow = StateGraph(HappyCaseState)
