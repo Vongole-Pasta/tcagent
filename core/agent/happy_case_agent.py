@@ -28,10 +28,10 @@ class HappyCaseState(TypedDict):
     source_method_ids: List[str]                 # 입력: 영향도 분석 시작점 (또는 직접 선택한 엔드포인트)
     
     impact_groups: NotRequired[Dict[str, ImpactGroup]] # 분석 결과: 식별된 엔드포인트 그룹 (key: "HTTP_METHOD:URL")
-    # Annotated[..., operator.add]: 병렬 워커들이 각자 반환하는 리스트를 덮어쓰지 않고 자동으로 누적(append)합니다.
-    worker_results: Annotated[NotRequired[List[Dict[str, Any]]], operator.add] # 각 워커의 중간 결과물 (검증 통과 후 집계)
+    # Annotated[..., operator.add]: 병렬 워커들이 반환하는 리스트를 메인 State에 자동으로 누적합니다.
+    worker_results: Annotated[NotRequired[List[Dict[str, Any]]], operator.add] # 각 워커의 생성 결과물 (최종 집계용)
     scenarios: NotRequired[List[Dict[str, Any]]]       # 최종 결과물 (TC-001 등 ID 부여 완료)
-    # errors도 리듀서 적용: 여러 워커에서 발생한 에러를 하나의 리스트로 합칩니다.
+    # 여러 워커에서 발생한 에러를 하나의 리스트로 합칩니다 (Reducer 적용).
     errors: Annotated[NotRequired[List[str]], operator.add]
 
 class WorkerState(TypedDict):
@@ -123,8 +123,8 @@ class HappyCaseAgent:
 
     def retriever_worker_node(self, state: WorkerState):
         """
-        DB에서 메서드/DTO 컨텍스트를 수집합니다.
-        루프가 발생하더라도 이 노드는 재실행되지 않아 중복 DB 조회를 방지합니다.
+        DB에서 엔드포인트 메서드 및 관련 DTO 컨텍스트를 수집합니다.
+        각 워커 세션 내에서 한 번만 실행되어 필요한 정보를 조회합니다.
         """
         group = state["group"]
         methods_context = []
@@ -287,7 +287,8 @@ class HappyCaseAgent:
 
     def _collect_dto_info(self, method_signature, dtos_context):
         """
-        특정 메서드의 파라미터/반환 타입 및 그로부터 도달 가능한 중첩 DTO(최대 5단계)의 필드 구조를 수집합니다.
+        특정 메서드의 파라미터/반환 타입 및 중첩 DTO의 필드 구조를 수집합니다.
+        Cypher 홉(Hop) 수 10은 'TYPE-FIELD-TYPE' 구조를 고려할 때 최대 5단계의 중첩을 의미합니다.
         결과는 dtos_context 딕셔너리에 {타입명: [{name, type}, ...]} 형태로 누적됩니다.
         """
         # 1. METHOD -> (HAS_PARAMETER|RETURNS) -> TYPE (직접 관계)
