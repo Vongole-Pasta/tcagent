@@ -1,6 +1,6 @@
 from fastapi import APIRouter, HTTPException, Request
 
-from core.agent.happy_case_agent import HappyCaseAgent
+from core.agent.happy_case.agent import HappyCaseAgent
 
 router = APIRouter(prefix="/agent", tags=["agent"])
 

@@ -1,5 +1,5 @@
 import os
-from core.agent.happy_case_agent import HappyCaseAgent
+from core.agent.happy_case.agent import HappyCaseAgent
 from infra.db_client import DBClient
 
 # DBClient 인스턴스화 (Config 클래스에서 자동으로 설정 로드)
