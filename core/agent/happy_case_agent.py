@@ -194,12 +194,9 @@ class HappyCaseAgent:
             # _collect_dto_info를 통해 파라미터/반환 타입의 필드 구조를 수집합니다.
             self._collect_dto_info(sig, all_dtos)
 
-        # public_dto_names에 추론된 DTO 이름이 포함된 엔드포인트 DTO들만 Public(API 응답/요청 스펙)으로 수집합니다.
-        # 내부 로직용 DTO는 LLM의 혼동을 막기 위해 컨텍스트에서 제외합니다.
-        public_dtos = {}
-        for t_name, fields in all_dtos.items():
-            if any(p in t_name for p in public_dto_names): 
-                public_dtos[t_name] = fields
+        # 수집된 DTO들 중 분석 대상 메서드(파라미터/반환타입)와 연관된 것들만 LLM 컨텍스트에 포함합니다.
+        # 재귀 쿼리로 수집했으므로 all_dtos에 담긴 것들은 모두 해당 엔드포인트와 관련된 구조입니다.
+        public_dtos = {t_name: fields for t_name, fields in all_dtos.items()}
 
         return {
             "context": {"methods": methods_context, "public_dtos": public_dtos}
@@ -330,41 +327,31 @@ class HappyCaseAgent:
 
     def _collect_dto_info(self, method_signature, dtos_context):
         """
-        특정 메서드의 파라미터 타입(요청 DTO)과 반환 타입(응답 DTO)의 필드 구조를 수집합니다.
+        특정 메서드의 파라미터/반환 타입 및 그로부터 도달 가능한 중첩 DTO(최대 5단계)의 필드 구조를 수집합니다.
         결과는 dtos_context 딕셔너리에 {타입명: [{name, type}, ...]} 형태로 누적됩니다.
-        중복 필드는 any() 체크로 걸러냅니다.
         """
+        # Cypher 가변 길이 경로([*0..10])를 사용하여 TYPE-(CONTAINS)->FIELD-(OF_TYPE)->TYPE 관계를 추적합니다.
+        # 중첩 1단계가 (CONTAINS, OF_TYPE) 두 개의 관계를 거치므로 10은 최대 5단계를 의미합니다.
         query = """
         MATCH (m:METHOD {signature: $signature})
-        OPTIONAL MATCH (m)-[:HAS_PARAMETER]->(pt:TYPE)
-        OPTIONAL MATCH (pt)-[:CONTAINS]->(pf:FIELD)
-        OPTIONAL MATCH (m)-[:RETURNS]->(rt:TYPE)
-        OPTIONAL MATCH (rt)-[:CONTAINS]->(rf:FIELD)
-        RETURN 
-            pt.fullName as pt_name, pf.name as pf_name, pf.type as pf_type,
-            rt.fullName as rt_name, rf.name as rf_name, rf.type as rf_type
+        OPTIONAL MATCH (m)-[:HAS_PARAMETER|RETURNS]->(root:TYPE)
+        OPTIONAL MATCH path = (root)-[:CONTAINS|OF_TYPE *0..10]->(t:TYPE)
+        WITH DISTINCT t
+        WHERE t IS NOT NULL
+        MATCH (t)-[:CONTAINS]->(f:FIELD)
+        RETURN t.fullName as type_name, f.name as field_name, f.type as field_type
         """
         results = self.db_client.execute_query(query, {"signature": method_signature})
         for row in results:
-            if row["pt_name"]:
-                t_name = row["pt_name"]
-                if t_name not in dtos_context: dtos_context[t_name] = []
-                if row["pf_name"] and not any(f["name"] == row["pf_name"] for f in dtos_context[t_name]):
-                    # TypeInfo 객체(dict)인 경우 "given" 키에서 실제 타입 문자열을 꺼냅니다.
-                    pf_type_obj = row["pf_type"]
-                    if isinstance(pf_type_obj, str):
-                        try: pf_type_obj = json.loads(pf_type_obj)
-                        except: pass
-                    p_f_type = pf_type_obj.get("given") if isinstance(pf_type_obj, dict) else pf_type_obj
-                    dtos_context[t_name].append({"name": row["pf_name"], "type": p_f_type})
-            if row["rt_name"]:
-                t_name = row["rt_name"]
-                if t_name not in dtos_context: dtos_context[t_name] = []
-                if row["rf_name"] and not any(f["name"] == row["rf_name"] for f in dtos_context[t_name]):
-                    # TypeInfo 객체(dict)인 경우 "given" 키에서 실제 타입 문자열을 꺼냅니다.
-                    rf_type_obj = row["rf_type"]
-                    if isinstance(rf_type_obj, str):
-                        try: rf_type_obj = json.loads(rf_type_obj)
-                        except: pass
-                    r_f_type = rf_type_obj.get("given") if isinstance(rf_type_obj, dict) else rf_type_obj
-                    dtos_context[t_name].append({"name": row["rf_name"], "type": r_f_type})
+            t_name = row["type_name"]
+            if t_name not in dtos_context:
+                dtos_context[t_name] = []
+            
+            if row["field_name"] and not any(f["name"] == row["field_name"] for f in dtos_context[t_name]):
+                # TypeInfo 객체(dict)인 경우 "given" 키에서 실제 타입 문자열을 꺼냅니다.
+                f_type_obj = row["field_type"]
+                if isinstance(f_type_obj, str):
+                    try: f_type_obj = json.loads(f_type_obj)
+                    except: pass
+                f_type = f_type_obj.get("given") if isinstance(f_type_obj, dict) else f_type_obj
+                dtos_context[t_name].append({"name": row["field_name"], "type": f_type})
