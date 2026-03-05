@@ -21,10 +21,10 @@ import { useStore } from '@/store/useStore';
 const nodeWidth = 200;
 const nodeHeight = 60;
 
-const getLayoutedElements = (nodes: Node[], edges: Edge[], direction = 'TB') => {
+const getLayoutedElements = (nodes: Node[], edges: Edge[], selectedNodeId: string | null, direction = 'TB') => {
     const dagreGraph = new dagre.graphlib.Graph();
     dagreGraph.setDefaultEdgeLabel(() => ({}));
-    dagreGraph.setGraph({ rankdir: direction }); // Use the passed direction
+    dagreGraph.setGraph({ rankdir: direction });
 
     nodes.forEach((node) => {
         dagreGraph.setNode(node.id, { width: nodeWidth, height: nodeHeight });
@@ -38,6 +38,9 @@ const getLayoutedElements = (nodes: Node[], edges: Edge[], direction = 'TB') => 
 
     const layoutedNodes = nodes.map((node) => {
         const nodeWithPosition = dagreGraph.node(node.id);
+        const isSelected = node.id === selectedNodeId;
+        const isEndpoint = node.data?.type === 'ENDPOINT';
+
         return {
             ...node,
             position: {
@@ -46,9 +49,16 @@ const getLayoutedElements = (nodes: Node[], edges: Edge[], direction = 'TB') => 
             },
             style: {
                 width: nodeWidth,
-                // Access custom data property type safely
-                backgroundColor: (node.data?.type === 'ENDPOINT') ? '#eff6ff' : '#fff',
-                border: (node.data?.type === 'ENDPOINT') ? '1px solid #3b82f6' : '1px solid #777'
+                borderRadius: '8px',
+                padding: '10px',
+                fontSize: '12px',
+                fontWeight: 500,
+                color: '#1e293b',
+                // Highlight logic
+                backgroundColor: isSelected ? '#fff1f2' : (isEndpoint ? '#eff6ff' : '#fff'),
+                border: isSelected ? '2px solid #e11d48' : (isEndpoint ? '1px solid #3b82f6' : '1px solid #e2e8f0'),
+                boxShadow: isSelected ? '0 0 10px rgba(225, 29, 72, 0.2)' : 'none',
+                zIndex: isSelected ? 10 : 1
             }
         };
     });
@@ -102,6 +112,7 @@ function InnerGraphView() { // Renamed from GraphView
             const { nodes: layoutedNodes, edges: layoutedEdges } = getLayoutedElements(
                 rfNodes,
                 rfEdges,
+                selectedNodeId,
                 direction // Pass the determined direction
             );
 
