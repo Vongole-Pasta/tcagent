@@ -36,7 +36,7 @@ class Config(BaseSettings):
     MODEL_NAME: str = "gpt-4o"
 
     # 제외할 디렉토리 (클래스 변수, .env와 무관)
-    EXCLUDED_DIRS: Set[str] = {".git", "node_modules", "dist", "build", "__pycache__", ".next", ".idea", ".vscode", "uploads_repository", "src/test"}
+    EXCLUDED_DIRS: Set[str] = {".git", "node_modules", "dist", "build", "__pycache__", ".next", ".idea", ".vscode", "uploads_repository", "src/test", "grading-server"}
 
     # 허용 확장자 (Java Only)
     ALLOWED_EXTENSIONS: dict = {".java": "java"}

@@ -2,7 +2,7 @@ from fastapi import APIRouter, UploadFile, File, Form, HTTPException, Request
 from typing import List
 import os
 import logging
-from config import Config
+from config import Config, should_exclude_path
 import io
 import zipfile
 
@@ -57,6 +57,10 @@ async def upload_files(request: Request, project: Optional[str] = Form(None), fi
                         if zip_info.endswith('/') or os.path.basename(zip_info).startswith('.'):
                             continue
                         
+                        # 제외 대상 경로 필터링
+                        if should_exclude_path(zip_info, Config.EXCLUDED_DIRS):
+                            continue
+
                         # Check extension (Java Only)
                         _, ext = os.path.splitext(zip_info)
                         if ext not in Config.ALLOWED_EXTENSIONS:
@@ -70,6 +74,9 @@ async def upload_files(request: Request, project: Optional[str] = Form(None), fi
         
         else:
             # Regular File
+            if should_exclude_path(file.filename, Config.EXCLUDED_DIRS):
+                continue
+
             _, ext = os.path.splitext(file.filename)
             if ext not in Config.ALLOWED_EXTENSIONS:
                 continue
