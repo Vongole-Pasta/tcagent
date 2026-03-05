@@ -130,7 +130,6 @@ class HappyCaseAgent:
         methods_context = []
         all_dtos = {}
         processed_signatures = set()
-        public_dto_names = set()
 
         for sig in group["endpoint_signatures"]:
             if sig in processed_signatures: continue
@@ -142,46 +141,11 @@ class HappyCaseAgent:
             if not method_res: continue
             method_node = method_res[0]["m"]
 
-            # [반환 타입 분석] 
-            # 1. DB 속성이 JSON 문자열일 경우를 대비해 안전하게 파싱합니다. (AttributeError 방지)
-            ret_type_obj = method_node.get("return_type")
-            if isinstance(ret_type_obj, str):
-                try: ret_type_obj = json.loads(ret_type_obj)
-                except: pass
-            
-            # 2. ResponseEntity<DTO> 형태에서 실제 DTO 이름을 추출하거나, 일반 타입을 획득합니다.
-            ret_type = ret_type_obj.get("given") if isinstance(ret_type_obj, dict) else ret_type_obj
-            if ret_type and "ResponseEntity<" in ret_type:
-                try: actual_dto = ret_type.split('<')[1].split('>')[0]; public_dto_names.add(actual_dto)
-                except: pass
-            elif ret_type and ret_type != "void":
-                public_dto_names.add(ret_type)
-
-            # [파라미터 분석 및 DTO 식별]
-            # 1. 메서드의 모든 파라미터 정보를 가져옵니다. (JSON 문자열 대응 포함)
-            params_info = method_node.get("params", [])
+            # 파라미터 정보 추출 (LLM 프롬프트용)
+            params_info = method_node.get("params", [])     # Method 노드에 속성(params)으로 저장된 파라미터 정보
             if isinstance(params_info, str):
                 try: params_info = json.loads(params_info)
                 except: params_info = []
-            
-            if not params_info:
-                # 2. params 속성이 없는 경우 그래프 관계(HAS_PARAMETER)를 통해 보강하여 누락을 방지합니다.
-                param_query = "MATCH (m:METHOD {signature: $signature})-[:HAS_PARAMETER]->(t:TYPE) RETURN t.fullName as type_name"
-                param_res = self.db_client.execute_query(param_query, {"signature": sig})
-                params_info = [{"type": {"given": r["type_name"]}} for r in param_res]
-
-            for p in params_info:
-                p_type_obj = p.get("type", {})
-                p_type = p_type_obj.get("given") if isinstance(p_type_obj, dict) else p_type_obj
-                if not p_type: continue
-
-                # 3. 표준 라이브러리(Spring, Java 등) 및 원시 타입은 비즈니스 DTO가 아니므로 필터링합니다.
-                # 이를 통해 LLM에게 꼭 필요한 커스텀 DTO 구조만 전달하여 혼동을 줄입니다.
-                is_standard = any(pkg in p_type for pkg in ["java.", "javax.", "org.springframework.", "jakarta."])
-                is_primitive = p_type.lower() in ["string", "long", "int", "integer", "boolean", "double", "float"]
-                
-                if not (is_standard or is_primitive):
-                    public_dto_names.add(p_type)
 
             methods_context.append({
                 "name": method_node.get("name"),
@@ -191,15 +155,11 @@ class HappyCaseAgent:
                 "returnType": method_node.get("return_type")
             })
             processed_signatures.add(sig)
-            # _collect_dto_info를 통해 파라미터/반환 타입의 필드 구조를 수집합니다.
+            # _collect_dto_info를 통해 파라미터/반환 타입 및 중첩 DTO들의 필드 구조를 수집합니다.
             self._collect_dto_info(sig, all_dtos)
 
-        # 수집된 DTO들 중 분석 대상 메서드(파라미터/반환타입)와 연관된 것들만 LLM 컨텍스트에 포함합니다.
-        # 재귀 쿼리로 수집했으므로 all_dtos에 담긴 것들은 모두 해당 엔드포인트와 관련된 구조입니다.
-        public_dtos = {t_name: fields for t_name, fields in all_dtos.items()}
-
         return {
-            "context": {"methods": methods_context, "public_dtos": public_dtos}
+            "context": {"methods": methods_context, "dto_context": all_dtos}
         }
 
     def generator_worker_node(self, state: WorkerState):
@@ -221,11 +181,11 @@ class HappyCaseAgent:
         [비즈니스 로직 문맥]
         {json.dumps(context.get('methods', []), indent=2, ensure_ascii=False)}
 
-        [Public API DTO 구조 (필수 준수)]
-        {json.dumps(context.get('public_dtos', {}), indent=2, ensure_ascii=False)}
+        [API DTO 구조 (필수 준수)]
+        {json.dumps(context.get('dto_context', {}), indent=2, ensure_ascii=False)}
 
         [DTO 매핑 및 호출 지침]
-        - **중요**: `expected_result` (응답 바디)에는 오직 **[Public API DTO 구조]**에 정의된 필드만 포함해야 합니다.
+        - **중요**: `expected_result` (응답 바디)에는 오직 **[API DTO 구조]**에 정의된 필드만 포함해야 합니다.
         - **입력 데이터(input_data) 생성 지침**:
           - 엔드포인트 메서드의 파라미터 목록(`params`)을 보고 각 데이터의 소스를 판단하세요.
           - **Body**: DTO 타입이거나 `@RequestBody`인 경우 JSON 바디로 작성하세요.
@@ -330,11 +290,16 @@ class HappyCaseAgent:
         특정 메서드의 파라미터/반환 타입 및 그로부터 도달 가능한 중첩 DTO(최대 5단계)의 필드 구조를 수집합니다.
         결과는 dtos_context 딕셔너리에 {타입명: [{name, type}, ...]} 형태로 누적됩니다.
         """
-        # Cypher 가변 길이 경로([*0..10])를 사용하여 TYPE-(CONTAINS)->FIELD-(OF_TYPE)->TYPE 관계를 추적합니다.
-        # 중첩 1단계가 (CONTAINS, OF_TYPE) 두 개의 관계를 거치므로 10은 최대 5단계를 의미합니다.
+        # 1. METHOD -> (HAS_PARAMETER|RETURNS) -> TYPE (직접 관계)
+        # 2. METHOD -> (CONTAINS) -> PARAMETER -> (OF_TYPE) -> TYPE (실제 스캔 구조)
+        # 위 두 경로를 모두 지원하여 root TYPE을 찾고, 거기서부터 재귀 탐색합니다.
         query = """
         MATCH (m:METHOD {signature: $signature})
-        OPTIONAL MATCH (m)-[:HAS_PARAMETER|RETURNS]->(root:TYPE)
+        OPTIONAL MATCH (m)-[:HAS_PARAMETER|RETURNS]->(root1:TYPE)
+        OPTIONAL MATCH (m)-[:CONTAINS]->(:PARAMETER)-[:OF_TYPE]->(root2:TYPE)
+        WITH DISTINCT root1, root2
+        UNWIND [root1, root2] as root
+        WITH DISTINCT root WHERE root IS NOT NULL
         OPTIONAL MATCH path = (root)-[:CONTAINS|OF_TYPE *0..10]->(t:TYPE)
         WITH DISTINCT t
         WHERE t IS NOT NULL
