@@ -3,7 +3,6 @@ from typing import List
 import os
 import logging
 from config import Config, should_exclude_path
-import io
 import zipfile
 
 logger = logging.getLogger(__name__)
@@ -49,10 +48,10 @@ async def upload_files(request: Request, project: Optional[str] = Form(None), fi
                  safe_project = "".join(c for c in raw_name if c.isalnum() or c in ('-', '_'))
              
              try:
-                zip_content = await file.read()
-                zip_buffer = io.BytesIO(zip_content)
-                
-                with zipfile.ZipFile(zip_buffer, 'r') as zip_ref:
+                # ZIP 전체를 메모리에 올리지 않고, 디스크 임시파일에서 직접 읽기
+                # (FastAPI UploadFile은 1MB 초과 시 자동으로 디스크 SpooledTemporaryFile 사용)
+                await file.seek(0)
+                with zipfile.ZipFile(file.file, 'r') as zip_ref:
                     for zip_info in zip_ref.namelist():
                         if zip_info.endswith('/') or os.path.basename(zip_info).startswith('.'):
                             continue

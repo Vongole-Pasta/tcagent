@@ -3,7 +3,7 @@
 
 모든 파일의 파싱 결과를 메모리에 축적한 뒤,
 관계 해석까지 완료한 후 일괄로 DB에 기록합니다.
-DB 라운드트립을 최소화하여 대규모 소스코드(~3GB)도 효율적으로 처리합니다.
+UNWIND 배치 쿼리로 DB 라운드트립을 최소화하여 대규모 소스코드도 효율적으로 처리합니다.
 """
 import json
 import logging
@@ -61,11 +61,11 @@ class GraphWriter:
         self._return_edges.extend(result.return_edges)
 
     # -----------------------------------------------------------------------
-    # 일괄 기록
+    # 일괄 기록 (UNWIND 배치)
     # -----------------------------------------------------------------------
 
     def flush(self):
-        """메모리에 축적된 전체 데이터를 일괄 DB에 기록합니다."""
+        """메모리에 축적된 전체 데이터를 UNWIND 배치로 일괄 DB에 기록합니다."""
         logger.info(
             f"Flushing to DB: {len(self._types)} types, "
             f"{len(self._fields)} fields, {len(self._methods)} methods, "
@@ -90,20 +90,103 @@ class GraphWriter:
         self._clear()
         logger.info("Flush complete.")
 
+    # -----------------------------------------------------------------------
+    # 노드 Flush
+    # -----------------------------------------------------------------------
+
     def _flush_types(self):
-        """축적된 TYPE 노드를 일괄 DB에 기록합니다."""
+        """축적된 TYPE 노드를 UNWIND 배치로 일괄 DB에 기록합니다."""
+        if not self._types:
+            return
+
+        batch = []
         for t in self._types.values():
-            self._upsert_type(t)
+            row = asdict(t)
+            # list[ConstantInfo] → JSON 문자열
+            row["constants"] = json.dumps(row["constants"], ensure_ascii=False) if row["constants"] else ""
+            batch.append(row)
+
+        try:
+            self.connector.execute_query("""
+                UNWIND $batch AS row
+                MERGE (t:TYPE {qualname: row.qualname})
+                SET t.name = row.name,
+                    t.kind = row.kind,
+                    t.constants = row.constants
+                WITH t, row
+                MATCH (f:FILE {path: row.file_path})
+                MERGE (f)-[:CONTAINS]->(t)
+            """, {"batch": batch})
+        except Exception as e:
+            logger.error(f"Failed to batch upsert TYPEs: {e}")
 
     def _flush_fields(self):
-        """축적된 FIELD 노드를 일괄 DB에 기록합니다."""
+        """축적된 FIELD 노드를 UNWIND 배치로 일괄 DB에 기록합니다."""
+        if not self._fields:
+            return
+
+        batch = []
         for f in self._fields.values():
-            self._upsert_field(f)
+            row = asdict(f)
+            # TypeInfo → JSON 문자열, 키명을 DB 스키마에 맞춤 (field_type → type)
+            row["type"] = json.dumps(row.pop("field_type"), ensure_ascii=False)
+            batch.append(row)
+
+        try:
+            self.connector.execute_query("""
+                UNWIND $batch AS row
+                MERGE (f:FIELD {qualname: row.qualname})
+                SET f.name = row.name,
+                    f.type = row.type,
+                    f.constraint = row.constraint
+                WITH f, row
+                MATCH (t:TYPE {qualname: row.type_qualname})
+                MERGE (t)-[:CONTAINS]->(f)
+            """, {"batch": batch})
+        except Exception as e:
+            logger.error(f"Failed to batch upsert FIELDs: {e}")
 
     def _flush_methods(self):
-        """축적된 METHOD 노드를 일괄 DB에 기록합니다."""
+        """축적된 METHOD 노드를 UNWIND 배치로 일괄 DB에 기록합니다."""
+        if not self._methods:
+            return
+
+        batch = []
         for m in self._methods.values():
-            self._upsert_method(m)
+            row = asdict(m)
+            # list[ParamInfo] → JSON 문자열
+            row["params"] = json.dumps(row["params"], ensure_ascii=False)
+            # TypeInfo|None → JSON 문자열
+            row["return_type"] = json.dumps(row["return_type"], ensure_ascii=False) if row["return_type"] else ""
+            # 키명을 DB 스키마에 맞춤 (method_hash → hash, scan_id → last_scan_id)
+            row["hash"] = row.pop("method_hash")
+            row["last_scan_id"] = row.pop("scan_id") or ""
+            batch.append(row)
+
+        try:
+            self.connector.execute_query("""
+                UNWIND $batch AS row
+                MERGE (m:METHOD {qualname: row.qualname})
+                ON CREATE SET m.status = 'NEW'
+                ON MATCH SET m.status = CASE
+                    WHEN m.hash = row.hash THEN 'AS-IS'
+                    ELSE 'MODIFIED'
+                END
+                SET m.name = row.name,
+                    m.signature = row.signature,
+                    m.source = row.source,
+                    m.hash = row.hash,
+                    m.params = row.params,
+                    m.return_type = row.return_type,
+                    m.endpoint_uri = row.endpoint_uri,
+                    m.http_method = row.http_method,
+                    m.last_scan_id = row.last_scan_id
+                WITH m, row
+                MATCH (t:TYPE {qualname: row.class_qualname})
+                MERGE (t)-[:CONTAINS]->(m)
+            """, {"batch": batch})
+        except Exception as e:
+            logger.error(f"Failed to batch upsert METHODs: {e}")
 
     # -----------------------------------------------------------------------
     # 인메모리 인덱스 구축
@@ -128,39 +211,118 @@ class GraphWriter:
             cls[f.name] = f
 
     # -----------------------------------------------------------------------
-    # 엣지 Flush
+    # 엣지 Flush (UNWIND 배치)
     # -----------------------------------------------------------------------
 
     def _flush_parameter_edges(self):
-        """HAS_PARAMETER 엣지를 DB에 기록합니다. METHOD → HAS_PARAMETER → TYPE."""
+        """HAS_PARAMETER 엣지를 UNWIND 배치로 일괄 DB에 기록합니다."""
+        # Python에서 미리 resolve하여 (method_qualname, type_qualname) 쌍 수집
+        batch = []
         for edge in self._param_edges:
             for type_name in edge.param_info["type"]["layout"]:
                 type_qualname = self._type_by_name.get(type_name)
                 if type_qualname:
-                    self._upsert_has_parameter(edge, type_qualname)
+                    batch.append({
+                        "method_qualname": edge.method_qualname,
+                        "type_qualname": type_qualname,
+                    })
+
+        if not batch:
+            return
+
+        try:
+            self.connector.execute_query("""
+                UNWIND $batch AS row
+                MATCH (m:METHOD {qualname: row.method_qualname})
+                MATCH (t:TYPE {qualname: row.type_qualname})
+                MERGE (m)-[:HAS_PARAMETER]->(t)
+            """, {"batch": batch})
+        except Exception as e:
+            logger.error(f"Failed to batch upsert HAS_PARAMETER edges: {e}")
 
     def _flush_return_edges(self):
-        """RETURNS 엣지를 DB에 기록합니다. METHOD → RETURNS → TYPE."""
+        """RETURNS 엣지를 UNWIND 배치로 일괄 DB에 기록합니다."""
+        batch = []
         for edge in self._return_edges:
             for type_name in edge.return_info["layout"]:
                 type_qualname = self._type_by_name.get(type_name)
                 if type_qualname:
-                    self._upsert_returns(edge, type_qualname)
+                    batch.append({
+                        "method_qualname": edge.method_qualname,
+                        "type_qualname": type_qualname,
+                    })
+
+        if not batch:
+            return
+
+        try:
+            self.connector.execute_query("""
+                UNWIND $batch AS row
+                MATCH (m:METHOD {qualname: row.method_qualname})
+                MATCH (t:TYPE {qualname: row.type_qualname})
+                MERGE (m)-[:RETURNS]->(t)
+            """, {"batch": batch})
+        except Exception as e:
+            logger.error(f"Failed to batch upsert RETURNS edges: {e}")
 
     def _flush_calls(self):
-        """CALLS 엣지를 해석하고 DB에 기록합니다."""
-        resolved, external = 0, 0
+        """CALLS 엣지를 해석하고 UNWIND 배치로 일괄 DB에 기록합니다."""
+        resolved_batch = []
+        external_batch = []
+
+        # Python에서 호출 대상을 미리 resolve한 뒤 두 배치로 분리
         for call in self._calls:
             target_qualname = self._resolve_call_target(
                 call.caller_qualname, call.target_method_name, call.object_name,
             )
             if target_qualname:
-                self._upsert_calls_method(call, target_qualname)
-                resolved += 1
+                resolved_batch.append({
+                    "caller_qualname": call.caller_qualname,
+                    "callee_qualname": target_qualname,
+                })
             else:
-                self._upsert_calls_external(call)
-                external += 1
-        logger.info(f"CALLS edges: {resolved} resolved, {external} external")
+                ext_qualname = (
+                    f"{call.object_name}.{call.target_method_name}"
+                    if call.object_name
+                    else call.target_method_name
+                )
+                external_batch.append({
+                    "caller_qualname": call.caller_qualname,
+                    "ext_qualname": ext_qualname,
+                    "name": call.target_method_name,
+                    "signature": f"{ext_qualname}()",
+                })
+
+        # resolved: METHOD → CALLS → METHOD
+        if resolved_batch:
+            try:
+                self.connector.execute_query("""
+                    UNWIND $batch AS row
+                    MATCH (caller:METHOD {qualname: row.caller_qualname})
+                    MATCH (callee:METHOD {qualname: row.callee_qualname})
+                    MERGE (caller)-[:CALLS]->(callee)
+                """, {"batch": resolved_batch})
+            except Exception as e:
+                logger.error(f"Failed to batch upsert CALLS (resolved) edges: {e}")
+
+        # external: METHOD → CALLS → EXTERNAL_CALL
+        if external_batch:
+            try:
+                self.connector.execute_query("""
+                    UNWIND $batch AS row
+                    MATCH (caller:METHOD {qualname: row.caller_qualname})
+                    MERGE (ext:EXTERNAL_CALL {qualname: row.ext_qualname})
+                    SET ext.name = row.name,
+                        ext.signature = row.signature
+                    MERGE (caller)-[:CALLS]->(ext)
+                """, {"batch": external_batch})
+            except Exception as e:
+                logger.error(f"Failed to batch upsert CALLS (external) edges: {e}")
+
+        logger.info(
+            f"CALLS edges: {len(resolved_batch)} resolved, "
+            f"{len(external_batch)} external"
+        )
 
     # -----------------------------------------------------------------------
     # CALLS 관계 찾기
@@ -202,159 +364,6 @@ class GraphWriter:
                     return methods[0].qualname
 
         return None
-
-    # -----------------------------------------------------------------------
-    # 개별 Upsert — 노드
-    # -----------------------------------------------------------------------
-
-    def _upsert_type(self, parsed: ParsedType):
-        """TYPE 노드 upsert + FILE→CONTAINS→TYPE 관계 연결."""
-        try:
-            params = asdict(parsed)
-            # list[ConstantInfo] → JSON 문자열로 직렬화
-            params["constants"] = json.dumps(params["constants"], ensure_ascii=False) if params["constants"] else ""
-
-            self.connector.execute_query("""
-                // qualname을 PK로 사용하여 TYPE 노드를 생성하거나 갱신합니다.
-                MERGE (t:TYPE {qualname: $qualname})
-                SET t.name = $name,
-                    t.kind = $kind,
-                    t.constants = $constants
-
-                // 해당 TYPE이 속한 FILE과 CONTAINS 관계를 연결합니다.
-                WITH t
-                MATCH (f:FILE {path: $file_path})
-                MERGE (f)-[:CONTAINS]->(t)
-            """, params)
-        except Exception as e:
-            logger.error(f"Failed to upsert TYPE {parsed.qualname}: {e}")
-
-    def _upsert_field(self, parsed: ParsedField):
-        """FIELD 노드 upsert + TYPE→CONTAINS→FIELD 관계 연결."""
-        try:
-            params = asdict(parsed)
-            # TypeInfo → JSON 문자열로 직렬화, 키명을 DB 스키마에 맞춤 (field_type → type)
-            params["type"] = json.dumps(params.pop("field_type"), ensure_ascii=False)
-
-            self.connector.execute_query("""
-                // qualname을 PK로 사용하여 FIELD 노드를 생성하거나 갱신합니다.
-                MERGE (f:FIELD {qualname: $qualname})
-                SET f.name = $name,
-                    f.type = $type,
-                    f.constraint = $constraint
-
-                // 해당 FIELD가 속한 TYPE과 CONTAINS 관계를 연결합니다.
-                WITH f
-                MATCH (t:TYPE {qualname: $type_qualname})
-                MERGE (t)-[:CONTAINS]->(f)
-            """, params)
-        except Exception as e:
-            logger.error(f"Failed to upsert FIELD {parsed.qualname}: {e}")
-
-    def _upsert_method(self, parsed: ParsedMethod):
-        """METHOD 노드 upsert + TYPE→CONTAINS→METHOD 관계 연결."""
-        try:
-            params = asdict(parsed)
-            # list[ParamInfo] → JSON 문자열로 직렬화
-            params["params"] = json.dumps(params["params"], ensure_ascii=False)
-            # TypeInfo|None → JSON 문자열로 직렬화
-            params["return_type"] = json.dumps(params["return_type"], ensure_ascii=False) if params["return_type"] else ""
-            # 키명을 DB 스키마에 맞춤 (method_hash → hash, scan_id → last_scan_id)
-            params["hash"] = params.pop("method_hash")
-            params["last_scan_id"] = params.pop("scan_id") or ""
-
-            self.connector.execute_query("""
-                // qualname을 PK로 사용하여 METHOD 노드를 생성하거나 갱신합니다.
-                // status: NEW(신규생성), MODIFIED(변경됨), AS-IS(동일)
-                MERGE (m:METHOD {qualname: $qualname})
-                ON CREATE SET m.status = 'NEW'
-                ON MATCH SET m.status = CASE
-                    WHEN m.hash = $hash THEN 'AS-IS'
-                    ELSE 'MODIFIED'
-                END
-
-                SET m.name = $name,
-                    m.signature = $signature,
-                    m.source = $source,
-                    m.hash = $hash,
-                    m.params = $params,
-                    m.return_type = $return_type,
-                    m.endpoint_uri = $endpoint_uri,
-                    m.http_method = $http_method,
-                    m.last_scan_id = $last_scan_id
-
-                // 해당 METHOD가 속한 TYPE과 CONTAINS 관계를 연결합니다.
-                WITH m
-                MATCH (t:TYPE {qualname: $class_qualname})
-                MERGE (t)-[:CONTAINS]->(m)
-            """, params)
-        except Exception as e:
-            logger.error(f"Failed to upsert METHOD {parsed.qualname}: {e}")
-
-    # -----------------------------------------------------------------------
-    # 개별 Upsert — 엣지
-    # -----------------------------------------------------------------------
-
-    def _upsert_has_parameter(self, parsed: ParsedParameterEdge, type_qualname: str):
-        """METHOD → HAS_PARAMETER → TYPE 엣지를 DB에 기록합니다."""
-        try:
-            params = asdict(parsed)
-            params["type_qualname"] = type_qualname
-
-            self.connector.execute_query("""
-                MATCH (m:METHOD {qualname: $method_qualname})
-                MATCH (t:TYPE {qualname: $type_qualname})
-                MERGE (m)-[:HAS_PARAMETER]->(t)
-            """, params)
-        except Exception as e:
-            logger.error(f"Failed to upsert HAS_PARAMETER {parsed.method_qualname} → {type_qualname}: {e}")
-
-    def _upsert_returns(self, parsed: ParsedReturnEdge, type_qualname: str):
-        """METHOD → RETURNS → TYPE 엣지를 DB에 기록합니다."""
-        try:
-            params = asdict(parsed)
-            params["type_qualname"] = type_qualname
-
-            self.connector.execute_query("""
-                MATCH (m:METHOD {qualname: $method_qualname})
-                MATCH (t:TYPE {qualname: $type_qualname})
-                MERGE (m)-[:RETURNS]->(t)
-            """, params)
-        except Exception as e:
-            logger.error(f"Failed to upsert RETURNS {parsed.method_qualname} → {type_qualname}: {e}")
-
-    def _upsert_calls_method(self, parsed: ParsedCallEdge, callee_qualname: str):
-        """METHOD → CALLS → METHOD 엣지를 DB에 기록합니다."""
-        try:
-            params = asdict(parsed)
-            params["callee_qualname"] = callee_qualname
-
-            self.connector.execute_query("""
-                MATCH (caller:METHOD {qualname: $caller_qualname})
-                MATCH (callee:METHOD {qualname: $callee_qualname})
-                MERGE (caller)-[:CALLS]->(callee)
-            """, params)
-        except Exception as e:
-            logger.error(f"Failed to upsert CALLS {parsed.caller_qualname} → {callee_qualname}: {e}")
-
-    def _upsert_calls_external(self, parsed: ParsedCallEdge):
-        """METHOD → CALLS → EXTERNAL_CALL 엣지를 DB에 기록합니다."""
-        try:
-            params = asdict(parsed)
-            # 키명을 DB 스키마에 맞춤
-            params["ext_qualname"] = f"{parsed.object_name}.{parsed.target_method_name}" if parsed.object_name else parsed.target_method_name
-            params["name"] = parsed.target_method_name
-            params["signature"] = f"{params['ext_qualname']}()"
-
-            self.connector.execute_query("""
-                MATCH (caller:METHOD {qualname: $caller_qualname})
-                MERGE (ext:EXTERNAL_CALL {qualname: $ext_qualname})
-                SET ext.name = $name,
-                    ext.signature = $signature
-                MERGE (caller)-[:CALLS]->(ext)
-            """, params)
-        except Exception as e:
-            logger.error(f"Failed to upsert EXTERNAL_CALL {parsed.caller_qualname} → {parsed.target_method_name}: {e}")
 
     # -----------------------------------------------------------------------
     # 메모리 정리
