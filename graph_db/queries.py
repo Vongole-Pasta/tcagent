@@ -143,15 +143,7 @@ class CypherQueries:
            endpoint_m.signature as signature
     """
 
-    # [1-depth 하위 호출 메서드 조회]
-    # 특정 메서드로부터 직접 호출되는(1-depth) 모든 메서드 정보를 조회합니다.
-    # 통합 테스트 에이전트의 컨텍스트 보강(Retriever)에 사용됩니다.
-    # Usage: core/agent/integration_agent.py:181
-    GET_1_DEPTH_DOWNSTREAM_METHODS = """
-    MATCH (m:METHOD)-[:CALLS]->(d:METHOD)
-    WHERE (elementId(m) = $method_id OR m.id = $method_id)
-    RETURN d.name as name, elementId(d) as id, d.signature as signature, d.source as source, d.return_type as returnType
-    """
+    # [특정 메서드에서 엔드포인트까지의 경로 조회]
 
     # --- Change Detection Helpers ---
     
