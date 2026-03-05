@@ -35,10 +35,12 @@ class DBClient:
         """Cypher 쿼리를 실행하고 결과를 리스트 형태로 반환합니다."""
         if not self.driver:
             raise ConnectionError("Neo4j driver is not connected")
-        
+
+        clean_query = self._remove_cypher_comments(query)
+
         try:
             with self.driver.session() as session:
-                result = session.run(query, parameters)
+                result = session.run(clean_query, parameters)
                 return [record for record in result]
         except Exception as e:
             logger.error(f"Query execution failed: {e}")
@@ -55,11 +57,24 @@ class DBClient:
         queries = [
             "CREATE CONSTRAINT IF NOT EXISTS FOR (f:FILE) REQUIRE f.path IS UNIQUE",
             "CREATE INDEX IF NOT EXISTS FOR (f:FILE) ON (f.name)",
-            "CREATE INDEX IF NOT EXISTS FOR (t:TYPE) ON (t.fullName)",
-            "CREATE INDEX IF NOT EXISTS FOR (m:METHOD) ON (m.signature)"
+            "CREATE CONSTRAINT IF NOT EXISTS FOR (t:TYPE) REQUIRE t.qualname IS UNIQUE",
+            "CREATE INDEX IF NOT EXISTS FOR (t:TYPE) ON (t.name)",
+            "CREATE CONSTRAINT IF NOT EXISTS FOR (m:METHOD) REQUIRE m.qualname IS UNIQUE",
+            "CREATE CONSTRAINT IF NOT EXISTS FOR (f:FIELD) REQUIRE f.qualname IS UNIQUE",
+            "CREATE CONSTRAINT IF NOT EXISTS FOR (e:EXTERNAL_CALL) REQUIRE e.name IS UNIQUE",
         ]
         for q in queries:
             try:
                 self.execute_query(q)
             except Exception as e:
                 logger.warning(f"Constraint creation warning: {e}")
+
+    def _remove_cypher_comments(self, query: str) -> str:
+        """Cypher 쿼리에서 주석을 제거합니다 (쿼리 로그 가독성 향상)."""
+        lines = []
+        for line in query.split('\n'):
+            if '//' in line:
+                line = line.split('//')[0]
+            if line.strip():
+                lines.append(line.rstrip())
+        return '\n'.join(lines)

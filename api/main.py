@@ -4,7 +4,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from api.routers import tests, uploads, projects, graph
 from core.analysis.analyzer import Analyzer
 from core.agent.graph import create_agent_graph
-from infra.db_client import DBClient
+from graph_db.client import DBClient
 import logging
 
 # 앱 진입점에서 로깅 초기화 (모든 모듈에 적용)

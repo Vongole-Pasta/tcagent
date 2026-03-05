@@ -55,19 +55,17 @@ class CypherQueries:
     """
     
     # [루트 메서드의 파라미터 조회]
-    # 루트 메서드의 입력 파라미터와 DTO 필드 구조를 조회합니다.
+    # 루트 메서드의 파라미터(JSON)와 HAS_PARAMETER로 연결된 TYPE의 필드 구조를 조회합니다.
+    # params는 METHOD 노드에 JSON 문자열로 저장되어 있으므로 별도 파싱이 필요합니다.
     # Usage: core/agent/nodes.py:139
     GET_ROOT_PARAMETERS = """
-    MATCH (m:METHOD)-[:CONTAINS]->(p:PARAMETER)
+    MATCH (m:METHOD)
     WHERE elementId(m) = $root_id
-    OPTIONAL MATCH (p)-[:OF_TYPE]->(t:TYPE)
+    OPTIONAL MATCH (m)-[:HAS_PARAMETER]->(t:TYPE)
     OPTIONAL MATCH (t)-[:CONTAINS]->(f:FIELD)
-    RETURN p.index as param_index, 
-           p.name as param_name, 
-           p.type as param_type, 
-           p.types as param_types,
-           collect({name: f.name, type: f.type}) as fields
-    ORDER BY param_index
+    RETURN m.params as params,
+           collect(DISTINCT {type_name: t.name, type_qualname: t.qualname,
+                             field_name: f.name, field_type: f.type}) as type_fields
     """
 
 
@@ -81,7 +79,7 @@ class CypherQueries:
     # Usage: api/routers/projects.py:38
     GET_ALL_METHODS = """
     MATCH (m:METHOD)<-[:CONTAINS]-(c:TYPE)
-    RETURN elementId(m) as id, m.name as name, m.signature as signature, m.endpoint as endpoint, m.http_method as http_method, m.status as status, c.name as class_name
+    RETURN elementId(m) as id, m.name as name, m.signature as signature, m.endpoint_uri as endpoint, m.http_method as http_method, m.status as status, c.name as class_name
     ORDER BY c.name, m.name
     """
     
@@ -91,11 +89,11 @@ class CypherQueries:
     # Usage: api/routers/projects.py:38
     GET_ALL_ENDPOINTS = """
     MATCH (m:METHOD)<-[:CONTAINS]-(c:TYPE)
-    WHERE m.endpoint IS NOT NULL
+    WHERE m.endpoint_uri IS NOT NULL
     OPTIONAL MATCH (m)-[:CALLS*0..]->(d:METHOD)
     WITH m, c, collect(DISTINCT d.status) as statuses
-    RETURN elementId(m) as id, m.name as name, m.endpoint as endpoint, m.http_method as http_method, statuses, c.name as class_name
-    ORDER BY m.endpoint
+    RETURN elementId(m) as id, m.name as name, m.endpoint_uri as endpoint, m.http_method as http_method, statuses, c.name as class_name
+    ORDER BY m.endpoint_uri
     """
 
 

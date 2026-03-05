@@ -8,7 +8,7 @@ from langchain_core.output_parsers import JsonOutputParser, StrOutputParser
 from pydantic import BaseModel, Field
 
 from config import Config
-from infra.db_client import DBClient
+from graph_db.client import DBClient
 from graph_db.queries import CypherQueries
 from core.agent.state import AgentState, MethodNode, TestContext, ScenarioGenerationState, GeneratedScenario, EvaluationResult, GeneratedScenarioResult
 from core.agent.prompts import SCENARIO_GENERATION_PROMPT, SCENARIO_EVALUATION_PROMPT
@@ -89,27 +89,48 @@ class IntegratedTestAgentNodes:
                         if not any(tm.id == target_method_node.id for tm in existing.target_methods):
                             existing.target_methods.append(target_method_node)
                     else:
-                        # 루트 메서드 컨텍스트를 위한 파라미터 조회 (루트당 한 번만)
-                        # 업데이트된 쿼리: 어노테이션 및 DTO 필드 조회
+                        # 루트 메서드의 파라미터 + DTO 필드 조회 (루트당 한 번만)
+                        # params는 METHOD 노드에 JSON 문자열로 저장되어 있고,
+                        # HAS_PARAMETER로 연결된 TYPE의 FIELD가 DTO 구조를 나타냅니다.
                         params_result = self.db_client.execute_query(CypherQueries.GET_ROOT_PARAMETERS, {"root_id": root_id})
-                        
+
                         parameter_infos = []
-                        for p_row in params_result:
-                            # 현재는 간단한 스키마 구성 (재귀적 조회는 비용이 큼)
-                            # 'fields'가 DTO 구조를 나타낸다고 가정
-                            raw_fields = p_row['fields']
-                            clean_fields = {}
-                            for f in raw_fields:
-                                if f.get('name') and f.get('type'):
-                                    clean_fields[f['name']] = f['type']
-                            
-                            parameter_infos.append({
-                                "name": p_row['param_name'],
-                                "type": p_row['param_type'],
-                                "types": p_row.get('param_types', []),
-                                "index": p_row.get('param_index', 0),
-                                "dto_schema": clean_fields if clean_fields else None
-                            })
+                        if params_result:
+                            row = params_result[0]
+                            # METHOD.params (JSON 문자열) 파싱
+                            raw_params = row.get('params', '[]')
+                            import json
+                            params_list = json.loads(raw_params) if isinstance(raw_params, str) else (raw_params or [])
+
+                            # HAS_PARAMETER로 연결된 TYPE의 FIELD → DTO 스키마 구축
+                            # {type_name → {field_name: field_type}}
+                            type_fields_raw = row.get('type_fields', [])
+                            dto_schemas = {}
+                            for tf in type_fields_raw:
+                                t_name = tf.get('type_name')
+                                f_name = tf.get('field_name')
+                                f_type = tf.get('field_type')
+                                if t_name and f_name and f_type:
+                                    dto_schemas.setdefault(t_name, {})[f_name] = f_type
+
+                            for i, param in enumerate(params_list):
+                                # param: {"name": "...", "type": {"given": "...", "layout": [...]}, "annotation": "..."}
+                                param_type = param.get('type', {})
+                                type_names = param_type.get('layout', [])
+                                # layout의 타입명 중 DTO 스키마가 있는 것을 찾아 연결
+                                dto_schema = None
+                                for t_name in type_names:
+                                    if t_name in dto_schemas:
+                                        dto_schema = dto_schemas[t_name]
+                                        break
+
+                                parameter_infos.append({
+                                    "name": param.get('name', ''),
+                                    "type": param_type.get('given', ''),
+                                    "types": type_names,
+                                    "index": i,
+                                    "dto_schema": dto_schema
+                                })
 
 
 
