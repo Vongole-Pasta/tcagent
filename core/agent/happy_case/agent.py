@@ -40,7 +40,6 @@ class WorkerState(TypedDict):
     개별 엔드포인트 작업을 위한 State입니다.
     retriever -> generator 순서로 데이터가 전달됩니다.
     """
-    endpoint_url: str
     group: ImpactGroup
     context: NotRequired[Dict[str, Any]]         # retriever가 수집한 메서드/DTO 컨텍스트
     worker_results: Annotated[NotRequired[List[Dict[str, Any]]], operator.add]  # 생성된 최종 결과 (시나리오)
@@ -95,8 +94,7 @@ class HappyCaseAgent:
                 endpoint_signature = row.get("signature")
                 
                 # 이미 추가된 시그니처는 건너뛰어 같은 메서드가 여러 경로로 발견돼도 중복 등록하지 않습니다.
-                existing_sigs = set(impact_groups[group_key]["endpoint_signatures"])
-                if endpoint_signature and endpoint_signature not in existing_sigs:
+                if endpoint_signature and endpoint_signature not in impact_groups[group_key]["endpoint_signatures"]:
                     impact_groups[group_key]["endpoint_signatures"].append(endpoint_signature)
                 
                 if m_id not in impact_groups[group_key]["source_methods"]:
@@ -130,10 +128,8 @@ class HappyCaseAgent:
         group = state["group"]
         methods_context = []
         all_dtos = {}
-        processed_signatures = set()
 
         for sig in group["endpoint_signatures"]:
-            if sig in processed_signatures: continue
 
             method_res = self.db_client.execute_query(
                 "MATCH (m:METHOD {signature: $signature}) RETURN m",
@@ -155,7 +151,6 @@ class HappyCaseAgent:
                 "params": params_info,
                 "returnType": method_node.get("return_type")
             })
-            processed_signatures.add(sig)
             # _collect_dto_info를 통해 파라미터/반환 타입 및 중첩 DTO들의 필드 구조를 수집합니다.
             self._collect_dto_info(sig, all_dtos)
 
@@ -167,8 +162,8 @@ class HappyCaseAgent:
         """
         수집된 컨텍스트로 LLM을 호출하여 시나리오를 생성합니다.
         """
-        endpoint_url = state["endpoint_url"]
         group = state["group"]
+        endpoint_url = group["url"]
         context = state.get("context", {})
 
         prompt = HAPPY_CASE_GENERATOR_PROMPT.replace("{endpoint_url}", endpoint_url) \
@@ -216,7 +211,7 @@ class HappyCaseAgent:
                 return []
             logger.info(f"Dispatching {len(impact_groups)} workers: {list(impact_groups.keys())}")
             return [
-                Send("worker", {"endpoint_url": group["url"], "group": group})
+                Send("worker", {"group": group})
                 for group in impact_groups.values()
             ]
 
@@ -248,14 +243,7 @@ class HappyCaseAgent:
         """
         에이전트를 실행하여 병렬로 Happy Case 시나리오를 생성합니다.
         """
-        initial_state = {
-            "source_method_ids": source_method_ids,
-            "impact_groups": {},
-            "worker_results": [],
-            "scenarios": [],
-            "errors": []
-        }
-        return self.graph.invoke(initial_state)
+        return self.graph.invoke({"source_method_ids": source_method_ids})
 
     def _collect_dto_info(self, method_signature, dtos_context):
         """
