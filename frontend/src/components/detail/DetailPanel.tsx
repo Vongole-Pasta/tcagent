@@ -5,18 +5,13 @@ import { useStore } from '@/store/useStore';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import { Button } from '@/components/ui/button';
-import { Sparkles, Loader2, Code2, Diff } from 'lucide-react';
-import { IntegrationScenarioView } from '../agent/IntegrationScenarioView';
+import { Code2, Diff } from 'lucide-react';
 import { DiffView } from './DiffView';
 
 export function DetailPanel() {
     const {
         selectedNodeDetail,
         selectedNodeId,
-        generateIntegrationScenario,
-        isAgentRunning,
-        integrationScenarios,
-        clearScenarios,
         projectNodes,
         codeSnapshots
     } = useStore();
@@ -43,11 +38,6 @@ export function DetailPanel() {
     const oldSource = selectedNodeDetail.signature ? codeSnapshots[selectedNodeDetail.signature] : null;
     const canShowDiff = isModified && oldSource && oldSource !== selectedNodeDetail.source;
 
-    const handleGenerate = () => {
-        if (selectedNodeId) {
-            generateIntegrationScenario(selectedNodeId);
-        }
-    };
 
     return (
         <div className="h-full flex flex-col bg-background min-h-0 overflow-hidden">
@@ -73,35 +63,9 @@ export function DetailPanel() {
                     )}
                 </div>
 
-                <div className="flex shrink-0 gap-2">
-                    <Button
-                        size="sm"
-                        variant="default"
-                        className="bg-blue-600 hover:bg-blue-700 h-9 px-3 gap-2"
-                        onClick={handleGenerate}
-                        disabled={isAgentRunning}
-                    >
-                        {isAgentRunning ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
-                        <span className="hidden sm:inline">통합 시나리오 생성</span>
-                    </Button>
-                </div>
             </div>
 
             <div className="flex-1 overflow-auto min-h-0 w-full">
-                {/* 1. Agent Analysis Area */}
-                {(isAgentRunning || integrationScenarios.length > 0) && (
-                    <div className="border-b bg-blue-50/10">
-                        <div className="p-2 px-4 flex items-center justify-between border-b bg-blue-50/20">
-                            <span className="text-xs font-bold text-blue-600 flex items-center gap-1">
-                                <Sparkles className="h-3 w-3" /> Agent Analysis
-                            </span>
-                            <Button variant="ghost" size="xs" className="h-6 text-[10px]" onClick={clearScenarios}>
-                                Clear
-                            </Button>
-                        </div>
-                        <IntegrationScenarioView />
-                    </div>
-                )}
 
                 {/* 2. Source Code / Diff Area */}
                 <div className="p-0 relative">
