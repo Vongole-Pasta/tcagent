@@ -17,7 +17,7 @@ class ImpactGroup(TypedDict):
     url: str
     http_method: str
     name: str
-    related_signatures: List[str]  # Path 노드들의 시그니처 목록
+    endpoint_signatures: List[str]  # 엔드포인트 메서드 시그니처 목록
     source_methods: List[str]     # 영향을 준 소스 메서드 ID 목록
 
 class HappyCaseState(TypedDict):
@@ -86,17 +86,17 @@ class HappyCaseAgent:
                 if group_key not in impact_groups:
                     impact_groups[group_key] = {
                         "url": endpoint,"http_method": http_method,"name": row["endpoint_method_name"],
-                        "related_signatures": [],"source_methods": []
+                        "endpoint_signatures": [],"source_methods": []
                     }
                 
-                # Path 객체의 모든 노드 중 METHOD 레이블을 가진 노드의 시그니처만 추출합니다.
-                # Path 자체(neo4j Path 객체)를 State에 저장하면 직렬화 비용이 높아지므로,
-                # 필요한 식별자(signature 문자열)만 분리하여 경량화합니다.
-                path_signatures = [node.get("signature") for node in row["path"].nodes if "METHOD" in node.labels]
+                # DB에서 전달받은 최종 엔드포인트 메서드의 시그니처만 바로 사용합니다.
+                # DB 단에서부터 불필요한 중간 경로를 생략하여 네트워크 및 메모리 낭비를 줄입니다.
+                endpoint_signature = row.get("signature")
                 
                 # 이미 추가된 시그니처는 건너뛰어 같은 메서드가 여러 경로로 발견돼도 중복 등록하지 않습니다.
-                existing_sigs = set(impact_groups[group_key]["related_signatures"])
-                impact_groups[group_key]["related_signatures"].extend([s for s in path_signatures if s not in existing_sigs])
+                existing_sigs = set(impact_groups[group_key]["endpoint_signatures"])
+                if endpoint_signature and endpoint_signature not in existing_sigs:
+                    impact_groups[group_key]["endpoint_signatures"].append(endpoint_signature)
                 
                 if m_id not in impact_groups[group_key]["source_methods"]:
                     impact_groups[group_key]["source_methods"].append(m_id)
@@ -132,7 +132,7 @@ class HappyCaseAgent:
         processed_signatures = set()
         public_dto_names = set()
 
-        for sig in group["related_signatures"]:
+        for sig in group["endpoint_signatures"]:
             if sig in processed_signatures: continue
 
             method_res = self.db_client.execute_query(
@@ -167,17 +167,15 @@ class HappyCaseAgent:
             # _collect_dto_info를 통해 파라미터/반환 타입의 필드 구조를 수집합니다.
             self._collect_dto_info(sig, all_dtos)
 
-        # public_dto_names에 추론된 DTO 이름이 포함된 타입은 Public(API 응답/요청 스펙)으로,
-        # 그 외는 Internal(내부 도메인 객체)로 분류합니다.
-        # validator는 Public DTO 스펙만을 기준으로 expected_result를 검증합니다.
+        # public_dto_names에 추론된 DTO 이름이 포함된 엔드포인트 DTO들만 Public(API 응답/요청 스펙)으로 수집합니다.
+        # 내부 로직용 DTO는 LLM의 혼동을 막기 위해 컨텍스트에서 제외합니다.
         public_dtos = {}
-        internal_dtos = {}
         for t_name, fields in all_dtos.items():
-            if any(p in t_name for p in public_dto_names): public_dtos[t_name] = fields
-            else: internal_dtos[t_name] = fields
+            if any(p in t_name for p in public_dto_names): 
+                public_dtos[t_name] = fields
 
         return {
-            "context": {"methods": methods_context, "public_dtos": public_dtos, "internal_dtos": internal_dtos}
+            "context": {"methods": methods_context, "public_dtos": public_dtos}
         }
 
     def generator_worker_node(self, state: WorkerState):
@@ -201,9 +199,6 @@ class HappyCaseAgent:
 
         [Public API DTO 구조 (필수 준수)]
         {json.dumps(context.get('public_dtos', {}), indent=2, ensure_ascii=False)}
-
-        [Internal Data structures (참고용 컨텍스트)]
-        {json.dumps(context.get('internal_dtos', {}), indent=2, ensure_ascii=False)}
 
         [DTO 매핑 및 헤더 지침]
         - **중요**: `expected_result` (응답 바디)에는 오직 **[Public API DTO 구조]**에 정의된 필드만 포함해야 합니다.
@@ -249,7 +244,6 @@ class HappyCaseAgent:
         return {"scenarios": scenarios}
 
     def _build_graph(self):
-        MAX_RETRIES = 3
 
         def continue_to_workers(state: HappyCaseState):
             """planner 종료 후 각 엔드포인트마다 독립적인 워커 서브 그래프를 병렬 실행합니다."""
