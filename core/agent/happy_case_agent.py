@@ -142,9 +142,14 @@ class HappyCaseAgent:
             if not method_res: continue
             method_node = method_res[0]["m"]
 
-            # 반환 타입이 ResponseEntity<DTO> 형태면 제네릭 파라미터(DTO 이름)가 실제 응답 DTO입니다.
-            # 그 외의 비-void 타입도 직접 반환 DTO로 간주합니다.
+            # [반환 타입 분석] 
+            # 1. DB 속성이 JSON 문자열일 경우를 대비해 안전하게 파싱합니다. (AttributeError 방지)
             ret_type_obj = method_node.get("return_type")
+            if isinstance(ret_type_obj, str):
+                try: ret_type_obj = json.loads(ret_type_obj)
+                except: pass
+            
+            # 2. ResponseEntity<DTO> 형태에서 실제 DTO 이름을 추출하거나, 일반 타입을 획득합니다.
             ret_type = ret_type_obj.get("given") if isinstance(ret_type_obj, dict) else ret_type_obj
             if ret_type and "ResponseEntity<" in ret_type:
                 try: actual_dto = ret_type.split('<')[1].split('>')[0]; public_dto_names.add(actual_dto)
@@ -152,15 +157,37 @@ class HappyCaseAgent:
             elif ret_type and ret_type != "void":
                 public_dto_names.add(ret_type)
 
-            # 메서드의 첫 번째 파라미터 타입을 요청 DTO로 추론합니다 (LIMIT 1).
-            param_query = "MATCH (m:METHOD {signature: $signature})-[:HAS_PARAMETER]->(t:TYPE) RETURN t.fullName as type_name LIMIT 1"
-            param_res = self.db_client.execute_query(param_query, {"signature": sig})
-            if param_res: public_dto_names.add(param_res[0]["type_name"])
+            # [파라미터 분석 및 DTO 식별]
+            # 1. 메서드의 모든 파라미터 정보를 가져옵니다. (JSON 문자열 대응 포함)
+            params_info = method_node.get("params", [])
+            if isinstance(params_info, str):
+                try: params_info = json.loads(params_info)
+                except: params_info = []
+            
+            if not params_info:
+                # 2. params 속성이 없는 경우 그래프 관계(HAS_PARAMETER)를 통해 보강하여 누락을 방지합니다.
+                param_query = "MATCH (m:METHOD {signature: $signature})-[:HAS_PARAMETER]->(t:TYPE) RETURN t.fullName as type_name"
+                param_res = self.db_client.execute_query(param_query, {"signature": sig})
+                params_info = [{"type": {"given": r["type_name"]}} for r in param_res]
+
+            for p in params_info:
+                p_type_obj = p.get("type", {})
+                p_type = p_type_obj.get("given") if isinstance(p_type_obj, dict) else p_type_obj
+                if not p_type: continue
+
+                # 3. 표준 라이브러리(Spring, Java 등) 및 원시 타입은 비즈니스 DTO가 아니므로 필터링합니다.
+                # 이를 통해 LLM에게 꼭 필요한 커스텀 DTO 구조만 전달하여 혼동을 줄입니다.
+                is_standard = any(pkg in p_type for pkg in ["java.", "javax.", "org.springframework.", "jakarta."])
+                is_primitive = p_type.lower() in ["string", "long", "int", "integer", "boolean", "double", "float"]
+                
+                if not (is_standard or is_primitive):
+                    public_dto_names.add(p_type)
 
             methods_context.append({
                 "name": method_node.get("name"),
                 "signature": sig,
                 "source": method_node.get("source"),
+                "params": params_info,
                 "returnType": method_node.get("return_type")
             })
             processed_signatures.add(sig)
@@ -200,11 +227,18 @@ class HappyCaseAgent:
         [Public API DTO 구조 (필수 준수)]
         {json.dumps(context.get('public_dtos', {}), indent=2, ensure_ascii=False)}
 
-        [DTO 매핑 및 헤더 지침]
+        [DTO 매핑 및 호출 지침]
         - **중요**: `expected_result` (응답 바디)에는 오직 **[Public API DTO 구조]**에 정의된 필드만 포함해야 합니다.
-        - **헤더 지침**: 
-          - `Content-Type: application/json`과 같이 모든 응답에 공통적이고 당연한 정보는 절대 포함하지 마세요.
-          - `Location` 헤더(리소스 생성 시)나 `Set-Cookie` 등 **비즈니스적으로 의미 있는 특정 헤더**가 코드상에서 확인될 경우에만, `expected_result`의 JSON 바디 앞에 "Header: Key=Value" 형식으로 명시하세요.
+        - **입력 데이터(input_data) 생성 지침**:
+          - 엔드포인트 메서드의 파라미터 목록(`params`)을 보고 각 데이터의 소스를 판단하세요.
+          - **Body**: DTO 타입이거나 `@RequestBody`인 경우 JSON 바디로 작성하세요.
+          - **Header**: `@RequestHeader` 또는 이름/타입상 헤더로 추정되는 경우, `input_data` 최상단에 "Header: Key=Value" 형식으로 작성하세요.
+          - **Path**: `@PathVariable` 또는 URL 패턴(`{id}` 등)과 일치하는 경우, "Path: Key=Value" 형식으로 작성하세요.
+          - **Query**: `@RequestParam` 또는 기타 원시 타입인 경우, "Query: Key=Value" 형식으로 작성하세요.
+          - 여러 소스가 섞여 있다면 각각 명시한 후 마지막에 바디 JSON을 작성하세요.
+        - **예상 결과(expected_result) 생성 지침**:
+          - `Content-Type: application/json`과 같이 당연한 정보는 생략하세요.
+          - `Location` 헤더(리소스 생성 시)나 `Set-Cookie` 등 **비즈니스적으로 의미 있는 특정 응답 헤더**가 코드상에서 확인될 경우에만, JSON 바디 앞에 "Header: Key=Value" 형식으로 명시하세요.
         - **보안/토큰**: `token`이나 `Authorization`과 같은 보안 정보는 헤더로 명시하되, 실제 값이 아닌 `<TOKEN>`과 같은 플레이스홀더를 사용하세요.
 
         [요구사항]
@@ -317,12 +351,20 @@ class HappyCaseAgent:
                 if t_name not in dtos_context: dtos_context[t_name] = []
                 if row["pf_name"] and not any(f["name"] == row["pf_name"] for f in dtos_context[t_name]):
                     # TypeInfo 객체(dict)인 경우 "given" 키에서 실제 타입 문자열을 꺼냅니다.
-                    p_f_type = row["pf_type"].get("given") if isinstance(row["pf_type"], dict) else row["pf_type"]
+                    pf_type_obj = row["pf_type"]
+                    if isinstance(pf_type_obj, str):
+                        try: pf_type_obj = json.loads(pf_type_obj)
+                        except: pass
+                    p_f_type = pf_type_obj.get("given") if isinstance(pf_type_obj, dict) else pf_type_obj
                     dtos_context[t_name].append({"name": row["pf_name"], "type": p_f_type})
             if row["rt_name"]:
                 t_name = row["rt_name"]
                 if t_name not in dtos_context: dtos_context[t_name] = []
                 if row["rf_name"] and not any(f["name"] == row["rf_name"] for f in dtos_context[t_name]):
                     # TypeInfo 객체(dict)인 경우 "given" 키에서 실제 타입 문자열을 꺼냅니다.
-                    r_f_type = row["rf_type"].get("given") if isinstance(row["rf_type"], dict) else row["rf_type"]
+                    rf_type_obj = row["rf_type"]
+                    if isinstance(rf_type_obj, str):
+                        try: rf_type_obj = json.loads(rf_type_obj)
+                        except: pass
+                    r_f_type = rf_type_obj.get("given") if isinstance(rf_type_obj, dict) else rf_type_obj
                     dtos_context[t_name].append({"name": row["rf_name"], "type": r_f_type})
