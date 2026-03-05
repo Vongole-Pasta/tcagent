@@ -37,15 +37,13 @@ class HappyCaseState(TypedDict):
 class WorkerState(TypedDict):
     """
     개별 엔드포인트 작업을 위한 State입니다.
-    retriever -> generator -> validator 순서로 데이터가 전달됩니다.
+    retriever -> generator 순서로 데이터가 전달됩니다.
     """
     endpoint_url: str
     group: ImpactGroup
     context: NotRequired[Dict[str, Any]]         # retriever가 수집한 메서드/DTO 컨텍스트
-    scenario: NotRequired[Dict[str, Any]]        # generator가 생성한 시나리오
-    retry_count: NotRequired[int]                # 자가 교정 재시도 횟수
-    retry_errors: NotRequired[List[str]]         # generator에게 전달할 이전 실패 사유
-    worker_results: Annotated[NotRequired[List[Dict[str, Any]]], operator.add]  # 검증 통과된 최종 결과
+    worker_results: Annotated[NotRequired[List[Dict[str, Any]]], operator.add]  # 생성된 최종 결과 (시나리오)
+    errors: Annotated[NotRequired[List[str]], operator.add]  # 워커에서 발생한 에러 기록
 
 class HappyCaseOutput(BaseModel):
     """LLM이 생성할 Happy Case 시나리오 구조 (요구사항 반영)"""
@@ -179,31 +177,19 @@ class HappyCaseAgent:
             else: internal_dtos[t_name] = fields
 
         return {
-            "context": {"methods": methods_context, "public_dtos": public_dtos, "internal_dtos": internal_dtos},
-            "retry_count": 0,
-            "retry_errors": []
+            "context": {"methods": methods_context, "public_dtos": public_dtos, "internal_dtos": internal_dtos}
         }
 
     def generator_worker_node(self, state: WorkerState):
         """
         수집된 컨텍스트로 LLM을 호출하여 시나리오를 생성합니다.
-        이전 검증 실패 사유가 있으면 프롬프트에 포함하여 스스로 수정하도록 유도합니다.
         """
         endpoint_url = state["endpoint_url"]
         group = state["group"]
-        context = state["context"]
-        retry_errors = state.get("retry_errors", [])
-
-        error_section = ""
-        if retry_errors:
-            error_section = f"""
-        [이전 생성 실패 사유 - 반드시 수정 후 재생성]
-        {chr(10).join(f'- {e}' for e in retry_errors)}
-        """
+        context = state.get("context", {})
 
         prompt = f"""
         당신은 백엔드 개발자이자 QA 엔지니어입니다. 제공된 코드 문맥을 분석하여 해당 API의 **Happy Case (성공 케이스, 200 OK)** 테스트 데이터를 생성해 주세요.
-        {error_section}
 
         [대상 엔드포인트]
         - URL: {endpoint_url}
@@ -211,13 +197,13 @@ class HappyCaseAgent:
         - Name: {group['name']}
 
         [비즈니스 로직 문맥]
-        {json.dumps(context['methods'], indent=2, ensure_ascii=False)}
+        {json.dumps(context.get('methods', []), indent=2, ensure_ascii=False)}
 
         [Public API DTO 구조 (필수 준수)]
-        {json.dumps(context['public_dtos'], indent=2, ensure_ascii=False)}
+        {json.dumps(context.get('public_dtos', {}), indent=2, ensure_ascii=False)}
 
         [Internal Data structures (참고용 컨텍스트)]
-        {json.dumps(context['internal_dtos'], indent=2, ensure_ascii=False)}
+        {json.dumps(context.get('internal_dtos', {}), indent=2, ensure_ascii=False)}
 
         [DTO 매핑 및 헤더 지침]
         - **중요**: `expected_result` (응답 바디)에는 오직 **[Public API DTO 구조]**에 정의된 필드만 포함해야 합니다.
@@ -242,105 +228,10 @@ class HappyCaseAgent:
                 "input_data": result.input_data,
                 "expected_result": result.expected_result
             }
-            return {"scenario": scenario}
+            return {"worker_results": [scenario]}
         except Exception as e:
             logger.error(f"LLM generation failed for {endpoint_url}: {e}")
-            return {
-                "retry_errors": [f"LLM 호출 오류: {str(e)}"],
-                "retry_count": state.get("retry_count", 0) + 1
-            }
-
-    def validator_worker_node(self, state: WorkerState):
-        """
-        생성된 시나리오의 유효성을 검증합니다.
-        검증 항목:
-          1. input_data / expected_result가 유효한 JSON인지
-          2. Public DTO에 정의된 필드 키가 expected_result에 모두 포함되어 있는지
-          3. expected_result에 DTO에 없는 불필요한 키가 섞여 있지 않은지
-        """
-        endpoint_url = state.get("endpoint_url")
-        scenario = state.get("scenario")
-        context = state.get("context", {})
-        retry_count = state.get("retry_count", 0)
-
-        if not scenario:
-            return {
-                "retry_errors": ["시나리오가 생성되지 않았습니다."],
-                "retry_count": retry_count + 1
-            }
-
-        errors = []
-
-        # --- 검증 1: JSON 형식 유효성 ---
-        input_json = None
-        result_json = None
-        try:
-            input_json = json.loads(scenario.get("input_data", "{}"))
-        except Exception as e:
-            errors.append(f"input_data가 유효한 JSON이 아닙니다: {e}")
-
-        result_str = scenario.get("expected_result", "{}")
-        # generator는 비즈니스 헤더(Location, Set-Cookie 등)를 "Header: Key=Value" 형식으로
-        # JSON 바디 앞에 붙여 반환할 수 있습니다. JSON 파싱 전에 해당 라인을 제거합니다.
-        json_part = result_str
-        for line in result_str.splitlines():
-            if line.strip().startswith("{") or line.strip().startswith("["):
-                json_part = "\n".join(
-                    l for l in result_str.splitlines()
-                    if not l.strip().startswith("Header:")
-                )
-                break
-        try:
-            result_json = json.loads(json_part)
-        except Exception as e:
-            errors.append(f"expected_result가 유효한 JSON이 아닙니다: {e}")
-
-        # --- 검증 2 & 3: DTO 키 일치 여부 ---
-        public_dtos = context.get("public_dtos", {})
-        if result_json and public_dtos and isinstance(result_json, dict):
-            # expected_result가 단일 객체인 경우 (리스트의 경우 첫 번째 원소)
-            result_obj = result_json
-        elif result_json and public_dtos and isinstance(result_json, list) and result_json:
-            result_obj = result_json[0] if isinstance(result_json[0], dict) else None
-        else:
-            result_obj = None
-
-        if result_obj is not None and public_dtos:
-            # 여러 Public DTO 중 어떤 것이 이 응답에 해당하는지 명시적으로 알 수 없으므로,
-            # expected_result의 키와 가장 많이 겹치는 DTO를 "응답 DTO"로 자동 추론합니다.
-            best_match_dto = None
-            best_match_score = -1
-            for dto_name, dto_fields in public_dtos.items():
-                defined_keys = {f["name"] for f in dto_fields}
-                result_keys = set(result_obj.keys())
-                overlap = len(defined_keys & result_keys)
-                if overlap > best_match_score:
-                    best_match_score = overlap
-                    best_match_dto = (dto_name, defined_keys)
-
-            if best_match_dto and best_match_score >= 0:
-                dto_name, defined_keys = best_match_dto
-                result_keys = set(result_obj.keys())
-
-                # 검증 2: DTO에 정의된 필수 키가 모두 있는지
-                missing_keys = defined_keys - result_keys
-                if missing_keys:
-                    errors.append(f"expected_result에 DTO '{dto_name}'의 필드가 누락됐습니다: {missing_keys}")
-
-                # 검증 3: DTO에 없는 불필요한 키가 섞여 있지 않은지
-                extra_keys = result_keys - defined_keys
-                if extra_keys:
-                    errors.append(f"expected_result에 DTO '{dto_name}'에 정의되지 않은 필드가 있습니다: {extra_keys}")
-
-        if errors:
-            logger.warning(f"Validation failed for {endpoint_url} (attempt {retry_count}): {errors}")
-            return {
-                "retry_errors": errors,
-                "retry_count": retry_count + 1
-            }
-
-        logger.info(f"Validation passed for {endpoint_url}")
-        return {"worker_results": [scenario]}
+            return {"errors": [f"[{endpoint_url}] LLM 호출 오류: {str(e)}"]}
 
 
     def formatter_node(self, state: HappyCaseState):
@@ -372,31 +263,14 @@ class HappyCaseAgent:
                 for group in impact_groups.values()
             ]
 
-        # --- 서브 그래프: 단일 엔드포인트 처리 (retriever -> generator <-> validator 루프) ---
-        def worker_router(state: WorkerState):
-            """검증 실패 시 재시도, 성공 또는 최대 재시도 초과 시 종료."""
-            # retry_errors가 있으면 validator가 실패를 판정한 것입니다.
-            # retry_count < MAX_RETRIES 인 경우에만 generator로 돌아가 재시도합니다.
-            # MAX_RETRIES 이상이면 포기하고 worker_results 없이 END(빈 결과)로 종료합니다.
-            if state.get("retry_errors") and state.get("retry_count", 0) < MAX_RETRIES:
-                logger.warning(
-                    f"Retrying generator for {state.get('endpoint_url')} "
-                    f"(attempt {state.get('retry_count')}): {state.get('retry_errors')}"
-                )
-                return "generator"
-            if state.get("retry_count", 0) >= MAX_RETRIES:
-                logger.error(f"Max retries reached for {state.get('endpoint_url')}, giving up.")
-            return END
-
+        # --- 서브 그래프: 단일 엔드포인트 처리 (retriever -> generator) ---
         worker_builder = StateGraph(WorkerState)
         worker_builder.add_node("retriever", self.retriever_worker_node)
         worker_builder.add_node("generator", self.generator_worker_node)
-        worker_builder.add_node("validator", self.validator_worker_node)
 
         worker_builder.set_entry_point("retriever")
         worker_builder.add_edge("retriever", "generator")
-        worker_builder.add_edge("generator", "validator")
-        worker_builder.add_conditional_edges("validator", worker_router, {"generator": "generator", END: END})
+        worker_builder.add_edge("generator", END)
 
         compiled_worker = worker_builder.compile()
 
