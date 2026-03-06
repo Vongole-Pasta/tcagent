@@ -1,7 +1,7 @@
 """
 순수 Java AST 파싱 모듈.
 tree-sitter를 사용하여 Java 소스 코드에서 타입, 메서드, 필드, 호출 관계를 추출합니다.
-DB 의존성 없음 — 파싱 결과는 persistence/models.py의 dataclass로 반환됩니다.
+DB 의존성 없음 — 파싱 결과는 store/models.py의 dataclass로 반환됩니다.
 """
 import hashlib
 import logging
@@ -9,7 +9,7 @@ import re
 
 from tree_sitter_language_pack import get_parser
 
-from core.analysis.persistence.models import (
+from core.analysis.store.models import (
     TypeInfo, ParamInfo, ConstantInfo,
     ParsedType, ParsedField, ParsedMethod, ParsedFileResult,
     ParsedCallEdge, ParsedParameterEdge, ParsedReturnEdge,

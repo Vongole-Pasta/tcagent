@@ -4,7 +4,7 @@ import hashlib
 import uuid
 from graph_db.client import DBClient
 from core.analysis.lang import PARSERS
-from core.analysis.persistence.store import GraphWriter
+from core.analysis.store.graph_writer import GraphWriter
 from config import Config
 from graph_db.queries import CypherQueries
 

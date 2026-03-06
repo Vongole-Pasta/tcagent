@@ -2,7 +2,7 @@
 파싱 결과를 Neo4j에 영속화하는 모듈 (Memory-First).
 
 모든 파일의 파싱 결과를 메모리에 축적한 뒤,
-관계 해석까지 완료한 후 일괄로 DB에 기록합니다.
+EdgeLinker로 관계를 해석하고, 일괄로 DB에 기록합니다.
 UNWIND 배치 쿼리로 DB 라운드트립을 최소화하여 대규모 소스코드도 효율적으로 처리합니다.
 """
 import json
@@ -15,6 +15,7 @@ from .models import (
     ParsedType, ParsedField, ParsedMethod, ParsedFileResult,
     ParsedCallEdge, ParsedParameterEdge, ParsedReturnEdge,
 )
+from .edge_linker import EdgeLinker
 
 logger = logging.getLogger(__name__)
 
@@ -27,7 +28,7 @@ class GraphWriter:
       1. collect(result)  — 파일별 파싱 결과를 메모리에 축적 (DB 접근 없음)
       2. flush()          — 축적된 전체 데이터를 일괄 DB 기록
 
-    모든 노드가 메모리에 존재하는 상태에서 관계를 해석하므로,
+    모든 노드가 메모리에 존재하는 상태에서 EdgeLinker가 관계를 해석하므로,
     파일 처리 순서에 의존하지 않고 정확한 관계를 생성할 수 있습니다.
     """
 
@@ -78,13 +79,13 @@ class GraphWriter:
         self._flush_fields()
         self._flush_methods()
 
-        # 2단계: 엣지 해석을 위한 인메모리 인덱스 구축
-        self._build_indexes()
+        # 2단계: 엣지 해석 (EdgeLinker — 순수 인메모리)
+        linker = EdgeLinker(self._types, self._fields, self._methods)
 
         # 3단계: 엣지 생성
-        self._flush_parameter_edges()
-        self._flush_return_edges()
-        self._flush_calls()
+        self._flush_parameter_edges(linker)
+        self._flush_return_edges(linker)
+        self._flush_calls(linker)
 
         # 메모리 정리
         self._clear()
@@ -189,44 +190,12 @@ class GraphWriter:
             logger.error(f"Failed to batch upsert METHODs: {e}")
 
     # -----------------------------------------------------------------------
-    # 인메모리 인덱스 구축
-    # -----------------------------------------------------------------------
-
-    def _build_indexes(self):
-        """엣지 해석에 필요한 인메모리 인덱스를 구축합니다."""
-        # name → qualname (동명 타입 시 마지막 등록이 우선 — 향후 개선 대상)
-        self._type_by_name: dict[str, str] = {
-            t.name: t.qualname for t in self._types.values()
-        }
-        # class_qualname → {method_name → [ParsedMethod]}
-        self._methods_by_class: dict[str, dict[str, list[ParsedMethod]]] = {}
-        for m in self._methods.values():
-            cls = self._methods_by_class.setdefault(m.class_qualname, {})
-            cls.setdefault(m.name, []).append(m)
-
-        # class_qualname → {field_name → ParsedField}
-        self._fields_by_class: dict[str, dict[str, ParsedField]] = {}
-        for f in self._fields.values():
-            cls = self._fields_by_class.setdefault(f.type_qualname, {})
-            cls[f.name] = f
-
-    # -----------------------------------------------------------------------
     # 엣지 Flush (UNWIND 배치)
     # -----------------------------------------------------------------------
 
-    def _flush_parameter_edges(self):
-        """HAS_PARAMETER 엣지를 UNWIND 배치로 일괄 DB에 기록합니다."""
-        # Python에서 미리 resolve하여 (method_qualname, type_qualname) 쌍 수집
-        batch = []
-        for edge in self._param_edges:
-            for type_name in edge.param_info["type"]["layout"]:
-                type_qualname = self._type_by_name.get(type_name)
-                if type_qualname:
-                    batch.append({
-                        "method_qualname": edge.method_qualname,
-                        "type_qualname": type_qualname,
-                    })
-
+    def _flush_parameter_edges(self, linker: EdgeLinker):
+        """HAS_PARAMETER 엣지를 DB에 기록합니다. 해석은 EdgeLinker가 담당."""
+        batch = linker.resolve_parameter_edges(self._param_edges)
         if not batch:
             return
 
@@ -240,18 +209,9 @@ class GraphWriter:
         except Exception as e:
             logger.error(f"Failed to batch upsert HAS_PARAMETER edges: {e}")
 
-    def _flush_return_edges(self):
-        """RETURNS 엣지를 UNWIND 배치로 일괄 DB에 기록합니다."""
-        batch = []
-        for edge in self._return_edges:
-            for type_name in edge.return_info["layout"]:
-                type_qualname = self._type_by_name.get(type_name)
-                if type_qualname:
-                    batch.append({
-                        "method_qualname": edge.method_qualname,
-                        "type_qualname": type_qualname,
-                    })
-
+    def _flush_return_edges(self, linker: EdgeLinker):
+        """RETURNS 엣지를 DB에 기록합니다. 해석은 EdgeLinker가 담당."""
+        batch = linker.resolve_return_edges(self._return_edges)
         if not batch:
             return
 
@@ -265,33 +225,9 @@ class GraphWriter:
         except Exception as e:
             logger.error(f"Failed to batch upsert RETURNS edges: {e}")
 
-    def _flush_calls(self):
-        """CALLS 엣지를 해석하고 UNWIND 배치로 일괄 DB에 기록합니다."""
-        resolved_batch = []
-        external_batch = []
-
-        # Python에서 호출 대상을 미리 resolve한 뒤 두 배치로 분리
-        for call in self._calls:
-            target_qualname = self._resolve_call_target(
-                call.caller_qualname, call.target_method_name, call.object_name,
-            )
-            if target_qualname:
-                resolved_batch.append({
-                    "caller_qualname": call.caller_qualname,
-                    "callee_qualname": target_qualname,
-                })
-            else:
-                ext_qualname = (
-                    f"{call.object_name}.{call.target_method_name}"
-                    if call.object_name
-                    else call.target_method_name
-                )
-                external_batch.append({
-                    "caller_qualname": call.caller_qualname,
-                    "ext_qualname": ext_qualname,
-                    "name": call.target_method_name,
-                    "signature": f"{ext_qualname}()",
-                })
+    def _flush_calls(self, linker: EdgeLinker):
+        """CALLS 엣지를 DB에 기록합니다. 해석은 EdgeLinker가 담당."""
+        resolved_batch, external_batch = linker.resolve_calls(self._calls)
 
         # resolved: METHOD → CALLS → METHOD
         if resolved_batch:
@@ -318,52 +254,6 @@ class GraphWriter:
                 """, {"batch": external_batch})
             except Exception as e:
                 logger.error(f"Failed to batch upsert CALLS (external) edges: {e}")
-
-        logger.info(
-            f"CALLS edges: {len(resolved_batch)} resolved, "
-            f"{len(external_batch)} external"
-        )
-
-    # -----------------------------------------------------------------------
-    # CALLS 관계 찾기
-    # -----------------------------------------------------------------------
-
-    def _resolve_call_target(
-        self, caller_qualname: str, target_name: str, obj_name: str,
-    ) -> str | None:
-        """호출 대상을 인메모리 인덱스로 해석하여 METHOD qualname을 반환합니다."""
-        if obj_name:
-            # Case 1a: obj_name이 타입명 → 해당 타입의 메서드 탐색
-            type_q = self._type_by_name.get(obj_name)
-            if type_q:
-                methods = self._methods_by_class.get(type_q, {}).get(target_name, [])
-                if methods:
-                    return methods[0].qualname
-
-            # Case 1b: obj_name이 필드명 → 필드 타입의 메서드 탐색
-            caller_method = self._methods.get(caller_qualname)
-            if caller_method:
-                field = self._fields_by_class.get(
-                    caller_method.class_qualname, {},
-                ).get(obj_name)
-                if field and field.field_type.get("layout"):
-                    field_type_name = field.field_type["layout"][0]
-                    type_q = self._type_by_name.get(field_type_name)
-                    if type_q:
-                        methods = self._methods_by_class.get(type_q, {}).get(target_name, [])
-                        if methods:
-                            return methods[0].qualname
-        else:
-            # Case 2: obj_name 없음 → 같은 클래스의 형제 메서드 탐색
-            caller_method = self._methods.get(caller_qualname)
-            if caller_method:
-                methods = self._methods_by_class.get(
-                    caller_method.class_qualname, {},
-                ).get(target_name, [])
-                if methods:
-                    return methods[0].qualname
-
-        return None
 
     # -----------------------------------------------------------------------
     # 메모리 정리
