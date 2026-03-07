@@ -41,18 +41,18 @@ export function SuccessDialog() {
                     </div>
 
                     <h3 className="text-xl font-bold text-gray-900">
-                        Update Complete! 🎉
+                        업로드 완료!
                     </h3>
 
                     <p className="text-sm text-gray-500">
-                        The project has been successfully analyzed and the graph database is up to date.
+                        프로젝트가 성공적으로 업로드, 분석되었습니다.
                     </p>
 
                     <Button
                         onClick={handleClose}
                         className="w-full bg-green-600 hover:bg-green-700 mt-2"
                     >
-                        Awesome!
+                        확인
                     </Button>
                 </div>
             </div>
