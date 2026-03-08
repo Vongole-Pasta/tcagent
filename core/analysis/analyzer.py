@@ -225,13 +225,7 @@ class Analyzer:
         logger.info(f"Processing {relative_path}: {status}")
 
         # FILE 노드 upsert
-        query = """
-        MERGE (f:FILE {path: $path, project: $project})
-        SET f.name = $name,
-        f.hash = $hash,
-        f.language = $language
-        """
-        self.connector.execute_query(query, {
+        self.connector.execute_query(CypherQueries.UPSERT_FILE, {
             "path": relative_path,
             "name": file_name,
             "hash": file_hash,
@@ -292,23 +286,9 @@ class Analyzer:
             - 파일 내 메서드가 삭제/리네임된 경우
             - 증분 분석 시 이전 사이클의 잔여 메서드 정리
         """
-        query = """
-        MATCH (f:FILE {path: $file_path})
-        MATCH (f)-[:CONTAINS*1..3]->(m:METHOD)
-
-        WHERE m.last_scan_id <> $scan_id
-
-        // Mark as DELETED
-        SET m.status = 'DELETED'
-
-        WITH m
-        // [격리] 다른 메서드와의 호출 관계 제거 (분석 방해 방지)
-        OPTIONAL MATCH (m)-[r:CALLS]-()
-        DELETE r
-        """
         try:
             self.connector.execute_query(
-                query,
+                CypherQueries.PRUNE_STALE_METHODS,
                 {"file_path": file_path, "scan_id": scan_id}
             )
             logger.info(f"Pruned stale methods for {file_path} (scan: {scan_id[:8]})")

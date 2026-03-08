@@ -10,6 +10,7 @@ import logging
 from dataclasses import asdict
 
 from graph_db.client import DBClient
+from graph_db.queries import CypherQueries
 
 from .models import (
     ParsedType, ParsedField, ParsedMethod, ParsedFileResult,
@@ -108,16 +109,9 @@ class GraphWriter:
             batch.append(row)
 
         try:
-            self.connector.execute_query("""
-                UNWIND $batch AS row
-                MERGE (t:TYPE {qualname: row.qualname})
-                SET t.name = row.name,
-                    t.kind = row.kind,
-                    t.constants = row.constants
-                WITH t, row
-                MATCH (f:FILE {path: row.file_path})
-                MERGE (f)-[:CONTAINS]->(t)
-            """, {"batch": batch})
+            self.connector.execute_query(
+                CypherQueries.BATCH_UPSERT_TYPES, {"batch": batch}
+            )
         except Exception as e:
             logger.error(f"Failed to batch upsert TYPEs: {e}")
 
@@ -134,16 +128,9 @@ class GraphWriter:
             batch.append(row)
 
         try:
-            self.connector.execute_query("""
-                UNWIND $batch AS row
-                MERGE (f:FIELD {qualname: row.qualname})
-                SET f.name = row.name,
-                    f.type = row.type,
-                    f.constraint = row.constraint
-                WITH f, row
-                MATCH (t:TYPE {qualname: row.type_qualname})
-                MERGE (t)-[:CONTAINS]->(f)
-            """, {"batch": batch})
+            self.connector.execute_query(
+                CypherQueries.BATCH_UPSERT_FIELDS, {"batch": batch}
+            )
         except Exception as e:
             logger.error(f"Failed to batch upsert FIELDs: {e}")
 
@@ -165,27 +152,9 @@ class GraphWriter:
             batch.append(row)
 
         try:
-            self.connector.execute_query("""
-                UNWIND $batch AS row
-                MERGE (m:METHOD {qualname: row.qualname})
-                ON CREATE SET m.status = 'NEW'
-                ON MATCH SET m.status = CASE
-                    WHEN m.hash = row.hash THEN 'AS-IS'
-                    ELSE 'MODIFIED'
-                END
-                SET m.name = row.name,
-                    m.signature = row.signature,
-                    m.source = row.source,
-                    m.hash = row.hash,
-                    m.params = row.params,
-                    m.return_type = row.return_type,
-                    m.endpoint_uri = row.endpoint_uri,
-                    m.http_method = row.http_method,
-                    m.last_scan_id = row.last_scan_id
-                WITH m, row
-                MATCH (t:TYPE {qualname: row.class_qualname})
-                MERGE (t)-[:CONTAINS]->(m)
-            """, {"batch": batch})
+            self.connector.execute_query(
+                CypherQueries.BATCH_UPSERT_METHODS, {"batch": batch}
+            )
         except Exception as e:
             logger.error(f"Failed to batch upsert METHODs: {e}")
 
@@ -200,12 +169,9 @@ class GraphWriter:
             return
 
         try:
-            self.connector.execute_query("""
-                UNWIND $batch AS row
-                MATCH (m:METHOD {qualname: row.method_qualname})
-                MATCH (t:TYPE {qualname: row.type_qualname})
-                MERGE (m)-[:HAS_PARAMETER]->(t)
-            """, {"batch": batch})
+            self.connector.execute_query(
+                CypherQueries.BATCH_UPSERT_PARAMETER_EDGES, {"batch": batch}
+            )
         except Exception as e:
             logger.error(f"Failed to batch upsert HAS_PARAMETER edges: {e}")
 
@@ -216,12 +182,9 @@ class GraphWriter:
             return
 
         try:
-            self.connector.execute_query("""
-                UNWIND $batch AS row
-                MATCH (m:METHOD {qualname: row.method_qualname})
-                MATCH (t:TYPE {qualname: row.type_qualname})
-                MERGE (m)-[:RETURNS]->(t)
-            """, {"batch": batch})
+            self.connector.execute_query(
+                CypherQueries.BATCH_UPSERT_RETURN_EDGES, {"batch": batch}
+            )
         except Exception as e:
             logger.error(f"Failed to batch upsert RETURNS edges: {e}")
 
@@ -232,26 +195,18 @@ class GraphWriter:
         # resolved: METHOD → CALLS → METHOD
         if resolved_batch:
             try:
-                self.connector.execute_query("""
-                    UNWIND $batch AS row
-                    MATCH (caller:METHOD {qualname: row.caller_qualname})
-                    MATCH (callee:METHOD {qualname: row.callee_qualname})
-                    MERGE (caller)-[:CALLS]->(callee)
-                """, {"batch": resolved_batch})
+                self.connector.execute_query(
+                    CypherQueries.BATCH_UPSERT_CALLS, {"batch": resolved_batch}
+                )
             except Exception as e:
                 logger.error(f"Failed to batch upsert CALLS (resolved) edges: {e}")
 
         # external: METHOD → CALLS → EXTERNAL_CALL
         if external_batch:
             try:
-                self.connector.execute_query("""
-                    UNWIND $batch AS row
-                    MATCH (caller:METHOD {qualname: row.caller_qualname})
-                    MERGE (ext:EXTERNAL_CALL {qualname: row.ext_qualname})
-                    SET ext.name = row.name,
-                        ext.signature = row.signature
-                    MERGE (caller)-[:CALLS]->(ext)
-                """, {"batch": external_batch})
+                self.connector.execute_query(
+                    CypherQueries.BATCH_UPSERT_EXTERNAL_CALLS, {"batch": external_batch}
+                )
             except Exception as e:
                 logger.error(f"Failed to batch upsert CALLS (external) edges: {e}")
 

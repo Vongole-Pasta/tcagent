@@ -127,9 +127,130 @@ class CypherQueries:
     RETURN path, metadata
     """
     
-    # --- Change Detection Helpers ---
-    
+    # --- Analysis Pipeline Queries (analyzer.py) ---
 
+    # [FILE 노드 Upsert]
+    # 파일 메타데이터(경로, 이름, 해시, 언어)를 DB에 기록합니다.
+    # 이미 존재하는 파일은 속성만 갱신됩니다.
+    # Usage: core/analysis/analyzer.py
+    UPSERT_FILE = """
+    MERGE (f:FILE {path: $path, project: $project})
+    SET f.name = $name,
+    f.hash = $hash,
+    f.language = $language
+    """
+
+    # [메서드 가지치기 (Pruning)]
+    # 이번 스캔(scan_id)에서 발견되지 않은 메서드를 DELETED로 마킹하고,
+    # 호출 관계(CALLS)를 끊어 분석 결과 오염을 방지합니다.
+    # Usage: core/analysis/analyzer.py
+    PRUNE_STALE_METHODS = """
+    MATCH (f:FILE {path: $file_path})
+    MATCH (f)-[:CONTAINS*1..3]->(m:METHOD)
+    WHERE m.last_scan_id <> $scan_id
+    SET m.status = 'DELETED'
+    WITH m
+    OPTIONAL MATCH (m)-[r:CALLS]-()
+    DELETE r
+    """
+
+    # --- Writer Batch Queries (graph_writer.py) ---
+
+    # [TYPE 노드 일괄 Upsert]
+    # 파싱된 TYPE 노드를 UNWIND 배치로 일괄 기록합니다.
+    # Usage: core/analysis/store/graph_writer.py
+    BATCH_UPSERT_TYPES = """
+    UNWIND $batch AS row
+    MERGE (t:TYPE {qualname: row.qualname})
+    SET t.name = row.name,
+        t.kind = row.kind,
+        t.constants = row.constants
+    WITH t, row
+    MATCH (f:FILE {path: row.file_path})
+    MERGE (f)-[:CONTAINS]->(t)
+    """
+
+    # [FIELD 노드 일괄 Upsert]
+    # 파싱된 FIELD 노드를 UNWIND 배치로 일괄 기록합니다.
+    # Usage: core/analysis/store/graph_writer.py
+    BATCH_UPSERT_FIELDS = """
+    UNWIND $batch AS row
+    MERGE (f:FIELD {qualname: row.qualname})
+    SET f.name = row.name,
+        f.type = row.type,
+        f.constraint = row.constraint
+    WITH f, row
+    MATCH (t:TYPE {qualname: row.type_qualname})
+    MERGE (t)-[:CONTAINS]->(f)
+    """
+
+    # [METHOD 노드 일괄 Upsert]
+    # 파싱된 METHOD 노드를 UNWIND 배치로 일괄 기록합니다.
+    # 변경 감지: 해시 비교로 NEW/MODIFIED/AS-IS 상태를 자동 판별합니다.
+    # Usage: core/analysis/store/graph_writer.py
+    BATCH_UPSERT_METHODS = """
+    UNWIND $batch AS row
+    MERGE (m:METHOD {qualname: row.qualname})
+    ON CREATE SET m.status = 'NEW'
+    ON MATCH SET m.status = CASE
+        WHEN m.hash = row.hash THEN 'AS-IS'
+        ELSE 'MODIFIED'
+    END
+    SET m.name = row.name,
+        m.signature = row.signature,
+        m.source = row.source,
+        m.hash = row.hash,
+        m.params = row.params,
+        m.return_type = row.return_type,
+        m.endpoint_uri = row.endpoint_uri,
+        m.http_method = row.http_method,
+        m.last_scan_id = row.last_scan_id
+    WITH m, row
+    MATCH (t:TYPE {qualname: row.class_qualname})
+    MERGE (t)-[:CONTAINS]->(m)
+    """
+
+    # [HAS_PARAMETER 엣지 일괄 생성]
+    # 메서드 → 파라미터 타입 관계를 일괄 기록합니다.
+    # Usage: core/analysis/store/graph_writer.py
+    BATCH_UPSERT_PARAMETER_EDGES = """
+    UNWIND $batch AS row
+    MATCH (m:METHOD {qualname: row.method_qualname})
+    MATCH (t:TYPE {qualname: row.type_qualname})
+    MERGE (m)-[:HAS_PARAMETER]->(t)
+    """
+
+    # [RETURNS 엣지 일괄 생성]
+    # 메서드 → 리턴 타입 관계를 일괄 기록합니다.
+    # Usage: core/analysis/store/graph_writer.py
+    BATCH_UPSERT_RETURN_EDGES = """
+    UNWIND $batch AS row
+    MATCH (m:METHOD {qualname: row.method_qualname})
+    MATCH (t:TYPE {qualname: row.type_qualname})
+    MERGE (m)-[:RETURNS]->(t)
+    """
+
+    # [CALLS 엣지 일괄 생성 (프로젝트 내부)]
+    # 프로젝트 내 메서드 간 호출 관계를 일괄 기록합니다.
+    # Usage: core/analysis/store/graph_writer.py
+    BATCH_UPSERT_CALLS = """
+    UNWIND $batch AS row
+    MATCH (caller:METHOD {qualname: row.caller_qualname})
+    MATCH (callee:METHOD {qualname: row.callee_qualname})
+    MERGE (caller)-[:CALLS]->(callee)
+    """
+
+    # [CALLS 엣지 일괄 생성 (외부 호출)]
+    # 프로젝트 외부 라이브러리 메서드 호출을 EXTERNAL_CALL 노드로 기록합니다.
+    # Usage: core/analysis/store/graph_writer.py
+    BATCH_UPSERT_EXTERNAL_CALLS = """
+    UNWIND $batch AS row
+    MATCH (caller:METHOD {qualname: row.caller_qualname})
+    MERGE (ext:EXTERNAL_CALL {qualname: row.ext_qualname})
+    SET ext.name = row.name,
+        ext.signature = row.signature
+    MERGE (caller)-[:CALLS]->(ext)
+    """
 
     # --- Status Management Queries ---
     
