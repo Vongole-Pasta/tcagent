@@ -27,11 +27,10 @@ GENERATOR_NODE_PROMPT = """
 
 2. **Input Data (Paths Object) 구성**:
    - 추출된 헤더, 경로 변수, 쿼리 파라미터는 `parameters` 배열에 OpenAPI 3.0 규격(`in: header|path|query`)에 맞게 작성합니다.
-   - POST/PUT/PATCH 메서드의 경우, `<DTO_SCHEMA>`를 기반으로 `requestBody`를 작성하고, 각 필드의 타입에 맞는 적절한 가상의 `example` 값을 반드시 포함합니다.
+   - POST/PUT/PATCH 메서드의 경우, `<DTO_SCHEMA>`를 기반으로 `requestBody`를 작성하고 각 필드의 타입을 명시합니다.
 
 3. **Expected Result (Responses Object) 구성**:
    - `<DTO_SCHEMA>`에 정의된 응답 필드만을 엄격하게 사용하여 200(또는 201) 성공 응답에 대한 명세를 작성합니다.
-   - 각 필드에는 로직 문맥상 말이 되는 `example` 값을 포함합니다.
 
 # OUTPUT FORMAT & CONSTRAINTS (CRITICAL)
 - **절대 마크다운 코드 블록(```json 등)을 사용하지 마세요.**
@@ -62,7 +61,7 @@ GENERATOR_NODE_PROMPT = """
         "content": {{
           "application/json": {{
             "schema": {{
-              // DTO_SCHEMA 기반 응답 구조 및 example 값
+              // DTO_SCHEMA 기반 응답 구조 (절대 example 값을 임의로 덧붙이지 마세요)
             }}
           }}
         }}
