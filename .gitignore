@@ -49,6 +49,8 @@ venv.bak/
 brain/
 logs/
 docs/
+!.sample/docs/
+.gradle/
 *.zip
 
 # Tests
