@@ -25,6 +25,12 @@ public enum ErrorCode {
     INSUFFICIENT_STOCK(HttpStatus.BAD_REQUEST, "E4001", "재고가 부족합니다"),
     INVALID_ORDER_STATUS(HttpStatus.BAD_REQUEST, "E4002", "잘못된 주문 상태 변경입니다"),
 
+    // 인증/인가
+    UNAUTHORIZED(HttpStatus.UNAUTHORIZED, "E4010", "인증이 필요합니다"),
+    INVALID_CREDENTIALS(HttpStatus.UNAUTHORIZED, "E4011", "이메일 또는 비밀번호가 올바르지 않습니다"),
+    INVALID_TOKEN(HttpStatus.UNAUTHORIZED, "E4012", "유효하지 않은 토큰입니다"),
+    ACCESS_DENIED(HttpStatus.FORBIDDEN, "E4030", "접근 권한이 없습니다"),
+
     // 공통
     INVALID_INPUT(HttpStatus.BAD_REQUEST, "E4000", "입력값이 올바르지 않습니다"),
     INTERNAL_SERVER_ERROR(HttpStatus.INTERNAL_SERVER_ERROR, "E5000", "서버 내부 오류가 발생했습니다");

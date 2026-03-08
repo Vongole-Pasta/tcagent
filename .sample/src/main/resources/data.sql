@@ -2,15 +2,15 @@
 INSERT INTO categories (id, name) VALUES (1, '전자기기');
 INSERT INTO categories (id, name) VALUES (2, '식품');
 
--- 회원
-INSERT INTO members (id, email, first_name, last_name, grade, login_count, fail_count, active, created_at, updated_at)
-VALUES (1, 'hong@example.com', '길동', '홍', 'BRONZE', 0, 0, true, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP);
+-- 회원 (password: 모두 'password123'의 BCrypt 해시)
+INSERT INTO members (id, email, first_name, last_name, password, grade, login_count, fail_count, active, created_at, updated_at)
+VALUES (1, 'hong@example.com', '길동', '홍', '$2a$10$4xfSH2yF9QIpdo0VxOAofOxu3lRhtLDaJ6yCTlpGvZQm/ztHE9cwi', 'BRONZE', 0, 0, true, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP);
 
-INSERT INTO members (id, email, first_name, last_name, grade, login_count, fail_count, active, created_at, updated_at)
-VALUES (2, 'kim@example.com', '구매', '김', 'GOLD', 5, 0, true, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP);
+INSERT INTO members (id, email, first_name, last_name, password, grade, login_count, fail_count, active, created_at, updated_at)
+VALUES (2, 'kim@example.com', '구매', '김', '$2a$10$4xfSH2yF9QIpdo0VxOAofOxu3lRhtLDaJ6yCTlpGvZQm/ztHE9cwi', 'GOLD', 5, 0, true, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP);
 
-INSERT INTO members (id, email, first_name, last_name, grade, login_count, fail_count, active, created_at, updated_at)
-VALUES (3, 'lee@example.com', '판매', '이', 'SILVER', 3, 0, true, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP);
+INSERT INTO members (id, email, first_name, last_name, password, grade, login_count, fail_count, active, created_at, updated_at)
+VALUES (3, 'lee@example.com', '판매', '이', '$2a$10$4xfSH2yF9QIpdo0VxOAofOxu3lRhtLDaJ6yCTlpGvZQm/ztHE9cwi', 'SILVER', 3, 0, true, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP);
 
 -- 회원 주소
 INSERT INTO member_addresses (member_id, street, city, zip_code) VALUES (1, '강남대로 1', '서울', '06000');

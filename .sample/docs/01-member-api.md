@@ -13,6 +13,7 @@ Content-Type: application/json
 ```
 
 ```bash
+# permitAll — 인증 불필요
 curl -X POST http://localhost:8080/api/members \
   -H "Content-Type: application/json" \
   -H "X-Api-Version: 1" \
@@ -20,6 +21,7 @@ curl -X POST http://localhost:8080/api/members \
     "email": "new@example.com",
     "firstName": "신규",
     "lastName": "박",
+    "password": "pass123",
     "addresses": [
       { "street": "강남대로 1", "city": "서울", "zipCode": "06000" }
     ]
@@ -32,6 +34,7 @@ curl -X POST http://localhost:8080/api/members \
   "email": "new@example.com",
   "firstName": "신규",
   "lastName": "박",
+  "password": "pass123",
   "addresses": [
     { "street": "강남대로 1", "city": "서울", "zipCode": "06000" }
   ]
@@ -82,13 +85,15 @@ GET /api/members/{id}    ← id는 숫자만 허용 (정규식)
 ```
 
 ```bash
-# 정상 — 숫자 ID
+# 정상 — 숫자 ID (인증 필요)
 curl http://localhost:8080/api/members/1 \
-  -H "X-Api-Version: 1"
+  -H "X-Api-Version: 1" \
+  -H "Authorization: Bearer <token>"
 
 # 실패 — 문자 ID → 핸들러 매핑 자체가 안 됨 (500 반환)
 curl http://localhost:8080/api/members/abc \
-  -H "X-Api-Version: 1"
+  -H "X-Api-Version: 1" \
+  -H "Authorization: Bearer <token>"
 ```
 
 **Request**
@@ -137,8 +142,10 @@ GET /api/members?page=0&size=10&sort=email,asc
 ```
 
 ```bash
+# 인증 필요
 curl "http://localhost:8080/api/members?page=0&size=10&sort=email,asc" \
-  -H "X-Api-Version: 1"
+  -H "X-Api-Version: 1" \
+  -H "Authorization: Bearer <token>"
 ```
 
 **Request**
@@ -189,13 +196,15 @@ POST /api/members/search?keyword=홍
 ```
 
 ```bash
-# GET으로 검색 (한글은 URL-encode 필요)
+# GET으로 검색 (한글은 URL-encode 필요, 인증 필요)
 curl "http://localhost:8080/api/members/search?keyword=%ED%99%8D" \
-  -H "X-Api-Version: 1"
+  -H "X-Api-Version: 1" \
+  -H "Authorization: Bearer <token>"
 
 # POST로도 동일하게 동작
 curl -X POST "http://localhost:8080/api/members/search?keyword=%ED%99%8D" \
-  -H "X-Api-Version: 1"
+  -H "X-Api-Version: 1" \
+  -H "Authorization: Bearer <token>"
 ```
 
 **Request**
@@ -237,8 +246,10 @@ Content-Type: multipart/form-data
 ```
 
 ```bash
+# 인증 필요
 curl -X POST http://localhost:8080/api/members/1/profile-image \
   -H "X-Api-Version: 1" \
+  -H "Authorization: Bearer <token>" \
   -F "file=@/path/to/photo.jpg"
 ```
 
@@ -284,8 +295,10 @@ Content-Type: application/x-www-form-urlencoded
 ```
 
 ```bash
+# 인증 필요
 curl -X PUT http://localhost:8080/api/members/1/address \
   -H "X-Api-Version: 1" \
+  -H "Authorization: Bearer <token>" \
   -d "street=테헤란로 427" \
   -d "city=서울" \
   -d "zipCode=06159"
@@ -337,8 +350,10 @@ X-Auth-Token: 1
 ```
 
 ```bash
+# 인증 필요
 curl http://localhost:8080/api/members/me \
   -H "X-Api-Version: 1" \
+  -H "Authorization: Bearer <token>" \
   -H "X-Auth-Token: 1" \
   -b "SESSION_ID=session-abc"
 ```
@@ -383,8 +398,10 @@ GET /api/members/audit
 ```
 
 ```bash
+# 인증 필요
 curl http://localhost:8080/api/members/audit \
-  -H "X-Api-Version: 1"
+  -H "X-Api-Version: 1" \
+  -H "Authorization: Bearer <token>"
 ```
 
 **Request**: 없음 (파라미터 없이 호출)
@@ -414,6 +431,28 @@ public void getAuditLog(
 ## 공통: 컨트롤러 밖에서 일어나는 일들
 
 위 모든 엔드포인트에 대해 **파서가 볼 수 없는** 처리가 일어남:
+
+### Spring Security 인증 (v2 추가)
+
+`POST /api/members`(회원 가입)를 제외한 모든 Member API 엔드포인트는 JWT 인증이 필요합니다.
+
+```bash
+# 1. 로그인해서 JWT 토큰 획득
+TOKEN=$(curl -s -X POST http://localhost:8080/api/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"email":"hong@example.com","password":"password123"}' \
+  | python3 -c "import sys,json; print(json.load(sys.stdin)['data']['accessToken'])")
+
+# 2. 인증 헤더를 붙여서 API 호출
+curl http://localhost:8080/api/members/1 \
+  -H "X-Api-Version: 1" \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+- 인증 없이 보호 경로 접근 시 **401 Unauthorized** (응답 본문 없음)
+- `SecurityConfig.filterChain()`에서 인가 규칙 정의 → 컨트롤러 코드에 드러나지 않음
+- `JwtAuthenticationFilter`가 `Authorization: Bearer <token>` 헤더를 추출하여 인증 → 필터 체인은 파서가 추적 불가
+- 자세한 인증 흐름은 [05-auth-api.md](05-auth-api.md) 참조
 
 ### 인터셉터 (ApiVersionInterceptor)
 
@@ -475,6 +514,18 @@ public ResponseEntity<ApiResponse<Void>> handleBusinessException(BusinessExcepti
   "data": null,
   "meta": { ... }
 }
+
+// 인증 실패 시 (v2 추가)
+// → 401 Unauthorized, 응답 본문 없음 (HttpStatusEntryPoint)
+
+// 잘못된 자격 증명 시 (v2 추가)
+{
+  "code": "BAD_REQUEST",
+  "message": "이메일 또는 비밀번호가 올바르지 않습니다",
+  "data": null,
+  "meta": { ... }
+}
 ```
 
 → 컨트롤러의 리턴 타입만으로는 에러 시 응답 형태를 추론할 수 없음
+→ v2에서 추가된 Security 예외(BadCredentialsException, AccessDeniedException)도 동일하게 GlobalExceptionHandler에서 처리됨

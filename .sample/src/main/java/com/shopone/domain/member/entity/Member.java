@@ -61,6 +61,8 @@ public class Member extends BaseEntity {
     // [파서 커버] 다중 선언자 — int loginCount, failCount;
     private int loginCount, failCount;
 
+    private String password;
+
     private boolean active = true;
 
     protected Member() {
@@ -70,6 +72,13 @@ public class Member extends BaseEntity {
         this.email = email;
         this.firstName = firstName;
         this.lastName = lastName;
+    }
+
+    public Member(String email, String firstName, String lastName, String encodedPassword) {
+        this.email = email;
+        this.firstName = firstName;
+        this.lastName = lastName;
+        this.password = encodedPassword;
     }
 
     /**

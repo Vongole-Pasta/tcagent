@@ -59,8 +59,10 @@ Content-Type: application/json
 ```
 
 ```bash
+# 인증 필요 (GET은 permitAll이지만 POST는 인증 필요)
 curl -X POST http://localhost:8080/api/v1/products \
   -H "Content-Type: application/json" \
+  -H "Authorization: Bearer <token>" \
   -d '{
     "name": "무선 키보드",
     "price": 89000,
@@ -134,8 +136,10 @@ Content-Type: application/json
 ```
 
 ```bash
+# 인증 필요
 curl -X PUT http://localhost:8080/api/v1/products/1 \
   -H "Content-Type: application/json" \
+  -H "Authorization: Bearer <token>" \
   -d '{ "name": "노트북 Pro", "price": 1800000 }'
 ```
 
@@ -291,7 +295,9 @@ DELETE /api/v1/products/{id}
 ```
 
 ```bash
-curl -X DELETE http://localhost:8080/api/v1/products/1
+# 인증 필요
+curl -X DELETE http://localhost:8080/api/v1/products/1 \
+  -H "Authorization: Bearer <token>"
 ```
 
 **Request**

@@ -4,6 +4,8 @@ import com.shopone.common.ApiResponse;
 import com.shopone.common.ApiResponseCode;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.access.AccessDeniedException;
+import org.springframework.security.authentication.BadCredentialsException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.ResponseStatus;
@@ -48,6 +50,26 @@ public class GlobalExceptionHandler {
         e.getBindingResult().getFieldErrors()
                 .forEach(error -> errors.put(error.getField(), error.getDefaultMessage()));
         return ApiResponse.error(ApiResponseCode.BAD_REQUEST, errors.toString());
+    }
+
+    /**
+     * 인증 실패 (잘못된 자격 증명)
+     *
+     * [파서 한계 #11] @ExceptionHandler(BadCredentialsException.class) — Security 예외 타입
+     */
+    @ExceptionHandler(BadCredentialsException.class)
+    @ResponseStatus(HttpStatus.UNAUTHORIZED)
+    public ApiResponse<Void> handleBadCredentials(BadCredentialsException e) {
+        return ApiResponse.error(ApiResponseCode.BAD_REQUEST, "이메일 또는 비밀번호가 올바르지 않습니다");
+    }
+
+    /**
+     * 접근 거부 (권한 부족)
+     */
+    @ExceptionHandler(AccessDeniedException.class)
+    @ResponseStatus(HttpStatus.FORBIDDEN)
+    public ApiResponse<Void> handleAccessDenied(AccessDeniedException e) {
+        return ApiResponse.error(ApiResponseCode.BAD_REQUEST, "접근 권한이 없습니다");
     }
 
     /**

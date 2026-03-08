@@ -12,6 +12,7 @@ import com.shopone.global.exception.BusinessException;
 import com.shopone.global.exception.ErrorCode;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Pageable;
+import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
@@ -40,6 +41,7 @@ public class MemberService {
 
     private final MemberRepository memberRepository;
     private final NotificationService notificationService;
+    private final PasswordEncoder passwordEncoder;
 
     /**
      * 회원 생성
@@ -51,7 +53,9 @@ public class MemberService {
 
         // [파서 한계 #14] var — 타입 추론 무시
         // [파서 한계 #17] new Member() — 생성자 호출을 일반 메서드 호출로 처리
-        var member = new Member(request.email(), request.firstName(), request.lastName());
+        var member = new Member(
+                request.email(), request.firstName(), request.lastName(),
+                passwordEncoder.encode(request.password()));
 
         if (request.addresses() != null) {
             request.addresses().forEach(member::addAddress);

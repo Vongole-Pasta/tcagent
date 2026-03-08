@@ -12,9 +12,11 @@ Content-Type: application/json
 ```
 
 ```bash
+# 인증 필요
 curl -X POST http://localhost:8080/api/orders \
   -H "Content-Type: application/json" \
   -H "X-Api-Version: 1" \
+  -H "Authorization: Bearer <token>" \
   -d '{
     "memberId": 1,
     "items": [
@@ -118,8 +120,10 @@ GET /api/orders/{id}
 ```
 
 ```bash
+# 인증 필요
 curl http://localhost:8080/api/orders/1 \
-  -H "X-Api-Version: 1"
+  -H "X-Api-Version: 1" \
+  -H "Authorization: Bearer <token>"
 ```
 
 **Request**
@@ -138,8 +142,10 @@ PATCH /api/orders/{id}/status?status=CONFIRMED
 ```
 
 ```bash
+# 인증 필요
 curl -X PATCH "http://localhost:8080/api/orders/1/status?status=CONFIRMED" \
-  -H "X-Api-Version: 1"
+  -H "X-Api-Version: 1" \
+  -H "Authorization: Bearer <token>"
 ```
 
 **Request**
@@ -212,8 +218,10 @@ GET /api/orders/reactive/{id}
 ```
 
 ```bash
+# 인증 필요
 curl http://localhost:8080/api/orders/reactive/1 \
-  -H "X-Api-Version: 1"
+  -H "X-Api-Version: 1" \
+  -H "Authorization: Bearer <token>"
 ```
 
 **Request**
@@ -252,7 +260,7 @@ Accept: text/event-stream
 ```
 
 ```bash
-# SSE 스트림 — 연결이 유지되며 데이터가 계속 푸시됨
+# SSE 스트림 — permitAll (인증 불필요)
 curl -N http://localhost:8080/api/orders/stream \
   -H "X-Api-Version: 1"
 ```
@@ -301,8 +309,10 @@ X-Member-Id: 1
 ```
 
 ```bash
+# 인증 필요
 curl http://localhost:8080/api/orders/my \
   -H "X-Api-Version: 1" \
+  -H "Authorization: Bearer <token>" \
   -H "X-Member-Id: 1"
 ```
 
@@ -372,8 +382,10 @@ Accept: application/pdf
 ```
 
 ```bash
+# 인증 필요
 curl http://localhost:8080/api/orders/1/invoice \
   -H "X-Api-Version: 1" \
+  -H "Authorization: Bearer <token>" \
   -o invoice-1.pdf
 ```
 

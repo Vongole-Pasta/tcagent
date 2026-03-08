@@ -16,6 +16,7 @@ public record MemberCreateRequest(
         @NotBlank @Email String email,
         @NotBlank String firstName,
         @NotBlank String lastName,
+        String password,
         @Valid List<Address> addresses
 ) {
 }
