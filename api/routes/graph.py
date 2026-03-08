@@ -12,8 +12,12 @@ def process_path_result(results):
     edges = {}
     
     for row in results:
+        # Build metadata map for this row if provided
+        metadata_list = row.get('metadata', [])
+        metadata_map = {item['id']: item.get('className') for item in metadata_list if item and 'id' in item}
+
         path = row.get('path')
-        if not path:
+        if path is None:
             continue
             
         # Extract nodes and relationships from path
@@ -30,12 +34,8 @@ def process_path_result(results):
                     "signature": node.get('signature', ''),
                     "endpoint": node.get('endpoint_uri'),
                     "http_method": node.get('http_method'),
-<<<<<<< HEAD:api/routers/graph.py
                     "type": "ENDPOINT" if node.get('endpoint_uri') else "METHOD",
                     "className": metadata_map.get(node_id) # Add className
-=======
-                    "type": "ENDPOINT" if node.get('endpoint_uri') else "METHOD"
->>>>>>> feature/agent:api/routes/graph.py
                 }
                 nodes[node_id] = node_data
         
@@ -54,7 +54,6 @@ def process_path_result(results):
         "edges": list(edges.values())
     }
 
-<<<<<<< HEAD:api/routers/graph.py
 def process_single_node(results):
     """
     Helper to convert single node result into 1-node graph
@@ -86,8 +85,6 @@ def process_single_node(results):
         "edges": []
     }
 
-=======
->>>>>>> feature/agent:api/routes/graph.py
 @router.get("/upstream/{method_id}")
 async def get_upstream_graph(method_id: str, request: Request):
     """

@@ -1,6 +1,6 @@
 from fastapi import APIRouter, HTTPException, Request
 
-from core.agent.happy_case.agent import HappyCaseAgent
+from core.agent.happy_case.graph import HappyCaseAgentGraph
 
 router = APIRouter(prefix="/agent", tags=["agent"])
 
@@ -32,7 +32,7 @@ async def get_happy_case_scenarios(request: Request, method_ids: str = None):
         logger = logging.getLogger(__name__)
         logger.info(f"Generating happy-case scenarios for {len(target_ids)} methods...")
         
-        agent = HappyCaseAgent(analyzer.connector)
+        agent = HappyCaseAgentGraph(analyzer.connector)
         result = agent.run(source_method_ids=target_ids)
         
         return {

@@ -1,62 +1,22 @@
 import logging
 import json
-import operator
-from typing import List, Dict, Any, TypedDict, Annotated, NotRequired
+from typing import List, Dict, Any
 from langchain_openai import ChatOpenAI
-from pydantic import BaseModel, Field
-from langgraph.graph import StateGraph, END
-from langgraph.constants import Send
+from langchain_core.prompts import PromptTemplate
 
-from infra.db_client import DBClient
+from core.agent.happy_case.state import ImpactGroup, HappyCaseState, WorkerState, HappyCaseOutput
+from core.agent.happy_case.query import HappyCaseQueries
+from graph_db.client import DBClient
 from graph_db.queries import CypherQueries
-from .prompts import HAPPY_CASE_GENERATOR_PROMPT
+from core.agent.happy_case.prompts import GENERATOR_NODE_PROMPT
 
 logger = logging.getLogger(__name__)
 
-class ImpactGroup(TypedDict):
-    """엔드포인트별 식별 및 컨텍스트 정보 (Path 객체 제외)"""
-    url: str
-    http_method: str
-    name: str
-    endpoint_signatures: List[str]  # 엔드포인트 메서드 시그니처 목록
-    source_methods: List[str]     # 영향을 준 소스 메서드 ID 목록
-
-class HappyCaseState(TypedDict):
-    """
-    에이전트의 전체 State를 정의합니다.
-    NotRequired를 사용하여 필수 입력값이 아닌 필드들을 구분합니다.
-    """
-    source_method_ids: List[str]                 # 입력: 영향도 분석 시작점 (또는 직접 선택한 엔드포인트)
-    
-    impact_groups: NotRequired[Dict[str, ImpactGroup]] # 분석 결과: 식별된 엔드포인트 그룹 (key: "HTTP_METHOD:URL")
-    # Annotated[..., operator.add]: 병렬 워커들이 반환하는 리스트를 메인 State에 자동으로 누적합니다.
-    worker_results: Annotated[NotRequired[List[Dict[str, Any]]], operator.add] # 각 워커의 생성 결과물 (최종 집계용)
-    scenarios: NotRequired[List[Dict[str, Any]]]       # 최종 결과물 (TC-001 등 ID 부여 완료)
-    # 여러 워커에서 발생한 에러를 하나의 리스트로 합칩니다 (Reducer 적용).
-    errors: Annotated[NotRequired[List[str]], operator.add]
-
-class WorkerState(TypedDict):
-    """
-    개별 엔드포인트 작업을 위한 State입니다.
-    retriever -> generator 순서로 데이터가 전달됩니다.
-    """
-    group: ImpactGroup
-    context: NotRequired[Dict[str, Any]]         # retriever가 수집한 메서드/DTO 컨텍스트
-    worker_results: Annotated[NotRequired[List[Dict[str, Any]]], operator.add]  # 생성된 최종 결과 (시나리오)
-    errors: Annotated[NotRequired[List[str]], operator.add]  # 워커에서 발생한 에러 기록
-
-class HappyCaseOutput(BaseModel):
-    """LLM이 생성할 Happy Case 시나리오 구조 (요구사항 반영)"""
-    test_case: str = Field(description="테스트하려는 API가 어떤 기능인지 설명 (Happy Case)")
-    input_data: str = Field(description="입력 데이터 예시 (JSON 형식 문자열 등)")
-    expected_result: str = Field(description="예상 결과 예시 (JSON 형식 문자열 등)")
-
-class HappyCaseAgent:
+class HappyCaseAgentNodes:
     def __init__(self, db_client: DBClient):
         self.db_client = db_client
         self.llm = ChatOpenAI(model="gpt-4o", temperature=0.1)
         self.structured_llm = self.llm.with_structured_output(HappyCaseOutput)
-        self.graph = self._build_graph()
 
     def planner_node(self, state: HappyCaseState):
         """
@@ -123,7 +83,7 @@ class HappyCaseAgent:
     def retriever_worker_node(self, state: WorkerState):
         """
         DB에서 엔드포인트 메서드 및 관련 DTO 컨텍스트를 수집합니다.
-        각 워커 세션 내에서 한 번만 실행되어 필요한 정보를 조회합니다.
+        각 워커 세션 내에서 한 일만 실행되어 필요한 정보를 조회합니다.
         """
         group = state["group"]
         methods_context = []
@@ -166,11 +126,15 @@ class HappyCaseAgent:
         endpoint_url = group["url"]
         context = state.get("context", {})
 
-        prompt = HAPPY_CASE_GENERATOR_PROMPT.replace("{endpoint_url}", endpoint_url) \
-                                          .replace("{http_method}", group['http_method']) \
-                                          .replace("{name}", group['name']) \
-                                          .replace("{methods_context}", json.dumps(context.get('methods', []), indent=2, ensure_ascii=False)) \
-                                          .replace("{dto_context}", json.dumps(context.get('dto_context', {}), indent=2, ensure_ascii=False))
+
+        prompt_template = PromptTemplate.from_template(GENERATOR_NODE_PROMPT)
+        prompt = prompt_template.format(
+            endpoint_url=endpoint_url,
+            http_method=group['http_method'],
+            name=group['name'],
+            methods_context=json.dumps(context.get('methods', []), indent=2, ensure_ascii=False),
+            dto_context=json.dumps(context.get('dto_context', {}), indent=2, ensure_ascii=False)
+        )
 
         try:
             result = self.structured_llm.invoke(prompt)
@@ -201,73 +165,13 @@ class HappyCaseAgent:
         
         return {"scenarios": scenarios}
 
-    def _build_graph(self):
-
-        def continue_to_workers(state: HappyCaseState):
-            """planner 종료 후 각 엔드포인트마다 독립적인 워커 서브 그래프를 병렬 실행합니다."""
-            impact_groups = state.get("impact_groups", {})
-            if not impact_groups:
-                logger.warning("No impact groups found, skipping to END.")
-                return []
-            logger.info(f"Dispatching {len(impact_groups)} workers: {list(impact_groups.keys())}")
-            return [
-                Send("worker", {"group": group})
-                for group in impact_groups.values()
-            ]
-
-        # --- 서브 그래프: 단일 엔드포인트 처리 (retriever -> generator) ---
-        worker_builder = StateGraph(WorkerState)
-        worker_builder.add_node("retriever", self.retriever_worker_node)
-        worker_builder.add_node("generator", self.generator_worker_node)
-
-        worker_builder.set_entry_point("retriever")
-        worker_builder.add_edge("retriever", "generator")
-        worker_builder.add_edge("generator", END)
-
-        compiled_worker = worker_builder.compile()
-
-        # --- 메인 그래프 ---
-        workflow = StateGraph(HappyCaseState)
-        workflow.add_node("planner", self.planner_node)
-        workflow.add_node("worker", compiled_worker)
-        workflow.add_node("formatter", self.formatter_node)
-
-        workflow.set_entry_point("planner")
-        workflow.add_conditional_edges("planner", continue_to_workers, ["worker"])
-        workflow.add_edge("worker", "formatter")
-        workflow.add_edge("formatter", END)
-
-        return workflow.compile()
-
-    def run(self, source_method_ids: List[str]):
-        """
-        에이전트를 실행하여 병렬로 Happy Case 시나리오를 생성합니다.
-        """
-        return self.graph.invoke({"source_method_ids": source_method_ids})
-
     def _collect_dto_info(self, method_signature, dtos_context):
         """
         특정 메서드의 파라미터/반환 타입 및 중첩 DTO의 필드 구조를 수집합니다.
         Cypher 홉(Hop) 수 10은 'TYPE-FIELD-TYPE' 구조를 고려할 때 최대 5단계의 중첩을 의미합니다.
         결과는 dtos_context 딕셔너리에 {타입명: [{name, type}, ...]} 형태로 누적됩니다.
         """
-        # 1. METHOD -> (HAS_PARAMETER|RETURNS) -> TYPE (직접 관계)
-        # 2. METHOD -> (CONTAINS) -> PARAMETER -> (OF_TYPE) -> TYPE (실제 스캔 구조)
-        # 위 두 경로를 모두 지원하여 root TYPE을 찾고, 거기서부터 재귀 탐색합니다.
-        query = """
-        MATCH (m:METHOD {signature: $signature})
-        OPTIONAL MATCH (m)-[:HAS_PARAMETER|RETURNS]->(root1:TYPE)
-        OPTIONAL MATCH (m)-[:CONTAINS]->(:PARAMETER)-[:OF_TYPE]->(root2:TYPE)
-        WITH DISTINCT root1, root2
-        UNWIND [root1, root2] as root
-        WITH DISTINCT root WHERE root IS NOT NULL
-        OPTIONAL MATCH path = (root)-[:CONTAINS|OF_TYPE *0..10]->(t:TYPE)
-        WITH DISTINCT t
-        WHERE t IS NOT NULL
-        MATCH (t)-[:CONTAINS]->(f:FIELD)
-        RETURN t.fullName as type_name, f.name as field_name, f.type as field_type
-        """
-        results = self.db_client.execute_query(query, {"signature": method_signature})
+        results = self.db_client.execute_query(HappyCaseQueries.RETRIEVER_NODE_GET_DTO_STRUCTURE, {"signature": method_signature})
         for row in results:
             t_name = row["type_name"]
             if t_name not in dtos_context:

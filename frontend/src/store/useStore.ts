@@ -10,6 +10,7 @@ interface MethodNode {
     http_method?: string;
     type: 'METHOD' | 'ENDPOINT';
     status?: string | null;
+    class_name?: string;
 }
 
 interface GraphData {

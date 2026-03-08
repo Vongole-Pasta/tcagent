@@ -53,6 +53,7 @@ docs/
 
 # Tests
 tests/
+.pytest_cache/
 
 # Data
 *.xlsx
@@ -74,3 +75,4 @@ frontend/yarn-error.log*
 
 # LangGraph
 .langgraph_api/
+langgraph.json

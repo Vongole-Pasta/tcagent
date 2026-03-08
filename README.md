@@ -1,91 +1,112 @@
-# TcAgent (Java Code Analysis)
+# 🚀 TcAgent (Java Code Analysis)
 
-자바 코드의 구조와 흐름을 분석하고 시각화하는 에이전트 시스템입니다.
+> **Java 소스 코드의 변경을 실시간으로 감지하고 구조를 시각화하며, 자동으로 테스트 시나리오를 설계하는 지능형 에이전트 시스템입니다.**
 
-## 📦 사전 요구사항 (Prerequisites)
-- **Python 3.12+** (패키지 매니저로 `uv` 권장)
+---
+
+## ✨ 1. 주요 기능 (Features)
+
+사용자는 TcAgent를 통해 다음과 같은 핵심 분석 기능들을 수행할 수 있습니다.
+
+- **📦 간편한 소스 업로드**: `.zip` 파일 기반의 Java 프로젝트 소스 업로드 시 즉각적인 자동 분석(AST 파싱)이 진행됩니다.
+- **🔍 증분 분석 (Incremental Analysis)**: 전체 코드가 아닌 변경된 사항만을 식별하여 `NEW`(신규), `MODIFIED`(수정), `DELETED`(삭제) 상태로 추적합니다.
+- **🕸️ 지능형 호출 그래프 (Call Graph)**: 메서드 간의 호출 관계뿐만 아니라, Controller API 엔드포인트부터 깊은 비즈니스 로직까지의 흐름을 시각적으로 연결해 줍니다.
+- **🤖 AI 테스트 시나리오 자동 생성**: 
+  - LangGraph 기반의 에이전트가 변경된 메서드부터 최상단 API 진입점을 역추적(Trace)합니다.
+  - LLM을 활용해 실제 엔드포인트에서 실행 가능한 HTTP 테스트 데이터(Happy Case 등)를 자동 생성하고 검증(Evaluate)합니다.
+- **📊 한눈에 보는 대시보드**: 전체 프로젝트의 분석 통계와 코드 변경 현황을 직관적인 UI로 요약해서 보여줍니다.
+
+---
+
+## 🛠 2. 기술 스택 (Tech Stack)
+
+### Backend & Agent
+![Python](https://img.shields.io/badge/Python-3.12+-3776AB?style=for-the-badge&logo=python&logoColor=white)
+![FastAPI](https://img.shields.io/badge/FastAPI-009688?style=for-the-badge&logo=fastapi&logoColor=white)
+![LangChain](https://img.shields.io/badge/LangChain-1C3C3C?style=for-the-badge&logo=langchain&logoColor=white)
+![LangGraph](https://img.shields.io/badge/LangGraph-FF4F00?style=for-the-badge&logo=langchain&logoColor=white)
+
+### Frontend
+![NodeJS](https://img.shields.io/badge/Node.js-18+-339933?style=for-the-badge&logo=node.js&logoColor=white)
+![NextJS](https://img.shields.io/badge/Next.js-000000?style=for-the-badge&logo=next.js&logoColor=white)
+
+### Database & Environment
+![Neo4j](https://img.shields.io/badge/Neo4j-008CC1?style=for-the-badge&logo=neo4j&logoColor=white)
+![uv](https://img.shields.io/badge/uv-Package_Manager-F5C211?style=for-the-badge)
+
+---
+
+## 🏁 3. 시작 가이드 (Getting Started)
+
+로컬 환경에서 프로젝트를 실행하는 방법입니다.
+
+### Prerequisites (사전 요구사항)
+- **Python 3.12+** (속도 향상을 위해 패키지 매니저로 `uv` 권장)
 - **Node.js 18+** (Frontend 실행용)
-- **Neo4j Database** (데이터 저장소)
+- **Neo4j** (데이터베이스, Docker 또는 Desktop 실행 권장)
 
-## 🚀 시작하기 (Getting Started)
-
-### 1. 데이터베이스 준비 (Neo4j)
-Neo4j 인스턴스가 실행 중이어야 합니다.
-
-### 2. 프로젝트 설정 (Configuration)
-이 프로젝트는 **로컬 개발환경(dev)**과 **운영 환경(prd)**을 구분하여 설정 파일을 관리합니다.
-
-#### 환경 설정 파일 준비
-프로젝트 루트에 다음 두 파일을 생성해야 합니다.
-
-**1) 로컬 개발용 (.env.dev)**
-개인 로컬 Neo4j 설정을 입력하세요.
+### Configuration (환경 설정)
+루트 경로에 로컬 개발용 `.env.dev` 파일을 생성하고 Neo4j 접속 정보를 입력합니다.
 ```ini
 # .env.dev
 NEO4J_URI=bolt://localhost:7687
 NEO4J_USER=neo4j
-NEO4J_PASSWORD=password
+NEO4J_PASSWORD=my_secure_password
 ```
 
-**2) 운영/클라우드용 (.env.prd)**
-팀원들과 공유된 클라우드 Neo4j 설정을 입력하세요.
-```ini
-# .env.prd
-NEO4J_URI=bolt://<cloud-neo4j-uri>:7687
-NEO4J_USER=neo4j
-NEO4J_PASSWORD=<secure-password>
-```
+### Installation & Running (설치 및 실행)
 
-### 3. 백엔드 실행 (Backend)
-FastAPI 서버를 실행합니다.
-
+**1. 백엔드 실행 (Backend)**
 ```bash
-# 1. 의존성 및 가상환경 동기화 (최초 1회 실행)
+# 1. 의존성 동기화 (초기 1회)
 uv sync
 
-# 2. 서버 실행
-# 개발 환경 (로컬 DB 사용, 기본값)
-APP_ENV=dev uv run uvicorn api.main:app --reload
-
-# 운영 환경 (클라우드 DB 사용)
-APP_ENV=prd uv run uvicorn api.main:app --reload
+# 2. FastAPI 서버 실행 (기본 포트: 8000)
+uv run uvicorn api.main:app --reload
 ```
-> **Tip**: `APP_ENV` 변수를 생략하면 기본적으로 `dev` 환경으로 실행됩니다.
+> 실행 후 Swagger UI 문서 확인: [http://localhost:8000/docs](http://localhost:8000/docs)
 
-- Swagger UI 문서: [http://localhost:8000/docs](http://localhost:8000/docs)
-
-### 4. 프론트엔드 실행 (Frontend)
-Next.js 웹 애플리케이션을 실행합니다.
-
+**2. 프론트엔드 실행 (Frontend)**
 ```bash
 cd frontend
 
-# 1. 의존성 설치
+# 1. npm 패키지 설치
 npm install
 
-# 2. 개발 서버 시작 (http://localhost:3000)
+# 2. Next.js 개발 서버 실행 (기본 포트: 3000)
 npm run dev
 ```
 
-## 🔍 주요 기능 (Features)
-- **Java 소스 분석**: `.zip` 파일 업로드 시 자동 분석 (AST 파싱)
-- **증분 분석 (Incremental)**: 변경 사항을 감지하여 `NEW`(신규), `MODIFIED`(수정), `DELETED`(삭제) 상태 표시
-- **호출 그래프 (Call Graph)**: 메서드 간 호출 관계 및 API 엔드포인트 연결 시각화
-- **대시보드**: 프로젝트 전체 통계 및 분석 현황 요약
+---
 
-## 🏗 백엔드 및 파서 폴더 구조 (Backend & Parser Directory Structure)
-- `api/`: FastAPI 진입점(`main.py`) 및 전역 라우터 설정, API 엔드포인트를 관리합니다.
-- `core/`: 프로젝트의 핵심 비즈니스 로직 및 분석 엔진이 포함되어 있습니다.
-  - `core/agent/`: LangGraph 기반의 지능형 에이전트로, 코드 변경 사항을 분석하여 테스트 시나리오를 구성합니다.
-  - `core/analysis/`: 핵심 Java 파싱 및 분석 로직이 위치합니다.
-    - `parser.py`: 소스 코드를 읽고 추상 구문 트리(AST) 수준으로 분해/파싱하는 역할을 담당합니다.
-    - `analyzer.py`: 파싱된 구문을 순회하며 메서드, 클래스, 관계 등을 추출해 DB 구조로 변환합니다.
-- `graph_db/`: Neo4j 그래프 데이터베이스의 스키마 정의(`schema.py`) 및 Cypher 쿼리(`queries.py`)를 관리합니다.
-- `infra/`: 데이터베이스 연결(`db_client.py`) 등 외부 인프라스트럭처와의 통신 및 세션 관리를 담당합니다.
+## � 4. 프로젝트 구조 (Project Structure)
 
-## 🤖 통합 테스트 에이전트 구조 (LangGraph Node Workflow)
-현재 테스트 생성 에이전트는 애플리케이션의 코드 변경 사항을 감지하고, 실제 실행 가능한 테스트 시나리오를 설계하는 파이프라인으로 구성되어 있습니다.
-1. **`identify_targets`**: DB에 기록된 코드 베이스에서 변경되었거나(`MODIFIED`) 새로 추가된(`NEW`) 대상 메서드를 식별합니다.
-2. **`trace_roots`**: 식별된 대상 메서드로부터 시작하여 호출 계층을 거슬러 올라가, 최상위 진입점(예: Controller의 API 엔드포인트)을 역추적합니다. 이를 통해 루트부터 타겟까지의 테스트 컨텍스트를 구성합니다.
-3. **`generate_scenarios`**: 타겟 메서드의 변경된 로직을 트리거할 수 있는 유효한 테스트 시나리오(예: 구체화된 `curl` 명령어 및 파라미터)를 LLM을 활용하여 생성합니다.
-4. **`evaluate_scenarios`** (Critic Node): 생성된 시나리오가 실제 코드의 명세(URL, 파라미터 구조, HTTP 메서드 등)와 예상 결과(조건문, 반환값, 로그)에 사실적으로 부합하는지 엄격하게 평가합니다. 평가에 실패할 경우 피드백 루프를 통해 `generate_scenarios`로 돌아가 재시도합니다.
+프로젝트를 다루기 위해 알아두어야 할 핵심 구조입니다.
+
+```text
+tcagent/
+├── api/             # FastAPI 진입점(main.py) 및 RESTful 라우터(graph, agent 등) 모음
+├── core/            # 핵심 비즈니스 로직 및 에이전트 시스템
+│   ├── agent/       # LangGraph 기반 AI 에이전트 (Happy Case 테스트 생성 등)
+│   └── analysis/    # Java 파일 AST 파싱 및 구조 분석 트리거
+├── graph_db/        # Neo4j 스키마 및 Cypher Query 파일 통합 본부
+├── infra/           # DB 클라이언트, 외부 통신 등 인프라스트럭처 연결 모듈
+├── frontend/        # 코드 그래프 시각화 및 대시보드를 보여줄 Next.js 앱
+├── langgraph.json   # 외부 LangGraph Studio 연동을 위한 메타데이터 파일
+└── main.py          # 서버 구동, DB 초기화 등을 돕는 CLI 스크립트 진입점
+```
+
+---
+
+## 🤝 5. 기여 방법 및 라이선스 (Contributing & License)
+
+### Contributing
+프로젝트에 기여해 주셔서 감사합니다! 버그 수정, 새 기능 제안 등 무엇이든 환영합니다.
+1. 이 저장소를 Fork 합니다.
+2. 새 기능 브랜치를 만듭니다. (`git checkout -b feature/amazing-feature`)
+3. 작업 내역을 커밋합니다. (`git commit -m 'Add some amazing feature'`)
+4. 브랜치에 푸시합니다. (`git push origin feature/amazing-feature`)
+5. **Pull Request**를 생성해 주세요.
+
+### License
+이 프로젝트는 **MIT License** 조건 하에 배포됩니다. 자유롭게 사용, 변경 및 재배포가 가능합니다. 자세한 내용은 `LICENSE` 파일을 참고하세요.

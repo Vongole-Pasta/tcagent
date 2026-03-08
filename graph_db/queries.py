@@ -79,11 +79,7 @@ class CypherQueries:
     # Usage: api/routers/projects.py:38
     GET_ALL_METHODS = """
     MATCH (m:METHOD)<-[:CONTAINS]-(c:TYPE)
-<<<<<<< HEAD
-    RETURN elementId(m) as id, m.name as name, m.signature as signature, m.endpoint_uri as endpoint, m.http_method as http_method, m.status as status, c.name as class_name
-=======
-    RETURN elementId(m) as id, m.name as name, m.signature as signature, m.endpoint_uri as endpoint, m.http_method as http_method, m.status as status, c.name as class_name, m.source as source
->>>>>>> feature/agent
+    RETURN elementId(m) as id, m.name as name, m.signature as signature, m.endpoint_uri as endpoint, m.http_method as http_method, m.status as status, c.name as class_name,m.source as source
     ORDER BY c.name, m.name
     """
     

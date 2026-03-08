@@ -3,12 +3,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from api.routes import uploads, projects, graph, agent
 from core.analysis.analyzer import Analyzer
-<<<<<<< HEAD
-from core.agent.graph import create_agent_graph
 from graph_db.client import DBClient
-=======
-from infra.db_client import DBClient
->>>>>>> feature/agent
 import logging
 
 logger = logging.getLogger(__name__)

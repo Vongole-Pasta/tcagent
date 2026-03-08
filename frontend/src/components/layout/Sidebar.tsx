@@ -173,14 +173,14 @@ export function Sidebar() {
                                     "flex items-center gap-2 p-2 rounded-md cursor-pointer transition-colors text-sm border border-transparent group",
                                     selectedNodeId === node.id
                                         ? "bg-accent text-accent-foreground border-border shadow-sm"
-                                        : isSelected 
-                                            ? "bg-primary/5 hover:bg-primary/10 border-primary/20" 
+                                        : isSelected
+                                            ? "bg-primary/5 hover:bg-primary/10 border-primary/20"
                                             : "hover:bg-muted/60",
                                     node.status === 'DELETED' && "opacity-60 grayscale"
                                 )}
                             >
                                 {/* Checkbox for multi-selection - Expanded Click Area */}
-                                <div 
+                                <div
                                     className="flex items-center justify-center w-8 h-8 hover:bg-accent rounded-md transition-colors shrink-0"
                                     onClick={(e) => {
                                         e.stopPropagation();
@@ -201,15 +201,20 @@ export function Sidebar() {
                                         <Box className="h-3.5 w-3.5 text-orange-500 shrink-0" />
                                     )}
 
-                                    <div className="flex-1 min-w-0">
+                                    <div className="flex-1 min-w-0 flex flex-col justify-center py-0.5">
+                                        {node.class_name && (
+                                            <span className="text-[10px] text-muted-foreground leading-none mb-1 truncate block opacity-75 font-mono">
+                                                {node.class_name}
+                                            </span>
+                                        )}
                                         <div className="flex items-center gap-2">
-                                            <span className="truncate block font-medium">
+                                            <span className="truncate block font-medium leading-none">
                                                 {node.name}
                                             </span>
                                             {getStatusBadge(node.status)}
                                         </div>
                                         {node.endpoint && (
-                                            <span className="text-[10px] text-muted-foreground truncate block">
+                                            <span className="text-[10px] text-muted-foreground truncate block mt-1">
                                                 {node.http_method} {node.endpoint}
                                             </span>
                                         )}
@@ -228,9 +233,9 @@ export function Sidebar() {
                         Selected: <span className="text-foreground">{selectedMethodIds.length}</span>
                     </span>
                     {selectedMethodIds.length > 0 && (
-                        <Button 
-                            variant="ghost" 
-                            size="sm" 
+                        <Button
+                            variant="ghost"
+                            size="sm"
                             className="h-7 text-[10px] px-2"
                             onClick={() => {
                                 selectedMethodIds.forEach(id => toggleMethodSelection(id));
@@ -240,7 +245,7 @@ export function Sidebar() {
                         </Button>
                     )}
                 </div>
-                <Button 
+                <Button
                     variant={selectedMethodIds.length > 0 ? "default" : "secondary"}
                     className="w-full gap-2 shadow-md font-semibold"
                     disabled={selectedMethodIds.length === 0 || isAgentRunning}

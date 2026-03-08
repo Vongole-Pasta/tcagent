@@ -1,4 +1,4 @@
-HAPPY_CASE_GENERATOR_PROMPT = """
+GENERATOR_NODE_PROMPT = """
 당신은 백엔드 개발자이자 QA 엔지니어입니다. 제공된 코드 문맥을 분석하여 해당 API의 **Happy Case (성공 케이스, 200 OK)** 테스트 데이터를 생성해 주세요.
 
 [대상 엔드포인트]
@@ -18,7 +18,7 @@ HAPPY_CASE_GENERATOR_PROMPT = """
   - 엔드포인트 메서드의 파라미터 목록(`params`)을 보고 각 데이터의 소스를 판단하세요.
   - **Body**: DTO 타입이거나 `@RequestBody`인 경우 JSON 바디로 작성하세요.
   - **Header**: `@RequestHeader` 또는 이름/타입상 헤더로 추정되는 경우, `input_data` 최상단에 "Header: Key=Value" 형식으로 작성하세요.
-  - **Path**: `@PathVariable` 또는 URL 패턴(`{id}` 등)과 일치하는 경우, "Path: Key=Value" 형식으로 작성하세요.
+  - **Path**: `@PathVariable` 또는 URL 패턴(`{{id}}` 등)과 일치하는 경우, "Path: Key=Value" 형식으로 작성하세요.
   - **Query**: `@RequestParam` 또는 기타 원시 타입인 경우, "Query: Key=Value" 형식으로 작성하세요.
   - 여러 소스가 섞여 있다면 각각 명시한 후 마지막에 바디 JSON을 작성하세요.
 - **예상 결과(expected_result) 생성 지침**:
