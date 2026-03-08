@@ -106,13 +106,12 @@ export function HappyCaseTableView() {
                                     <div className="rounded-md overflow-hidden border">
                                         <SyntaxHighlighter
                                             language="json"
-                                            style={prism}
+                                            style={vscDarkPlus}
                                             customStyle={{
                                                 margin: 0,
                                                 padding: '12px',
                                                 fontSize: '12px',
                                                 fontFamily: '"JetBrains Mono", "Fira Code", monospace',
-                                                backgroundColor: '#f8fafc',
                                                 textAlign: 'left'
                                             }}
                                             codeTagProps={{
@@ -141,11 +140,60 @@ export function HappyCaseTableView() {
 }
 
 function formatJson(data: any) {
+    if (!data) return String(data);
+
+    // 이미 객체면 바로 변환
+    if (typeof data !== 'string') {
+        return JSON.stringify(data, null, 2);
+    }
+
     try {
-        const obj = typeof data === 'string' ? JSON.parse(data) : data;
-        return JSON.stringify(obj, null, 2);
-    } catch (e) {
-        return typeof data === 'string' ? data : JSON.stringify(data, null, 2);
+        let parsed = data;
+        let depth = 0;
+
+        // 문자열인 경우 최대 3번까지 재귀적으로 껍데기를 벗겨냄
+        while (typeof parsed === 'string' && depth < 3) {
+            let cleaned = parsed.trim();
+
+            // 1. 최외곽 따옴표 무력화
+            if ((cleaned.startsWith('"') && cleaned.endsWith('"')) || (cleaned.startsWith("'") && cleaned.endsWith("'"))) {
+                if (cleaned.length > 1) {
+                    cleaned = cleaned.substring(1, cleaned.length - 1);
+                }
+            }
+
+            // 2. 백엔드/LLM 통신 중 붙은 모든 더러운 이스케이프 무력화
+            cleaned = cleaned.replace(/\\\\"/g, '"');   // \\" -> "
+            cleaned = cleaned.replace(/\\\\/g, '\\');   // \\ -> \
+            cleaned = cleaned.replace(/\\"/g, '"');     // \" -> "
+            cleaned = cleaned.replace(/\\n/g, '\n');    // \n -> 줄바꿈
+            cleaned = cleaned.replace(/\\t/g, '\t');    // \t -> 탭
+
+            try {
+                // 3. 정석적인 JSON 파싱 시도
+                parsed = JSON.parse(cleaned);
+            } catch (e1) {
+                try {
+                    // 4. (최후의 보루) 정석 파싱 실패 시, JavaScript 파싱 엔진 차용
+                    // 이중/삼중 이스케이프로 문법이 미세하게 파괴된 경우 
+                    // JS 객체 리터럴로 억지로 읽어들여 복구하는 무적 로직
+                    parsed = new Function('return ' + cleaned)();
+                } catch (e2) {
+                    // 어떻게 해도 안 풀리면 치환만 된 문자열을 그대로 반환 (다음 depth 진행 방지)
+                    parsed = cleaned;
+                    break;
+                }
+            }
+            depth++;
+        }
+
+        // 마침내 건져낸 순수 객체를 예쁘게 리턴
+        return typeof parsed === 'object' ? JSON.stringify(parsed, null, 2) : parsed;
+
+    } catch (finalError) {
+        console.error("Critical JSON formatting error:", finalError);
+        // 서버에서 던진 원본 그대로 어쩔 수 없이 출력
+        return String(data);
     }
 }
 
