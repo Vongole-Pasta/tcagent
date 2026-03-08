@@ -52,6 +52,7 @@ docs/
 !.sample/docs/
 .gradle/
 *.zip
+!.sample/*.zip
 
 # Tests
 tests/
