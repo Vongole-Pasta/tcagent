@@ -36,6 +36,15 @@ class JavaParser:
     Side effect 없음 — 결과는 ParsedFileResult로 반환됩니다.
     """
 
+    # 소스 루트 탐지 패턴 (우선순위 순)
+    # 패턴 앞의 마지막 세그먼트 = 모듈명, 패턴 뒤 = 패키지/소스 경로
+    # 예: backend/user-service/src/main/java/com/ex/A.java
+    #     → 모듈명: user-service, 패키지 경로: com/ex/A.java
+    ROOT_PATTERNS: list[str] = [
+        "src/main/java/",
+        "src/",
+    ]
+
     _ts_parser = get_parser("java")
 
     def __init__(self):

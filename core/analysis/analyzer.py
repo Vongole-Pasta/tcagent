@@ -3,7 +3,7 @@ import os
 import hashlib
 import uuid
 from graph_db.client import DBClient
-from core.analysis.lang import PARSERS
+from core.analysis.lang import PARSERS, collect_root_patterns
 from core.analysis.store.graph_writer import GraphWriter
 from config import Config
 from graph_db.queries import CypherQueries
@@ -20,7 +20,7 @@ class Analyzer:
     적절한 파서(Parser)를 호출하여 그래프 DB를 업데이트합니다.
 
     분석 파이프라인 (analyze 메서드 참조):
-        cleanup → snapshot → find_root → parse → detect_deletions → flush
+        cleanup → snapshot → compute_paths → parse → detect_deletions → flush
     """
 
     def __init__(self, connector: DBClient):
@@ -39,7 +39,7 @@ class Analyzer:
         파이프라인 단계:
             1. cleanup          — 이전 분석에서 DELETED로 마킹된 유령 노드를 DB에서 영구 삭제
             2. snapshot         — 현재 DB에 저장된 파일 해시를 조회하여 비교 기준점 확보
-            3. find_root        — 업로드 파일들의 공통 루트 경로 계산 (상대경로 산출용)
+            3. compute_paths    — 소스 루트 패턴 기반 상대경로 계산 (패키지 구조 보존)
             4. parse            — 각 파일의 변경 상태를 판별하고, 파서로 분석 후 메모리에 축적
             5. detect_deletions — 업로드 목록에 없는 기존 파일을 DELETED로 마킹
             6. flush            — 메모리에 축적된 분석 결과를 일괄 DB 기록 + 호출 관계 해석
@@ -59,11 +59,11 @@ class Analyzer:
         # 2. DB 스냅샷: {상대경로 → 해시} 매핑
         existing = self._snapshot(project)
 
-        # 3. 업로드 파일들의 공통 루트 계산
-        root = self._find_root(files_data)
+        # 3. 소스 루트 마커 기반 상대경로 계산
+        path_map = self._compute_relative_paths(files_data)
 
         # 4. 파일별 파싱 + 메모리 축적
-        updated, processed = self._parse(files_data, existing, root, project)
+        updated, processed = self._parse(files_data, existing, path_map, project)
 
         # 5. 삭제된 파일 감지 + DELETED 마킹
         deleted = self._detect_deletions(existing, processed, project)
@@ -109,44 +109,103 @@ class Analyzer:
         )
         return {row['path']: row['hash'] for row in rows}
 
-    def _find_root(self, files_data: list[dict]) -> str:
+    def _compute_relative_paths(self, files_data: list[dict]) -> dict[str, str]:
         """
-        [3단계: 공통 루트 경로 계산]
-        업로드된 파일들의 경로에서 공통 상위 디렉토리를 찾습니다.
-        이 루트를 기준으로 상대 경로를 계산하여 DB에 저장합니다.
+        [3단계: 상대경로 계산]
+        각 파일의 원본 경로를 DB 저장용 상대경로로 변환합니다.
+
+        소스 루트 패턴(src/main/java/ 등)을 탐지하여:
+          - 패턴 앞: 마지막 세그먼트를 모듈명으로 보존
+          - 패턴 뒤: 패키지/소스 경로를 전체 보존
+          - 결과: {모듈명}/{패키지경로}
+
+        패턴이 없는 파일은 공통 prefix 제거 fallback을 사용합니다.
 
         예시:
-            입력: ['src/main/A.java', 'src/main/B.java', 'src/test/C.java']
-            공통 루트: 'src'
-            상대경로: 'main/A.java', 'main/B.java', 'test/C.java'
+          backend/user-service/src/main/java/com/ex/A.java
+          → user-service/com/ex/A.java
 
-        NOTE: 단일 모듈에서 패키지 구조가 과도하게 잘릴 수 있는 문제가 있습니다.
-              추후 uploads.py로 이동하거나 로직 개선이 필요합니다.
+        Returns:
+            {원본경로: 상대경로} 매핑
         """
-        if not files_data:
-            return ""
+        patterns = collect_root_patterns()
+        path_map = {}
+        unresolved = []
 
-        paths = [f['path'] for f in files_data]
-
-        # 파일이 1개면 해당 파일의 디렉토리가 루트
-        if len(paths) == 1:
-            return os.path.dirname(paths[0])
-
-        # 여러 파일이면 공통 경로 세그먼트를 앞에서부터 비교
-        common_parts = []
-        first_parts = paths[0].split('/')
-        for i, part in enumerate(first_parts):
-            if all(
-                i < len(p.split('/')) and p.split('/')[i] == part
-                for p in paths
-            ):
-                common_parts.append(part)
+        for file_data in files_data:
+            original = file_data['path']
+            relative = self._resolve_by_pattern(original, patterns)
+            if relative is not None:
+                path_map[original] = relative
             else:
-                break
+                unresolved.append(original)
 
-        return '/'.join(common_parts) if common_parts else ''
+        # 패턴 미발견 파일: 공통 prefix 제거 fallback
+        if unresolved:
+            fallback = self._common_prefix_fallback(unresolved)
+            path_map.update(fallback)
 
-    def _parse(self, files_data: list[dict], existing: dict[str, str], root: str, project: str) -> tuple[list[str], set[str]]:
+        return path_map
+
+    def _resolve_by_pattern(self, path: str, patterns: list[str]) -> str | None:
+        """
+        소스 루트 패턴으로 상대경로를 계산합니다.
+
+        패턴 기준으로 경로를 분할:
+          - 패턴 앞 마지막 세그먼트 = 모듈명 (없으면 생략)
+          - 패턴 뒤 = 패키지/소스 경로
+
+        Args:
+            path: 원본 파일 경로
+            patterns: 소스 루트 패턴 목록 (우선순위 순)
+
+        Returns:
+            상대경로 (패턴 발견 시), None (패턴 미발견 시)
+        """
+        for marker in patterns:
+            idx = path.find(marker)
+            if idx < 0:
+                continue
+
+            # 마커 뒤 = 패키지 경로
+            package_path = path[idx + len(marker):]
+
+            # 마커 앞에서 마지막 세그먼트 = 모듈명
+            prefix = path[:idx].rstrip('/')
+            module_name = prefix.rsplit('/', 1)[-1] if prefix else ""
+
+            if module_name:
+                return f"{module_name}/{package_path}"
+            return package_path
+
+        return None
+
+    def _common_prefix_fallback(self, paths: list[str]) -> dict[str, str]:
+        """
+        소스 루트 마커가 없는 파일들의 fallback 상대경로 계산.
+        공통 경로 세그먼트를 앞에서부터 비교하여 제거합니다.
+        """
+        if len(paths) == 1:
+            root = os.path.dirname(paths[0])
+        else:
+            parts_list = [p.split('/') for p in paths]
+            common_parts = []
+            for i, part in enumerate(parts_list[0]):
+                if all(
+                    i < len(parts) and parts[i] == part
+                    for parts in parts_list
+                ):
+                    common_parts.append(part)
+                else:
+                    break
+            root = '/'.join(common_parts) if common_parts else ''
+
+        return {
+            p: os.path.relpath(p, root) if root else p
+            for p in paths
+        }
+
+    def _parse(self, files_data: list[dict], existing: dict[str, str], path_map: dict[str, str], project: str) -> tuple[list[str], set[str]]:
         """
         [4단계: 파일별 파싱 + 메모리 축적 + 일괄 DB 기록]
         업로드된 파일들을 순회하며 각각의 변경 상태를 판별하고,
@@ -164,7 +223,7 @@ class Analyzer:
         Args:
             files_data: 업로드 파일 목록
             existing: DB 스냅샷 (변경 감지 기준)
-            root: 공통 루트 경로
+            path_map: {원본경로: 상대경로} 매핑
             project: 프로젝트 식별자
 
         Returns:
@@ -180,7 +239,7 @@ class Analyzer:
         # 파일별 파싱 + 배치 수집 (DB 접근 없음)
         for file_data in files_data:
             try:
-                path, file_row, scan_id = self._process_file(file_data, existing, root, project)
+                path, file_row, scan_id = self._process_file(file_data, existing, path_map, project)
                 updated_files.append(path)
                 processed_paths.add(path)
                 file_batch.append(file_row)
@@ -202,7 +261,7 @@ class Analyzer:
 
         return updated_files, processed_paths
 
-    def _process_file(self, file_data: dict, existing: dict[str, str], root: str, project: str) -> tuple[str, dict, str]:
+    def _process_file(self, file_data: dict, existing: dict[str, str], path_map: dict[str, str], project: str) -> tuple[str, dict, str]:
         """
         [단일 파일 처리 — DB 접근 없음]
         하나의 파일에 대해 다음을 수행합니다:
@@ -215,7 +274,7 @@ class Analyzer:
         Args:
             file_data: {'path': str, 'content': bytes}
             existing: DB 스냅샷
-            root: 공통 루트 경로
+            path_map: {원본경로: 상대경로} 매핑
             project: 프로젝트 식별자
 
         Returns:
@@ -228,7 +287,7 @@ class Analyzer:
 
         # 경로 및 해시 계산
         file_hash = hashlib.sha256(content).hexdigest()
-        relative_path = os.path.relpath(file_path, root) if root else file_path
+        relative_path = path_map[file_path]
         file_name = os.path.basename(file_path)
 
         # 언어 판별
