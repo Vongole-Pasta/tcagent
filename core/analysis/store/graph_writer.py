@@ -46,6 +46,9 @@ class GraphWriter:
         self._param_edges: list[ParsedParameterEdge] = []
         self._return_edges: list[ParsedReturnEdge] = []
 
+        # --- 파일 레벨 컨텍스트 (EdgeLinker의 타입 해석용) ---
+        self._file_contexts: dict[str, dict] = {}       # file_path → {package, imports, wildcard_imports}
+
     # -----------------------------------------------------------------------
     # 수집 (DB 접근 없음)
     # -----------------------------------------------------------------------
@@ -61,6 +64,15 @@ class GraphWriter:
         self._calls.extend(result.calls)
         self._param_edges.extend(result.parameter_edges)
         self._return_edges.extend(result.return_edges)
+
+        # 파일 레벨 컨텍스트 저장 (EdgeLinker가 타입 해석 시 참조)
+        if result.types:
+            file_path = result.types[0].file_path
+            self._file_contexts[file_path] = {
+                "package": result.package_name,
+                "imports": result.imports,
+                "wildcard_imports": result.wildcard_imports,
+            }
 
     # -----------------------------------------------------------------------
     # 일괄 기록 (UNWIND 배치)
@@ -81,7 +93,7 @@ class GraphWriter:
         self._flush_methods()
 
         # 2단계: 엣지 해석 (EdgeLinker — 순수 인메모리)
-        linker = EdgeLinker(self._types, self._fields, self._methods)
+        linker = EdgeLinker(self._types, self._fields, self._methods, self._file_contexts)
 
         # 3단계: 엣지 생성
         self._flush_parameter_edges(linker)
@@ -222,3 +234,4 @@ class GraphWriter:
         self._calls.clear()
         self._param_edges.clear()
         self._return_edges.clear()
+        self._file_contexts.clear()

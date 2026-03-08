@@ -72,6 +72,13 @@ class JavaParser:
         root_node = tree.root_node
 
         package_name = self._get_package_name(root_node, source_code)
+        imports, wildcard_imports = self._extract_imports(root_node, source_code)
+
+        # 파일 레벨 컨텍스트 저장 (EdgeLinker가 타입 해석 시 참조)
+        result.package_name = package_name
+        result.imports = imports
+        result.wildcard_imports = wildcard_imports
+
         self._traverse_types(root_node, source_code, file_path, package_name, result, scan_id=scan_id)
 
         return result
@@ -87,6 +94,49 @@ class JavaParser:
                     if grandchild.type in ["scoped_identifier", "identifier"]:
                         return source_code[grandchild.start_byte:grandchild.end_byte].decode("utf-8")
         return ""
+
+    # -----------------------------------------------------------------------
+    # import 추출
+    # -----------------------------------------------------------------------
+    def _extract_imports(self, root_node, source_code: bytes) -> tuple[list[str], list[str]]:
+        """
+        import 선언을 추출합니다.
+
+        Returns:
+            (imports, wildcard_imports) 튜플
+            - imports: 정규 import 목록 (예: ["com.example.model.User"])
+            - wildcard_imports: 와일드카드 import의 패키지명 (예: ["com.example.util"])
+                → "com.example.util.*" 에서 ".*" 제거한 패키지명
+        """
+        imports = []
+        wildcard_imports = []
+
+        for child in root_node.children:
+            if child.type != "import_declaration":
+                continue
+
+            # static import는 메서드 import이므로 스킵
+            has_static = any(c.type == "static" for c in child.children)
+            if has_static:
+                continue
+
+            # asterisk(*) 존재 여부로 와일드카드 판별
+            has_asterisk = any(
+                c.type == "asterisk" or source_code[c.start_byte:c.end_byte] == b"*"
+                for c in child.children
+            )
+
+            # scoped_identifier 또는 identifier에서 패키지/클래스명 추출
+            for gc in child.children:
+                if gc.type in ["scoped_identifier", "identifier"]:
+                    import_path = source_code[gc.start_byte:gc.end_byte].decode("utf-8")
+                    if has_asterisk:
+                        wildcard_imports.append(import_path)
+                    else:
+                        imports.append(import_path)
+                    break
+
+        return imports, wildcard_imports
 
     # -----------------------------------------------------------------------
     # 타입 처리
@@ -130,6 +180,9 @@ class JavaParser:
             if body_for_enum:
                 constants = self._extract_enum_constants(body_for_enum, source_code)
 
+        # TYPE.supertypes 추출 (extends + implements 통합)
+        supertypes = self._extract_supertypes(node, source_code)
+
         # ParsedType으로 result.types에 추가
         result.types.append(ParsedType(
             qualname=qualname,
@@ -137,6 +190,7 @@ class JavaParser:
             kind=kind,
             file_path=file_path,
             constants=constants,
+            supertypes=supertypes,
         ))
 
         # 클래스 body 부분 탐색
@@ -250,6 +304,44 @@ class JavaParser:
 
         return ", ".join(annotations) if annotations else ""
 
+    # 상위 타입 추출 (extends + implements → supertypes 통합)
+    def _extract_supertypes(self, node, source_code: bytes) -> list[str]:
+        """
+        클래스/인터페이스의 상위 타입(extends + implements)을 추출합니다.
+        Java의 extends(단일/다중) + implements를 합쳐 supertypes 리스트로 반환합니다.
+
+        Returns:
+            상위 타입 이름 목록 (제네릭 제거된 단순 이름)
+        """
+        supertypes = []
+
+        # extends 추출 (class → 단일 상속, interface → 다중 extends)
+        superclass_node = node.child_by_field_name("superclass")
+        if superclass_node:
+            self._collect_type_names(superclass_node, source_code, supertypes)
+
+        # implements 추출
+        interfaces_node = node.child_by_field_name("interfaces")
+        if interfaces_node:
+            self._collect_type_names(interfaces_node, source_code, supertypes)
+
+        # 인터페이스의 extends (다른 인터페이스를 extends하는 경우)
+        if node.type == "interface_declaration":
+            extends_node = node.child_by_field_name("extends_interfaces")
+            if extends_node:
+                self._collect_type_names(extends_node, source_code, supertypes)
+
+        return supertypes
+
+    def _collect_type_names(self, node, source_code: bytes, out: list[str]):
+        """AST 노드에서 타입 이름들을 추출하여 out 리스트에 추가합니다."""
+        for child in node.children:
+            if child.type in ["type_identifier", "scoped_type_identifier", "generic_type"]:
+                raw = source_code[child.start_byte:child.end_byte].decode("utf-8")
+                out.append(self.generic_pattern.sub("", raw))
+            elif child.type == "type_list":
+                self._collect_type_names(child, source_code, out)
+
     # -----------------------------------------------------------------------
     # 메서드 처리
     # -----------------------------------------------------------------------
@@ -326,13 +418,16 @@ class JavaParser:
         body_node = method_node.child_by_field_name("body")
         if not body_node:
             return
-        calls: set[tuple[str, str]] = set()
+        calls: list[tuple[str, str, int, str, str]] = []
         self._extract_method_calls(body_node, source_code, calls)
-        for target_name, obj_name in calls:
+        for target_name, obj_name, arg_count, recv_method, recv_object in calls:
             result.calls.append(ParsedCallEdge(
                 caller_qualname=qualname,
                 target_method_name=target_name,
                 object_name=obj_name,
+                arg_count=arg_count,
+                receiver_method=recv_method,
+                receiver_object=recv_object,
             ))
 
     def _collect_parameter_edges(
@@ -361,7 +456,7 @@ class JavaParser:
     # CALLS 엣지 추출 (내부)
     # -----------------------------------------------------------------------
 
-    def _extract_method_calls(self, node, source_code: bytes, calls: set):
+    def _extract_method_calls(self, node, source_code: bytes, calls: list):
         """AST를 재귀 순회하며 메서드 호출(method_invocation)을 수집합니다."""
         for child in node.children:
             if child.type == "method_invocation":
@@ -370,8 +465,11 @@ class JavaParser:
             if child.type not in ("class_declaration", "interface_declaration", "method_declaration"):
                 self._extract_method_calls(child, source_code, calls)
 
-    def _process_invocation(self, invocation_node, source_code: bytes, calls: set):
-        """하나의 method_invocation 노드에서 호출 정보를 추출합니다."""
+    def _process_invocation(self, invocation_node, source_code: bytes, calls: list):
+        """
+        하나의 method_invocation 노드에서 호출 정보를 추출합니다.
+        인자 개수와 체이닝 수신 정보도 함께 추출합니다.
+        """
         obj_node = invocation_node.child_by_field_name("object")
         name_node = invocation_node.child_by_field_name("name")
         if not name_node:
@@ -379,14 +477,37 @@ class JavaParser:
 
         method_name = source_code[name_node.start_byte:name_node.end_byte].decode("utf-8")
 
+        # 인자 개수 추출
+        args_node = invocation_node.child_by_field_name("arguments")
+        arg_count = self._count_arguments(args_node) if args_node else 0
+
         obj_name = ""
+        receiver_method = ""
+        receiver_object = ""
+
         if obj_node:
             if obj_node.type == "method_invocation":
-                obj_name = ""  # 체이닝 호출: 중간 수신 타입을 알 수 없으므로 빈 문자열
+                # 체이닝: a.getUser().getName()
+                # → getName()의 수신 객체는 getUser()의 리턴값
+                chain_name = obj_node.child_by_field_name("name")
+                chain_obj = obj_node.child_by_field_name("object")
+                if chain_name:
+                    receiver_method = source_code[chain_name.start_byte:chain_name.end_byte].decode("utf-8")
+                if chain_obj and chain_obj.type != "method_invocation":
+                    receiver_object = source_code[chain_obj.start_byte:chain_obj.end_byte].decode("utf-8")
             else:
                 obj_name = source_code[obj_node.start_byte:obj_node.end_byte].decode("utf-8")
 
-        calls.add((method_name, obj_name))
+        calls.append((method_name, obj_name, arg_count, receiver_method, receiver_object))
+
+    def _count_arguments(self, args_node) -> int:
+        """argument_list 노드에서 인자 개수를 셉니다."""
+        count = 0
+        for child in args_node.children:
+            # 괄호와 쉼표를 제외한 자식 노드가 인자
+            if child.type not in ["(", ")", ","]:
+                count += 1
+        return count
 
     # -----------------------------------------------------------------------
     # 파라미터 속성 처리 (METHOD.params)

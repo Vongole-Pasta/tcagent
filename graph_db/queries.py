@@ -165,7 +165,8 @@ class CypherQueries:
     MERGE (t:TYPE {qualname: row.qualname})
     SET t.name = row.name,
         t.kind = row.kind,
-        t.constants = row.constants
+        t.constants = row.constants,
+        t.supertypes = row.supertypes
     WITH t, row
     MATCH (f:FILE {path: row.file_path})
     MERGE (f)-[:CONTAINS]->(t)

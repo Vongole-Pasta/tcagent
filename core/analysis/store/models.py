@@ -19,6 +19,7 @@ class ParsedType:
     kind: str                       # CLASS | INTERFACE | ENUM | RECORD
     file_path: str                  # 소속 파일 경로
     constants: list[ConstantInfo]   # ENUM 전용: ConstantInfo JSON 문자열
+    supertypes: list[str] = field(default_factory=list)  # 상위 타입 단순 이름 목록 (extends + implements 통합)
 
 
 @dataclass
@@ -53,6 +54,9 @@ class ParsedCallEdge:
     caller_qualname: str    # 호출자 METHOD의 qualname (com.example.MemberController.login(String))
     target_method_name: str # 호출 대상 메서드 이름 (getUser)
     object_name: str        # 호출 대상 객체/클래스 이름 (userRepo)
+    arg_count: int = -1             # 호출 시 전달된 인자 개수 (-1 = 알 수 없음)
+    receiver_method: str = ""       # 체이닝 시 수신 객체를 반환한 메서드명
+    receiver_object: str = ""       # 체이닝 시 원래 수신 객체명
 
 
 @dataclass
@@ -78,3 +82,6 @@ class ParsedFileResult:
     calls: list[ParsedCallEdge] = field(default_factory=list)
     parameter_edges: list[ParsedParameterEdge] = field(default_factory=list)
     return_edges: list[ParsedReturnEdge] = field(default_factory=list)
+    package_name: str = ""                                      # 패키지/네임스페이스명 (예: "com.example.service")
+    imports: list[str] = field(default_factory=list)             # 정규 import (예: ["com.example.model.User"])
+    wildcard_imports: list[str] = field(default_factory=list)    # 와일드카드 import의 패키지명 (예: ["com.example.dto"])
