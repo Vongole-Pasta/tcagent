@@ -68,7 +68,7 @@ class Analyzer:
         # 5. 삭제된 파일 감지 + DELETED 마킹
         deleted = self._detect_deletions(existing, processed, project)
 
-        # 6. 결과 일괄 기록
+        # 6. 결과 일괄 DB 기록
         if updated or deleted:
             logger.info("Flushing analysis results to DB...")
             self.writer.flush()
@@ -148,7 +148,7 @@ class Analyzer:
 
     def _parse(self, files_data: list[dict], existing: dict[str, str], root: str, project: str) -> tuple[list[str], set[str]]:
         """
-        [4단계: 파일별 파싱 + 메모리 축적]
+        [4단계: 파일별 파싱 + 메모리 축적 + 일괄 DB 기록]
         업로드된 파일들을 순회하며 각각의 변경 상태를 판별하고,
         언어별 파서로 분석한 결과를 GraphWriter 메모리에 축적합니다.
 
@@ -156,6 +156,10 @@ class Analyzer:
             호출 관계(CALLS) 해석은 모든 타입/메서드가 메모리에 있어야 정확합니다.
             따라서 AS-IS(변경 없음) 파일도 파싱하여 메모리 인덱스를 완성합니다.
             DB 기록은 flush()에서 일괄 수행됩니다.
+
+        배치 설계:
+            FILE 노드 upsert와 메서드 가지치기(prune)를 파일별로 개별 실행하지 않고,
+            루프에서 배치 데이터를 수집한 뒤 UNWIND 쿼리로 일괄 실행합니다.
 
         Args:
             files_data: 업로드 파일 목록
@@ -170,28 +174,43 @@ class Analyzer:
         """
         updated_files = []
         processed_paths = set()
+        file_batch = []
+        prune_batch = []
 
-        # 파일별 처리
+        # 파일별 파싱 + 배치 수집 (DB 접근 없음)
         for file_data in files_data:
             try:
-                result = self._process_file(file_data, existing, root, project)
-                if result:
-                    path, _ = result
-                    updated_files.append(path)
-                    processed_paths.add(path)
+                path, file_row, scan_id = self._process_file(file_data, existing, root, project)
+                updated_files.append(path)
+                processed_paths.add(path)
+                file_batch.append(file_row)
+                prune_batch.append({"file_path": path, "scan_id": scan_id})
             except Exception as e:
                 logger.error(f"Failed to process {file_data['path']}: {e}")
 
+        # FILE 노드 일괄 upsert
+        if file_batch:
+            self.connector.execute_query(
+                CypherQueries.BATCH_UPSERT_FILES, {"batch": file_batch}
+            )
+
+        # 스캔에서 누락된 메서드 일괄 가지치기
+        if prune_batch:
+            self.connector.execute_query(
+                CypherQueries.BATCH_PRUNE_STALE_METHODS, {"batch": prune_batch}
+            )
+
         return updated_files, processed_paths
 
-    def _process_file(self, file_data: dict, existing: dict[str, str], root: str, project: str) -> tuple[str, str] | None:
+    def _process_file(self, file_data: dict, existing: dict[str, str], root: str, project: str) -> tuple[str, dict, str]:
         """
-        [단일 파일 처리]
+        [단일 파일 처리 — DB 접근 없음]
         하나의 파일에 대해 다음을 수행합니다:
             1. SHA-256 해시 계산 → 변경 상태 판별 (NEW / MODIFIED / AS-IS)
-            2. FILE 노드 MERGE (DB에 파일 메타데이터 기록)
+            2. FILE 노드 메타데이터 구성 (배치용)
             3. 언어 파서로 소스 코드 파싱 → 결과를 writer에 축적
-            4. prune: 이번 스캔에서 발견되지 않은 메서드를 DELETED 처리
+
+        DB 기록은 _parse()에서 배치로 일괄 수행됩니다.
 
         Args:
             file_data: {'path': str, 'content': bytes}
@@ -200,7 +219,9 @@ class Analyzer:
             project: 프로젝트 식별자
 
         Returns:
-            (relative_path, status) 또는 None (처리 실패 시)
+            (relative_path, file_row, scan_id) 튜플
+            - file_row: FILE 노드 upsert용 배치 데이터
+            - scan_id: 메서드 가지치기(prune)용 스캔 식별자
         """
         file_path = file_data['path']
         content = file_data['content']
@@ -224,14 +245,14 @@ class Analyzer:
 
         logger.info(f"Processing {relative_path}: {status}")
 
-        # FILE 노드 upsert
-        self.connector.execute_query(CypherQueries.UPSERT_FILE, {
+        # FILE 노드 메타데이터 (배치용)
+        file_row = {
             "path": relative_path,
             "name": file_name,
             "hash": file_hash,
             "language": language,
-            "project": project
-        })
+            "project": project,
+        }
 
         # 파싱 + 메모리 축적
         # AS-IS도 파싱하는 이유: Memory-First에서는 flush 후 메모리가 초기화되므로,
@@ -242,55 +263,35 @@ class Analyzer:
             result = lang_parser.parse(content, relative_path, scan_id)
             self.writer.collect(result)
 
-        # 이번 스캔에서 발견되지 않은 메서드 정리
-        self._prune(relative_path, scan_id)
-
-        return relative_path, status
+        return relative_path, file_row, scan_id
 
     def _detect_deletions(self, existing: dict[str, str], processed: set[str], project: str) -> list[str]:
         """
-        [5단계: 삭제 파일 감지]
-        DB 스냅샷(existing)에는 있지만 이번 업로드(processed)에는 없는 파일을
-        찾아 DELETED로 마킹하고, 다른 노드와의 관계를 끊어 그래프에서 격리합니다.
+        [5단계: 삭제 파일 감지 — 2-Phase Mixed Strategy]
+        DB 스냅샷(existing)에는 있지만 이번 업로드(processed)에는 없는 파일을 감지합니다.
 
-        즉시 삭제하지 않는 이유:
-        → 다음 사이클의 _cleanup()에서 영구 삭제됩니다. (1사이클 유예)
+        Phase 1: METHOD를 DELETED로 마킹하고 CALLS를 끊어 격리 (이력 보존)
+        Phase 2: FILE, TYPE, FIELD 등 구조적 노드를 DB에서 영구 삭제
+
+        METHOD를 즉시 삭제하지 않는 이유:
+        → 파일이 삭제되어도 메서드의 존재 이력이나 ID 기반 조회가 가능하도록 보존합니다.
+          다음 사이클의 _cleanup()에서 영구 삭제됩니다. (1사이클 유예)
         """
         deleted_paths = set(existing.keys()) - processed
-        deleted_files = []
+        if not deleted_paths:
+            return []
 
-        for path in deleted_paths:
-            logger.info(f"Marking {path} as DELETED")
-            self.connector.execute_query(
-                CypherQueries.MARK_FILE_DELETED_AND_ISOLATE,
-                {"path": path, "project": project}
-            )
-            deleted_files.append(path)
+        batch = [{"path": p, "project": project} for p in deleted_paths]
+        logger.info(f"Marking {len(batch)} file(s) as DELETED")
 
-        return deleted_files
+        # Phase 1: METHOD 격리 (DELETED 마킹 + CALLS 끊기)
+        self.connector.execute_query(
+            CypherQueries.BATCH_ISOLATE_DELETED_FILE_METHODS, {"batch": batch}
+        )
 
-    # ──────────────────────────────────────────────
-    #  Internal Helpers
-    # ──────────────────────────────────────────────
+        # Phase 2: FILE/TYPE/FIELD 구조적 노드 영구 삭제
+        self.connector.execute_query(
+            CypherQueries.BATCH_DELETE_FILE_STRUCTURES, {"batch": batch}
+        )
 
-    def _prune(self, file_path: str, scan_id: str):
-        """
-        [메서드 가지치기 (Pruning)]
-        이번 스캔(scan_id)에서 발견되지 않은 메서드는
-        소스 코드에서 삭제된 것으로 간주합니다.
-
-        해당 메서드를 'DELETED'로 마킹하고,
-        다른 메서드와의 호출 관계(CALLS)를 끊어 분석 결과 오염을 방지합니다.
-
-        활용 시나리오:
-            - 파일 내 메서드가 삭제/리네임된 경우
-            - 증분 분석 시 이전 사이클의 잔여 메서드 정리
-        """
-        try:
-            self.connector.execute_query(
-                CypherQueries.PRUNE_STALE_METHODS,
-                {"file_path": file_path, "scan_id": scan_id}
-            )
-            logger.info(f"Pruned stale methods for {file_path} (scan: {scan_id[:8]})")
-        except Exception as e:
-            logger.error(f"Pruning error ({file_path}): {e}")
+        return list(deleted_paths)
