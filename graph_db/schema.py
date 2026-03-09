@@ -46,7 +46,7 @@ NODE_SCHEMA = {
         "name":         str,                # 단순이름: UserService
         "kind":         str,                # 타입 종류: [CLASS, INTERFACE, ENUM, RECORD 등]
         "constants":    list[ConstantInfo], # 상수값 리스트 (JSON 배열) (ENUM인 경우)
-        "supertypes":   list[str],          # 상위 타입 단순 이름 목록 (extends + implements 통합)
+        "supertypes":   list[str],          # 상위 타입 qualname 목록 (extends + implements 통합)
     },
     
     # [FIELD] (필드 노드): 클래스/객체의 멤버 변수, Enum 상수,

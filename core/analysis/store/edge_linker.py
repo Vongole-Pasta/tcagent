@@ -187,6 +187,27 @@ class EdgeLinker:
         return methods[0].qualname  # fallback
 
     # -----------------------------------------------------------------------
+    # 노드 데이터 보강 (DB 접근 없음)
+    # -----------------------------------------------------------------------
+
+    def resolve_supertype_qualnames(self):
+        """
+        ParsedType.supertypes를 단순 이름에서 qualname으로 변환합니다.
+
+        _build_indexes()의 _parent_types는 글로벌 해석(후보 1개만 확정)으로 구축되지만,
+        이 메서드는 파일별 import 컨텍스트를 활용하여 동명 타입도 정확히 해석합니다.
+        """
+        for t in self._types.values():
+            resolved = []
+            for parent_name in t.supertypes:
+                parent_q = self._resolve_type_in_file(parent_name, t.file_path)
+                if parent_q:
+                    resolved.append(parent_q)
+                else:
+                    resolved.append(parent_name)  # 해석 실패 시 원본 유지
+            t.supertypes = resolved
+
+    # -----------------------------------------------------------------------
     # 엣지 해석 (DB 접근 없음, 배치 반환)
     # -----------------------------------------------------------------------
 
@@ -241,6 +262,7 @@ class EdgeLinker:
         for call in calls:
             target_qualname = self._resolve_call_target(call)
             if target_qualname:
+                call.callee_qualname = target_qualname
                 resolved_batch.append({
                     "caller_qualname": call.caller_qualname,
                     "callee_qualname": target_qualname,
@@ -251,6 +273,7 @@ class EdgeLinker:
                     if call.object_name
                     else call.target_method_name
                 )
+                call.callee_qualname = ext_qualname
                 external_batch.append({
                     "caller_qualname": call.caller_qualname,
                     "ext_qualname": ext_qualname,

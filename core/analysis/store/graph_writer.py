@@ -87,18 +87,21 @@ class GraphWriter:
             f"{len(self._return_edges)} returns"
         )
 
-        # 1단계: 노드 생성
+        # ── Phase 1: 인메모리 해석 (DB 접근 없음) ──
+        linker = EdgeLinker(self._types, self._fields, self._methods, self._file_contexts)
+        linker.resolve_supertype_qualnames()
+
+        param_batch = linker.resolve_parameter_edges(self._param_edges)
+        return_batch = linker.resolve_return_edges(self._return_edges)
+        resolved_calls, external_calls = linker.resolve_calls(self._calls)
+
+        # ── Phase 2: DB 일괄 저장 ──
         self._flush_types()
         self._flush_fields()
         self._flush_methods()
-
-        # 2단계: 엣지 해석 (EdgeLinker — 순수 인메모리)
-        linker = EdgeLinker(self._types, self._fields, self._methods, self._file_contexts)
-
-        # 3단계: 엣지 생성
-        self._flush_parameter_edges(linker)
-        self._flush_return_edges(linker)
-        self._flush_calls(linker)
+        self._flush_parameter_edges(param_batch)
+        self._flush_return_edges(return_batch)
+        self._flush_calls(resolved_calls, external_calls)
 
         # 메모리 정리
         self._clear()
@@ -174,12 +177,10 @@ class GraphWriter:
     # 엣지 Flush (UNWIND 배치)
     # -----------------------------------------------------------------------
 
-    def _flush_parameter_edges(self, linker: EdgeLinker):
-        """HAS_PARAMETER 엣지를 DB에 기록합니다. 해석은 EdgeLinker가 담당."""
-        batch = linker.resolve_parameter_edges(self._param_edges)
+    def _flush_parameter_edges(self, batch: list[dict]):
+        """HAS_PARAMETER 엣지를 DB에 기록합니다."""
         if not batch:
             return
-
         try:
             self.connector.execute_query(
                 CypherQueries.BATCH_UPSERT_PARAMETER_EDGES, {"batch": batch}
@@ -187,12 +188,10 @@ class GraphWriter:
         except Exception as e:
             logger.error(f"Failed to batch upsert HAS_PARAMETER edges: {e}")
 
-    def _flush_return_edges(self, linker: EdgeLinker):
-        """RETURNS 엣지를 DB에 기록합니다. 해석은 EdgeLinker가 담당."""
-        batch = linker.resolve_return_edges(self._return_edges)
+    def _flush_return_edges(self, batch: list[dict]):
+        """RETURNS 엣지를 DB에 기록합니다."""
         if not batch:
             return
-
         try:
             self.connector.execute_query(
                 CypherQueries.BATCH_UPSERT_RETURN_EDGES, {"batch": batch}
@@ -200,11 +199,8 @@ class GraphWriter:
         except Exception as e:
             logger.error(f"Failed to batch upsert RETURNS edges: {e}")
 
-    def _flush_calls(self, linker: EdgeLinker):
-        """CALLS 엣지를 DB에 기록합니다. 해석은 EdgeLinker가 담당."""
-        resolved_batch, external_batch = linker.resolve_calls(self._calls)
-
-        # resolved: METHOD → CALLS → METHOD
+    def _flush_calls(self, resolved_batch: list[dict], external_batch: list[dict]):
+        """CALLS 엣지를 DB에 기록합니다."""
         if resolved_batch:
             try:
                 self.connector.execute_query(
@@ -213,7 +209,6 @@ class GraphWriter:
             except Exception as e:
                 logger.error(f"Failed to batch upsert CALLS (resolved) edges: {e}")
 
-        # external: METHOD → CALLS → EXTERNAL_CALL
         if external_batch:
             try:
                 self.connector.execute_query(

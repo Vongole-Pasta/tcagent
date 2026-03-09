@@ -19,7 +19,7 @@ class ParsedType:
     kind: str                       # CLASS | INTERFACE | ENUM | RECORD
     file_path: str                  # 소속 파일 경로
     constants: list[ConstantInfo]   # ENUM 전용: ConstantInfo JSON 문자열
-    supertypes: list[str] = field(default_factory=list)  # 상위 타입 단순 이름 목록 (extends + implements 통합)
+    supertypes: list[str] = field(default_factory=list)  # 상위 타입 이름 목록 (파서: 단순 이름 → EdgeLinker: qualname으로 해석)
 
 
 @dataclass
@@ -51,12 +51,13 @@ class ParsedMethod:
 @dataclass
 class ParsedCallEdge:
     """CALLS 엣지로 변환될 파싱 결과."""
-    caller_qualname: str    # 호출자 METHOD의 qualname (com.example.MemberController.login(String))
-    target_method_name: str # 호출 대상 메서드 이름 (getUser)
-    object_name: str        # 호출 대상 객체/클래스 이름 (userRepo)
+    caller_qualname: str            # 호출자 METHOD의 qualname (com.example.MemberController.login(String))
+    target_method_name: str         # 호출 대상 메서드 이름 (getUser)
+    object_name: str                # 호출 대상 객체/클래스 이름 (userRepo)
     arg_count: int = -1             # 호출 시 전달된 인자 개수 (-1 = 알 수 없음)
     receiver_method: str = ""       # 체이닝 시 수신 객체를 반환한 메서드명
     receiver_object: str = ""       # 체이닝 시 원래 수신 객체명
+    callee_qualname: str = ""       # EdgeLinker가 해석한 호출 대상의 qualname (해석 전에는 빈 문자열)
 
 
 @dataclass
