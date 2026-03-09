@@ -1,4 +1,5 @@
 @import "tailwindcss";
+@plugin "@tailwindcss/typography";
 @import "tw-animate-css";
 
 @custom-variant dark (&:is(.dark *));
@@ -122,4 +123,40 @@
   body {
     @apply bg-background text-foreground;
   }
+}
+
+/* 시나리오 표 스타일 개선 */
+.scenario-table table {
+  width: 100%;
+  border-collapse: collapse;
+  border: 1px solid hsl(var(--border));
+}
+
+.scenario-table th,
+.scenario-table td {
+  border: 1px solid hsl(var(--border));
+  padding: 0.75rem 1rem;
+  text-align: left;
+}
+
+.scenario-table th {
+  background-color: hsl(var(--muted));
+  font-weight: 600;
+}
+
+.scenario-table tr:nth-child(even) {
+  background-color: hsl(var(--muted) / 0.3);
+}
+
+.scenario-table tr:hover {
+  background-color: hsl(var(--muted) / 0.5);
+}
+@keyframes progress-loop {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(100%); }
+}
+
+.animate-progress-loop {
+  animation: progress-loop 2s infinite ease-in-out;
+  width: 100%;
 }

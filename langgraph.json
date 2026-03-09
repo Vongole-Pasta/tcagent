@@ -1,0 +1,7 @@
+{
+  "dependencies": ["."],
+  "graphs": {
+    "happy_case_agent": "./core/agent/entrypoints.py:happy_case_graph"
+  },
+  "env": ".env.dev"
+}

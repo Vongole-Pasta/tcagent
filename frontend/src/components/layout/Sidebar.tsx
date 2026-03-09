@@ -3,14 +3,14 @@
 import React, { useEffect, useState } from 'react';
 import { useStore } from '@/store/useStore';
 import { useDropzone } from 'react-dropzone';
-import { Upload, Search, Globe, FileCode } from 'lucide-react';
+import { Upload, Search, Box, Globe, FileCode, CheckSquare, Square, PlayCircle, Loader2 } from 'lucide-react';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Badge } from '@/components/ui/badge';
 import { cn } from '@/lib/utils';
+import { Separator } from '@/components/ui/separator';
 
-import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 
 export function Sidebar() {
     const {
@@ -23,11 +23,16 @@ export function Sidebar() {
         projects,
         fetchProjects,
         selectedProject,
-        selectProject
+        selectProject,
+        selectedMethodIds,
+        toggleMethodSelection,
+        generateHappyCaseScenarios,
+        isAgentRunning,
+        setViewMode
     } = useStore();
 
     const [search, setSearch] = useState('');
-    const [filterType, setFilterType] = useState<'METHOD' | 'ENDPOINT'>('METHOD');
+
 
     useEffect(() => {
         fetchProjectNodes();
@@ -41,16 +46,8 @@ export function Sidebar() {
     const { getRootProps, getInputProps, isDragActive } = useDropzone({ onDrop });
 
     const filteredNodes = projectNodes.filter(n => {
-        const matchesSearch = n.name.toLowerCase().includes(search.toLowerCase()) ||
+        return n.name.toLowerCase().includes(search.toLowerCase()) ||
             (n.endpoint && n.endpoint.toLowerCase().includes(search.toLowerCase()));
-
-        if (!matchesSearch) return false;
-
-        // If 'METHOD' tab is selected, show ALL methods (including endpoints)
-        if (filterType === 'METHOD') return true;
-
-        // If 'ENDPOINT' tab is selected, show only endpoints
-        return n.type === filterType;
     });
 
     const sortedNodes = [...filteredNodes].sort((a, b) => {
@@ -68,12 +65,13 @@ export function Sidebar() {
     });
 
     const handleNodeClick = (node: any) => {
-        // ... (same as before)
+        const nodeId = String(node.id);
         if (node.type === 'ENDPOINT') {
-            fetchDownstreamGraph(node.id);
+            fetchDownstreamGraph(nodeId);
         } else {
-            fetchUpstreamGraph(node.id);
+            fetchUpstreamGraph(nodeId);
         }
+        setViewMode('graph');
     };
 
     const getStatusBadge = (status?: string | null) => {
@@ -112,7 +110,7 @@ export function Sidebar() {
     };
 
     return (
-        <div className="w-full border-r h-full flex flex-col bg-background overflow-hidden relative">
+        <div className="w-full h-full flex flex-col bg-background overflow-hidden">
             {/* Project Selector */}
             <div className="p-4 border-b shrink-0 space-y-2">
                 <label className="text-xs font-semibold text-muted-foreground">Target Project</label>
@@ -145,28 +143,21 @@ export function Sidebar() {
                 </div>
             </div>
 
-            {/* Controls: Search + Tabs */}
-            <div className="p-4 border-b space-y-3 shrink-0">
+            {/* Controls: Search */}
+            <div className="p-4 border-b shrink-0">
                 <div className="relative">
                     <Search className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" />
                     <Input
-                        placeholder="Search..."
+                        placeholder="Search methods..."
                         className="pl-8"
                         value={search}
                         onChange={(e) => setSearch(e.target.value)}
                     />
                 </div>
-
-                <Tabs value={filterType} onValueChange={(v) => setFilterType(v as any)} className="w-full">
-                    <TabsList className="grid w-full grid-cols-2">
-                        <TabsTrigger value="METHOD">Methods</TabsTrigger>
-                        <TabsTrigger value="ENDPOINT">APIs</TabsTrigger>
-                    </TabsList>
-                </Tabs>
             </div>
 
             {/* List */}
-            <ScrollArea className="flex-1 h-full">
+            <ScrollArea className="flex-1 min-h-0">
                 <div className="p-2 space-y-1 pb-4">
                     {sortedNodes.length === 0 && (
                         <div className="p-4 text-center text-sm text-muted-foreground">
@@ -174,58 +165,56 @@ export function Sidebar() {
                         </div>
                     )}
                     {sortedNodes.map((node) => {
-                        // Parse signature to get parameters
-                        let params = "";
-                        if (node.signature && node.signature.includes('(')) {
-                            params = node.signature.substring(node.signature.indexOf('('));
-                        }
-
+                        const isSelected = selectedMethodIds.map(String).includes(String(node.id));
                         return (
                             <div
                                 key={node.id}
-                                onClick={() => handleNodeClick(node)}
                                 className={cn(
-                                    "flex items-center gap-3 p-3 rounded-md cursor-pointer transition-colors text-sm border border-transparent",
+                                    "flex items-center gap-2 p-2 rounded-md cursor-pointer transition-colors text-sm border border-transparent group",
                                     selectedNodeId === node.id
                                         ? "bg-accent text-accent-foreground border-border shadow-sm"
-                                        : "hover:bg-muted/60",
+                                        : isSelected
+                                            ? "bg-primary/5 hover:bg-primary/10 border-primary/20"
+                                            : "hover:bg-muted/60",
                                     node.status === 'DELETED' && "opacity-60 grayscale"
                                 )}
                             >
-                                {node.type === 'ENDPOINT' ? (
-                                    <Globe className="h-4 w-4 text-blue-500 shrink-0" />
-                                ) : (
-                                    <div className="flex items-center justify-center h-5 w-6 rounded bg-orange-100 text-orange-600 font-serif font-bold text-[10px] shrink-0 border border-orange-200" title="Method">
-                                        f(x)
-                                    </div>
-                                )}
+                                {/* Checkbox for multi-selection - Expanded Click Area */}
+                                <div
+                                    className="flex items-center justify-center w-8 h-8 hover:bg-accent rounded-md transition-colors shrink-0"
+                                    onClick={(e) => {
+                                        e.stopPropagation();
+                                        toggleMethodSelection(String(node.id));
+                                    }}
+                                >
+                                    {isSelected ? (
+                                        <CheckSquare className="h-5 w-5 text-primary" />
+                                    ) : (
+                                        <Square className="h-5 w-5 text-muted-foreground/60" />
+                                    )}
+                                </div>
 
-                                <div className="flex-1 min-w-0">
-                                    <div className="flex flex-col">
-                                        {/* Display Class Name */}
-                                        {node.className && (
-                                            <span className="text-[10px] text-muted-foreground font-semibold mb-0.5">
-                                                {node.className}
+                                <div className="flex-1 flex items-center gap-2 min-w-0" onClick={() => handleNodeClick(node)}>
+                                    {node.type === 'ENDPOINT' ? (
+                                        <Globe className="h-3.5 w-3.5 text-blue-500 shrink-0" />
+                                    ) : (
+                                        <Box className="h-3.5 w-3.5 text-orange-500 shrink-0" />
+                                    )}
+
+                                    <div className="flex-1 min-w-0 flex flex-col justify-center py-0.5">
+                                        {node.class_name && (
+                                            <span className="text-[10px] text-muted-foreground leading-none mb-1 truncate block opacity-75 font-mono">
+                                                {node.class_name}
                                             </span>
                                         )}
-
                                         <div className="flex items-center gap-2">
-                                            <span className="truncate block font-medium">
+                                            <span className="truncate block font-medium leading-none">
                                                 {node.name}
                                             </span>
                                             {getStatusBadge(node.status)}
                                         </div>
-
-                                        {/* Display Parameters for Methods to distinguish overloads */}
-                                        {node.type === 'METHOD' && params && (
-                                            <span className="text-[10px] text-muted-foreground truncate block font-mono mt-0.5">
-                                                {params}
-                                            </span>
-                                        )}
-
-                                        {/* Display Endpoint info if available */}
                                         {node.endpoint && (
-                                            <span className="text-[10px] text-muted-foreground truncate block mt-0.5">
+                                            <span className="text-[10px] text-muted-foreground truncate block mt-1">
                                                 {node.http_method} {node.endpoint}
                                             </span>
                                         )}
@@ -236,6 +225,40 @@ export function Sidebar() {
                     })}
                 </div>
             </ScrollArea>
+
+            {/* Happy Case Generation Button */}
+            <div className="p-4 border-t bg-muted/50 shrink-0 space-y-3">
+                <div className="flex items-center justify-between px-1">
+                    <span className="text-xs font-medium text-muted-foreground">
+                        Selected: <span className="text-foreground">{selectedMethodIds.length}</span>
+                    </span>
+                    {selectedMethodIds.length > 0 && (
+                        <Button
+                            variant="ghost"
+                            size="sm"
+                            className="h-7 text-[10px] px-2"
+                            onClick={() => {
+                                selectedMethodIds.forEach(id => toggleMethodSelection(id));
+                            }}
+                        >
+                            Reset
+                        </Button>
+                    )}
+                </div>
+                <Button
+                    variant={selectedMethodIds.length > 0 ? "default" : "secondary"}
+                    className="w-full gap-2 shadow-md font-semibold"
+                    disabled={selectedMethodIds.length === 0 || isAgentRunning}
+                    onClick={() => generateHappyCaseScenarios()}
+                >
+                    {isAgentRunning ? (
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                    ) : (
+                        <PlayCircle className="h-4 w-4" />
+                    )}
+                    {isAgentRunning ? 'Generating...' : 'Happy Case 생성'}
+                </Button>
+            </div>
         </div>
     );
 }
