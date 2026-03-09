@@ -135,17 +135,187 @@ class CypherQueries:
     MATCH (endpoint_m:METHOD)-[:CALLS*0..]->(target:METHOD)
     WHERE (elementId(target) = $method_id OR target.id = $method_id)
       AND endpoint_m.endpoint_uri IS NOT NULL
-    RETURN endpoint_m.endpoint_uri as endpoint, 
-           endpoint_m.http_method as http_method, 
-           endpoint_m.name as endpoint_method_name, 
+    RETURN endpoint_m.endpoint_uri as endpoint,
+           endpoint_m.http_method as http_method,
+           endpoint_m.name as endpoint_method_name,
            endpoint_m.signature as signature
     """
 
-    # [특정 메서드에서 엔드포인트까지의 경로 조회]
+    # --- AS-IS Node Loading Queries (증분 분석 최적화) ---
 
-    # --- Change Detection Helpers ---
-    
+    # [AS-IS TYPE 노드 로드]
+    # 변경 없는(AS-IS) 파일의 TYPE 노드를 DB에서 로드합니다.
+    # tree-sitter 파싱 대신 DB에서 이전 사이클의 노드 정보를 가져와 인메모리 인덱스를 구축합니다.
+    # Usage: core/analysis/analyzer.py
+    LOAD_ASIS_TYPES = """
+    MATCH (f:FILE {project: $project})-[:CONTAINS]->(t:TYPE)
+    WHERE f.path IN $paths
+    RETURN t.qualname as qualname, t.name as name, t.kind as kind,
+           t.constants as constants, t.supertypes as supertypes,
+           f.path as file_path
+    """
 
+    # [AS-IS FIELD 노드 로드]
+    # 변경 없는(AS-IS) 파일의 FIELD 노드를 DB에서 로드합니다.
+    # Usage: core/analysis/analyzer.py
+    LOAD_ASIS_FIELDS = """
+    MATCH (f:FILE {project: $project})-[:CONTAINS]->(t:TYPE)-[:CONTAINS]->(field:FIELD)
+    WHERE f.path IN $paths
+    RETURN field.qualname as qualname, field.name as name,
+           field.type as field_type, field.constraint as constraint,
+           t.qualname as type_qualname
+    """
+
+    # [AS-IS METHOD 노드 로드]
+    # 변경 없는(AS-IS) 파일의 METHOD 노드를 DB에서 로드합니다.
+    # Usage: core/analysis/analyzer.py
+    LOAD_ASIS_METHODS = """
+    MATCH (f:FILE {project: $project})-[:CONTAINS]->(t:TYPE)-[:CONTAINS]->(m:METHOD)
+    WHERE f.path IN $paths
+    RETURN m.qualname as qualname, m.name as name, m.source as source,
+           m.signature as signature, m.params as params, m.return_type as return_type,
+           m.hash as method_hash, m.last_scan_id as scan_id,
+           m.endpoint_uri as endpoint_uri, m.http_method as http_method,
+           t.qualname as class_qualname
+    """
+
+    # [AS-IS METHOD status 갱신]
+    # 증분 분석에서 AS-IS 파일은 write를 건너뛰므로, METHOD.status가 이전 사이클 값으로 남습니다.
+    # 대시보드 표시를 위해 AS-IS 파일의 METHOD status를 명시적으로 'AS-IS'로 갱신합니다.
+    # Usage: core/analysis/analyzer.py
+    BATCH_UPDATE_ASIS_METHOD_STATUS = """
+    UNWIND $paths AS path
+    MATCH (f:FILE {path: path, project: $project})-[:CONTAINS]->(t:TYPE)-[:CONTAINS]->(m:METHOD)
+    SET m.status = 'AS-IS'
+    """
+
+    # --- Analysis Pipeline Queries (analyzer.py) ---
+
+    # [FILE 노드 일괄 Upsert]
+    # 파일 메타데이터(경로, 이름, 해시, 언어)를 UNWIND 배치로 일괄 기록합니다.
+    # 이미 존재하는 파일은 속성만 갱신됩니다.
+    # Usage: core/analysis/analyzer.py
+    BATCH_UPSERT_FILES = """
+    UNWIND $batch AS row
+    MERGE (f:FILE {path: row.path})
+    SET f.name = row.name,
+        f.hash = row.hash,
+        f.language = row.language,
+        f.project = row.project
+    """
+
+    # [메서드 일괄 가지치기 (Pruning)]
+    # 이번 스캔(scan_id)에서 발견되지 않은 메서드를 DELETED로 마킹하고,
+    # 호출 관계(CALLS)를 끊어 분석 결과 오염을 방지합니다.
+    # Usage: core/analysis/analyzer.py
+    BATCH_PRUNE_STALE_METHODS = """
+    UNWIND $batch AS row
+    MATCH (f:FILE {path: row.file_path})-[:CONTAINS*1..3]->(m:METHOD)
+    WHERE m.last_scan_id <> row.scan_id
+    SET m.status = 'DELETED'
+    WITH m
+    OPTIONAL MATCH (m)-[r:CALLS]-()
+    DELETE r
+    """
+
+    # --- Writer Batch Queries (graph_writer.py) ---
+
+    # [TYPE 노드 일괄 Upsert]
+    # 파싱된 TYPE 노드를 UNWIND 배치로 일괄 기록합니다.
+    # Usage: core/analysis/store/graph_writer.py
+    BATCH_UPSERT_TYPES = """
+    UNWIND $batch AS row
+    MERGE (t:TYPE {qualname: row.qualname})
+    SET t.name = row.name,
+        t.kind = row.kind,
+        t.constants = row.constants,
+        t.supertypes = row.supertypes
+    WITH t, row
+    MATCH (f:FILE {path: row.file_path})
+    MERGE (f)-[:CONTAINS]->(t)
+    """
+
+    # [FIELD 노드 일괄 Upsert]
+    # 파싱된 FIELD 노드를 UNWIND 배치로 일괄 기록합니다.
+    # Usage: core/analysis/store/graph_writer.py
+    BATCH_UPSERT_FIELDS = """
+    UNWIND $batch AS row
+    MERGE (f:FIELD {qualname: row.qualname})
+    SET f.name = row.name,
+        f.type = row.type,
+        f.constraint = row.constraint
+    WITH f, row
+    MATCH (t:TYPE {qualname: row.type_qualname})
+    MERGE (t)-[:CONTAINS]->(f)
+    """
+
+    # [METHOD 노드 일괄 Upsert]
+    # 파싱된 METHOD 노드를 UNWIND 배치로 일괄 기록합니다.
+    # 변경 감지: 해시 비교로 NEW/MODIFIED/AS-IS 상태를 자동 판별합니다.
+    # Usage: core/analysis/store/graph_writer.py
+    BATCH_UPSERT_METHODS = """
+    UNWIND $batch AS row
+    MERGE (m:METHOD {qualname: row.qualname})
+    ON CREATE SET m.status = 'NEW'
+    ON MATCH SET m.status = CASE
+        WHEN m.hash = row.hash THEN 'AS-IS'
+        ELSE 'MODIFIED'
+    END
+    SET m.name = row.name,
+        m.signature = row.signature,
+        m.source = row.source,
+        m.hash = row.hash,
+        m.params = row.params,
+        m.return_type = row.return_type,
+        m.endpoint_uri = row.endpoint_uri,
+        m.http_method = row.http_method,
+        m.last_scan_id = row.last_scan_id
+    WITH m, row
+    MATCH (t:TYPE {qualname: row.class_qualname})
+    MERGE (t)-[:CONTAINS]->(m)
+    """
+
+    # [HAS_PARAMETER 엣지 일괄 생성]
+    # 메서드 → 파라미터 타입 관계를 일괄 기록합니다.
+    # Usage: core/analysis/store/graph_writer.py
+    BATCH_UPSERT_PARAMETER_EDGES = """
+    UNWIND $batch AS row
+    MATCH (m:METHOD {qualname: row.method_qualname})
+    MATCH (t:TYPE {qualname: row.type_qualname})
+    MERGE (m)-[:HAS_PARAMETER]->(t)
+    """
+
+    # [RETURNS 엣지 일괄 생성]
+    # 메서드 → 리턴 타입 관계를 일괄 기록합니다.
+    # Usage: core/analysis/store/graph_writer.py
+    BATCH_UPSERT_RETURN_EDGES = """
+    UNWIND $batch AS row
+    MATCH (m:METHOD {qualname: row.method_qualname})
+    MATCH (t:TYPE {qualname: row.type_qualname})
+    MERGE (m)-[:RETURNS]->(t)
+    """
+
+    # [CALLS 엣지 일괄 생성 (프로젝트 내부)]
+    # 프로젝트 내 메서드 간 호출 관계를 일괄 기록합니다.
+    # Usage: core/analysis/store/graph_writer.py
+    BATCH_UPSERT_CALLS = """
+    UNWIND $batch AS row
+    MATCH (caller:METHOD {qualname: row.caller_qualname})
+    MATCH (callee:METHOD {qualname: row.callee_qualname})
+    MERGE (caller)-[:CALLS]->(callee)
+    """
+
+    # [CALLS 엣지 일괄 생성 (외부 호출)]
+    # 프로젝트 외부 라이브러리 메서드 호출을 EXTERNAL_CALL 노드로 기록합니다.
+    # Usage: core/analysis/store/graph_writer.py
+    BATCH_UPSERT_EXTERNAL_CALLS = """
+    UNWIND $batch AS row
+    MATCH (caller:METHOD {qualname: row.caller_qualname})
+    MERGE (ext:EXTERNAL_CALL {qualname: row.ext_qualname})
+    SET ext.name = row.name,
+        ext.signature = row.signature
+    MERGE (caller)-[:CALLS]->(ext)
+    """
 
     # --- Status Management Queries ---
     
@@ -174,27 +344,27 @@ class CypherQueries:
     RETURN f.path as path, f.hash as hash
     """
     
-    # [파일 삭제 (Mixed Strategy)]
-    # 1. 파일(File)과 클래스(Type) 등 구조적인 노드는 즉시 삭제 (Hard Delete)
-    # 2. 메서드(Method)는 'DELETED' 상태로 변경하여 보존 (Soft Delete & Orphan)
-    #    -> 파일이 삭제되어도, 메서드의 존재 이력이나 ID 기반 조회는 가능하도록 함.
-    # Usage: core/analysis/analyzer.py:129
-    MARK_FILE_DELETED_AND_ISOLATE = """
-    MATCH (f:FILE {path: $path, project: $project})
-    
-    // 1. Identify descendant Methods to preserve
-    OPTIONAL MATCH (f)-[:CONTAINS*]->(m:METHOD)
+    # [삭제 파일 처리 — 2-Phase Mixed Strategy]
+    # 파일 삭제 시 METHOD는 이력 조회를 위해 고아 노드로 보존하고,
+    # FILE/TYPE/FIELD 등 구조적 노드는 즉시 삭제합니다.
+    # UNWIND + DETACH DELETE 조합의 안정성을 위해 2개 쿼리로 분리합니다.
+    # Usage: core/analysis/analyzer.py
+
+    # Phase 1: 삭제 파일의 METHOD를 DELETED로 마킹하고 CALLS 관계를 끊어 격리합니다.
+    BATCH_ISOLATE_DELETED_FILE_METHODS = """
+    UNWIND $batch AS row
+    MATCH (f:FILE {path: row.path, project: row.project})-[:CONTAINS*]->(m:METHOD)
     SET m.status = 'DELETED'
-    
-    WITH f, collect(DISTINCT m) as methods
-    
-    // 2. Delete File and its descendants (Types, Fields), EXCLUDING Methods
-    MATCH (f)-[:CONTAINS*0..]->(node)
+    WITH m
+    OPTIONAL MATCH (m)-[r:CALLS]->()
+    DELETE r
+    """
+
+    # Phase 2: 삭제 파일과 구조적 자식(TYPE, FIELD)을 DB에서 영구 삭제합니다.
+    # METHOD는 Phase 1에서 이미 격리되었으므로 제외합니다.
+    BATCH_DELETE_FILE_STRUCTURES = """
+    UNWIND $batch AS row
+    MATCH (f:FILE {path: row.path, project: row.project})-[:CONTAINS*0..]->(node)
     WHERE NOT node:METHOD
     DETACH DELETE node
-    
-    // 3. Isolate preserved Methods (remove outgoing calls)
-    FOREACH (m IN methods | 
-        FOREACH (r IN [(m)-[cw:CALLS]->() | cw] | DELETE r)
-    )
     """

@@ -61,7 +61,7 @@ class DBClient:
             "CREATE INDEX IF NOT EXISTS FOR (t:TYPE) ON (t.name)",
             "CREATE CONSTRAINT IF NOT EXISTS FOR (m:METHOD) REQUIRE m.qualname IS UNIQUE",
             "CREATE CONSTRAINT IF NOT EXISTS FOR (f:FIELD) REQUIRE f.qualname IS UNIQUE",
-            "CREATE CONSTRAINT IF NOT EXISTS FOR (e:EXTERNAL_CALL) REQUIRE e.name IS UNIQUE",
+            "CREATE CONSTRAINT IF NOT EXISTS FOR (e:EXTERNAL_CALL) REQUIRE e.qualname IS UNIQUE",
         ]
         for q in queries:
             try:
