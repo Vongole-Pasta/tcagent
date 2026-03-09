@@ -1,12 +1,12 @@
 """
 파싱 결과를 담는 언어 독립적 데이터 구조.
 DB 의존성 없음 — 파서와 라이터 사이의 중간 표현(Intermediate Representation).
-각 언어 파서는 이 모델들을 생성하고, GraphWriter가 이를 소비합니다.
+각 언어 파서는 이 모델들을 생성하고, EdgeLinker/GraphWriter가 이를 소비합니다.
 
 프로퍼티 JSON 타입(TypeInfo, ParamInfo 등)은 graph_db/schema.py에 정의되어 있습니다.
 """
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Optional, TypedDict
 
 from graph_db.schema import TypeInfo, ParamInfo, ConstantInfo
 
@@ -86,3 +86,80 @@ class ParsedFileResult:
     package_name: str = ""                                      # 패키지/네임스페이스명 (예: "com.example.service")
     imports: list[str] = field(default_factory=list)             # 정규 import (예: ["com.example.model.User"])
     wildcard_imports: list[str] = field(default_factory=list)    # 와일드카드 import의 패키지명 (예: ["com.example.dto"])
+
+
+@dataclass
+class ResolvedEdges:
+    """EdgeLinker가 해석한 엣지 배치. GraphWriter가 DB에 기록합니다."""
+    params: list[dict] = field(default_factory=list)            # HAS_PARAMETER 배치
+    returns: list[dict] = field(default_factory=list)           # RETURNS 배치
+    internal_calls: list[dict] = field(default_factory=list)    # 내부 CALLS 배치
+    external_calls: list[dict] = field(default_factory=list)    # 외부 CALLS 배치
+
+
+@dataclass
+class ParsedRegistry:
+    """
+    파싱 결과 인메모리 저장소. 요청별로 따로 인스턴스화하여 싱글턴인 Analyzer이 메모리를 공유하는 것을 회피.
+
+    파일별 파싱 결과(ParsedFileResult)를 축적하고,
+    EdgeLinker와 GraphWriter가 이를 참조합니다.
+    """
+
+    class FileContext(TypedDict):
+        """파일 레벨 컨텍스트. EdgeLinker가 타입 해석 시 참조합니다."""
+        package: str                    # 패키지/네임스페이스명 (예: "com.example.service")
+        imports: list[str]              # 정규 import 목록 (예: ["com.example.model.User"])
+        wildcard_imports: list[str]     # 와일드카드 import의 패키지명 (예: ["com.example.dto"])
+
+    # 노드 저장소
+    types: dict[str, ParsedType] = field(default_factory=dict)         # qualname → ParsedType
+    fields: dict[str, ParsedField] = field(default_factory=dict)       # qualname → ParsedField
+    methods: dict[str, ParsedMethod] = field(default_factory=dict)     # qualname → ParsedMethod
+
+    # 엣지 저장소 (원시 — EdgeLinker가 해석)
+    calls: list[ParsedCallEdge] = field(default_factory=list)
+    param_edges: list[ParsedParameterEdge] = field(default_factory=list)
+    return_edges: list[ParsedReturnEdge] = field(default_factory=list)
+
+    # 파일 레벨 컨텍스트 (EdgeLinker의 타입 해석용)
+    file_contexts: dict[str, 'ParsedRegistry.FileContext'] = field(default_factory=dict)  # file_path → FileContext
+
+    # EdgeLinker가 해석한 엣지 배치 (resolve() 후 세팅)
+    resolved: ResolvedEdges = field(default_factory=ResolvedEdges)
+
+    def collect(self, result: ParsedFileResult):
+        """
+        한 파일의 파싱 결과(ParsedFileResult)를 등록소에 축적합니다.
+
+        ParsedFileResult는 파서가 생성한 일회성 전달 컨테이너이며,
+        이 메서드에서 노드·엣지·컨텍스트를 각각의 저장소에 분배합니다.
+
+        분배 구조:
+          - 노드 (qualname 키로 중복 방지)  → types, fields, methods
+          - 엣지 (순서 유지, 중복 허용)      → calls, param_edges, return_edges
+          - 컨텍스트 (file_path 키)          → file_contexts
+        """
+        # ── 노드 등록 (qualname 기준 upsert) ──
+        for t in result.types:
+            self.types[t.qualname] = t
+        for f in result.fields:
+            self.fields[f.qualname] = f
+        for m in result.methods:
+            self.methods[m.qualname] = m
+
+        # ── 원시 엣지 축적 (EdgeLinker가 해석) ──
+        self.calls.extend(result.calls)
+        self.param_edges.extend(result.parameter_edges)
+        self.return_edges.extend(result.return_edges)
+
+        # ── 파일 레벨 컨텍스트 저장 ──
+        # EdgeLinker가 동명 타입을 import/패키지 기준으로 구분할 때 참조합니다.
+        # types[0].file_path를 키로 사용: 한 파일의 모든 타입은 동일 file_path를 공유하므로.
+        if result.types:
+            file_path = result.types[0].file_path
+            self.file_contexts[file_path] = {
+                "package": result.package_name,
+                "imports": result.imports,
+                "wildcard_imports": result.wildcard_imports,
+            }

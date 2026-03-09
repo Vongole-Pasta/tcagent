@@ -4,6 +4,8 @@ import hashlib
 import uuid
 from graph_db.client import DBClient
 from core.analysis.lang import PARSERS, collect_root_patterns
+from core.analysis.store.models import ParsedRegistry
+from core.analysis.store.edge_linker import EdgeLinker
 from core.analysis.store.graph_writer import GraphWriter
 from config import Config
 from graph_db.queries import CypherQueries
@@ -20,7 +22,7 @@ class Analyzer:
     적절한 파서(Parser)를 호출하여 그래프 DB를 업데이트합니다.
 
     분석 파이프라인 (analyze 메서드 참조):
-        cleanup → snapshot → compute_paths → parse → detect_deletions → flush
+        cleanup → snapshot → compute_paths → parse → detect_deletions → resolve → flush
     """
 
     def __init__(self, connector: DBClient):
@@ -40,9 +42,9 @@ class Analyzer:
             1. cleanup          — 이전 분석에서 DELETED로 마킹된 유령 노드를 DB에서 영구 삭제
             2. snapshot         — 현재 DB에 저장된 파일 해시를 조회하여 비교 기준점 확보
             3. compute_paths    — 소스 루트 패턴 기반 상대경로 계산 (패키지 구조 보존)
-            4. parse            — 각 파일의 변경 상태를 판별하고, 파서로 분석 후 메모리에 축적
+            4. parse            — 각 파일의 변경 상태를 판별하고, 파서로 분석 후 ParsedRegistry에 축적
             5. detect_deletions — 업로드 목록에 없는 기존 파일을 DELETED로 마킹
-            6. flush            — 메모리에 축적된 분석 결과를 일괄 DB 기록 + 호출 관계 해석
+            6. resolve + flush  — 인메모리 엣지 해석 후, 분석 결과를 일괄 DB 기록
 
         Args:
             files_data: [{'path': str, 'content': bytes}, ...] 형태의 파일 목록
@@ -62,16 +64,18 @@ class Analyzer:
         # 3. 소스 루트 마커 기반 상대경로 계산
         path_map = self._compute_relative_paths(files_data)
 
-        # 4. 파일별 파싱 + 메모리 축적
-        updated, processed = self._parse(files_data, existing, path_map, project)
+        # 4. 파일별 파싱 + 메모리에 축적
+        registry = ParsedRegistry() # 사용자 요청별로 인스턴스화(요청별 공유 방지 설계)
+        updated, processed = self._parse(files_data, existing, path_map, project, registry)
 
         # 5. 삭제된 파일 감지 + DELETED 마킹
         deleted = self._detect_deletions(existing, processed, project)
 
-        # 6. 결과 일괄 DB 기록
+        # 6. 엣지 보강 + DB 일괄 저장
         if updated or deleted:
-            logger.info("Flushing analysis results to DB...")
-            self.writer.flush()
+            logger.info("Resolving edges and flushing to DB...")
+            registry.resolved = EdgeLinker(registry).resolve()          # 인메모리 해석
+            self.writer.flush(registry)                                 # DB 저장
 
         return updated + deleted
 
@@ -205,11 +209,11 @@ class Analyzer:
             for p in paths
         }
 
-    def _parse(self, files_data: list[dict], existing: dict[str, str], path_map: dict[str, str], project: str) -> tuple[list[str], set[str]]:
+    def _parse(self, files_data: list[dict], existing: dict[str, str], path_map: dict[str, str], project: str, registry: ParsedRegistry) -> tuple[list[str], set[str]]:
         """
         [4단계: 파일별 파싱 + 메모리 축적 + 일괄 DB 기록]
         업로드된 파일들을 순회하며 각각의 변경 상태를 판별하고,
-        언어별 파서로 분석한 결과를 GraphWriter 메모리에 축적합니다.
+        언어별 파서로 분석한 결과를 ParsedRegistry에 축적합니다.
 
         Memory-First 설계:
             호출 관계(CALLS) 해석은 모든 타입/메서드가 메모리에 있어야 정확합니다.
@@ -225,6 +229,7 @@ class Analyzer:
             existing: DB 스냅샷 (변경 감지 기준)
             path_map: {원본경로: 상대경로} 매핑
             project: 프로젝트 식별자
+            registry: 파싱 결과를 축적할 인메모리 등록소
 
         Returns:
             (updated_files, processed_paths) 튜플
@@ -239,7 +244,7 @@ class Analyzer:
         # 파일별 파싱 + 배치 수집 (DB 접근 없음)
         for file_data in files_data:
             try:
-                path, file_row, scan_id = self._process_file(file_data, existing, path_map, project)
+                path, file_row, scan_id = self._process_file(file_data, existing, path_map, project, registry)
                 updated_files.append(path)
                 processed_paths.add(path)
                 file_batch.append(file_row)
@@ -261,13 +266,13 @@ class Analyzer:
 
         return updated_files, processed_paths
 
-    def _process_file(self, file_data: dict, existing: dict[str, str], path_map: dict[str, str], project: str) -> tuple[str, dict, str]:
+    def _process_file(self, file_data: dict, existing: dict[str, str], path_map: dict[str, str], project: str, registry: ParsedRegistry) -> tuple[str, dict, str]:
         """
         [단일 파일 처리 — DB 접근 없음]
         하나의 파일에 대해 다음을 수행합니다:
             1. SHA-256 해시 계산 → 변경 상태 판별 (NEW / MODIFIED / AS-IS)
             2. FILE 노드 메타데이터 구성 (배치용)
-            3. 언어 파서로 소스 코드 파싱 → 결과를 writer에 축적
+            3. 언어 파서로 소스 코드 파싱 → 결과를 store에 축적
 
         DB 기록은 _parse()에서 배치로 일괄 수행됩니다.
 
@@ -276,6 +281,7 @@ class Analyzer:
             existing: DB 스냅샷
             path_map: {원본경로: 상대경로} 매핑
             project: 프로젝트 식별자
+            registry: 파싱 결과를 축적할 인메모리 등록소
 
         Returns:
             (relative_path, file_row, scan_id) 튜플
@@ -320,7 +326,7 @@ class Analyzer:
         lang_parser = PARSERS.get(language)
         if lang_parser:
             result = lang_parser.parse(content, relative_path, scan_id)
-            self.writer.collect(result)
+            registry.collect(result)
 
         return relative_path, file_row, scan_id
 

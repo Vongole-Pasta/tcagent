@@ -1,9 +1,9 @@
 """
-파싱 결과를 Neo4j에 영속화하는 모듈 (Memory-First).
+파싱 결과를 Neo4j에 영속화하는 모듈 (Stateless).
 
-모든 파일의 파싱 결과를 메모리에 축적한 뒤,
-EdgeLinker로 관계를 해석하고, 일괄로 DB에 기록합니다.
-UNWIND 배치 쿼리로 DB 라운드트립을 최소화하여 대규모 소스코드도 효율적으로 처리합니다.
+외부에서 전달받은 ParsedRegistry(등록소)를
+UNWIND 배치 쿼리로 일괄 DB에 기록합니다.
+메모리 저장소를 갖지 않으므로, 싱글톤으로 사용해도 동시접속에 안전합니다.
 """
 import json
 import logging
@@ -12,112 +12,59 @@ from dataclasses import asdict
 from graph_db.client import DBClient
 from graph_db.queries import CypherQueries
 
-from .models import (
-    ParsedType, ParsedField, ParsedMethod, ParsedFileResult,
-    ParsedCallEdge, ParsedParameterEdge, ParsedReturnEdge,
-)
-from .edge_linker import EdgeLinker
+from .models import ParsedType, ParsedField, ParsedMethod, ParsedRegistry
 
 logger = logging.getLogger(__name__)
 
 
 class GraphWriter:
     """
-    [그래프 DB 라이터 — Memory-First 방식]
+    [그래프 DB 라이터 — Stateless]
 
-    사용 흐름:
-      1. collect(result)  — 파일별 파싱 결과를 메모리에 축적 (DB 접근 없음)
-      2. flush()          — 축적된 전체 데이터를 일괄 DB 기록
-
-    모든 노드가 메모리에 존재하는 상태에서 EdgeLinker가 관계를 해석하므로,
-    파일 처리 순서에 의존하지 않고 정확한 관계를 생성할 수 있습니다.
+    외부에서 전달받은 ParsedRegistry를 DB에 기록만 합니다.
+    메모리 저장소를 갖지 않으므로, 싱글톤으로 사용해도 동시접속에 안전합니다.
     """
 
     def __init__(self, connector: DBClient):
         self.connector = connector
 
-        # --- 노드 메모리 저장소 ---
-        self._types: dict[str, ParsedType] = {}         # qualname → ParsedType
-        self._fields: dict[str, ParsedField] = {}       # qualname → ParsedField
-        self._methods: dict[str, ParsedMethod] = {}     # qualname → ParsedMethod
-
-        # --- 엣지 메모리 저장소 ---
-        self._calls: list[ParsedCallEdge] = []
-        self._param_edges: list[ParsedParameterEdge] = []
-        self._return_edges: list[ParsedReturnEdge] = []
-
-        # --- 파일 레벨 컨텍스트 (EdgeLinker의 타입 해석용) ---
-        self._file_contexts: dict[str, dict] = {}       # file_path → {package, imports, wildcard_imports}
-
-    # -----------------------------------------------------------------------
-    # 수집 (DB 접근 없음)
-    # -----------------------------------------------------------------------
-
-    def collect(self, result: ParsedFileResult):
-        """파싱 결과를 메모리에 축적합니다. DB 접근 없음."""
-        for t in result.types:
-            self._types[t.qualname] = t
-        for f in result.fields:
-            self._fields[f.qualname] = f
-        for m in result.methods:
-            self._methods[m.qualname] = m
-        self._calls.extend(result.calls)
-        self._param_edges.extend(result.parameter_edges)
-        self._return_edges.extend(result.return_edges)
-
-        # 파일 레벨 컨텍스트 저장 (EdgeLinker가 타입 해석 시 참조)
-        if result.types:
-            file_path = result.types[0].file_path
-            self._file_contexts[file_path] = {
-                "package": result.package_name,
-                "imports": result.imports,
-                "wildcard_imports": result.wildcard_imports,
-            }
-
     # -----------------------------------------------------------------------
     # 일괄 기록 (UNWIND 배치)
     # -----------------------------------------------------------------------
 
-    def flush(self):
-        """메모리에 축적된 전체 데이터를 UNWIND 배치로 일괄 DB에 기록합니다."""
+    def flush(self, registry: ParsedRegistry):
+        """ParsedRegistry의 노드와 해석된 엣지(resolved)를 일괄 DB에 기록합니다."""
+        resolved = registry.resolved
         logger.info(
-            f"Flushing to DB: {len(self._types)} types, "
-            f"{len(self._fields)} fields, {len(self._methods)} methods, "
-            f"{len(self._calls)} calls, {len(self._param_edges)} params, "
-            f"{len(self._return_edges)} returns"
+            f"Flushing to DB: {len(registry.types)} types, "
+            f"{len(registry.fields)} fields, {len(registry.methods)} methods, "
+            f"{len(resolved.internal_calls) + len(resolved.external_calls)} calls, "
+            f"{len(resolved.params)} params, {len(resolved.returns)} returns"
         )
 
-        # ── Phase 1: 인메모리 해석 (DB 접근 없음) ──
-        linker = EdgeLinker(self._types, self._fields, self._methods, self._file_contexts)
-        linker.resolve_supertype_qualnames()
+        # ── 노드 저장 ──
+        self._flush_types(registry.types)
+        self._flush_fields(registry.fields)
+        self._flush_methods(registry.methods)
 
-        param_batch = linker.resolve_parameter_edges(self._param_edges)
-        return_batch = linker.resolve_return_edges(self._return_edges)
-        resolved_calls, external_calls = linker.resolve_calls(self._calls)
+        # ── 엣지 저장 ──
+        self._flush_parameter_edges(resolved.params)
+        self._flush_return_edges(resolved.returns)
+        self._flush_calls(resolved.internal_calls, resolved.external_calls)
 
-        # ── Phase 2: DB 일괄 저장 ──
-        self._flush_types()
-        self._flush_fields()
-        self._flush_methods()
-        self._flush_parameter_edges(param_batch)
-        self._flush_return_edges(return_batch)
-        self._flush_calls(resolved_calls, external_calls)
-
-        # 메모리 정리
-        self._clear()
         logger.info("Flush complete.")
 
     # -----------------------------------------------------------------------
     # 노드 Flush
     # -----------------------------------------------------------------------
 
-    def _flush_types(self):
-        """축적된 TYPE 노드를 UNWIND 배치로 일괄 DB에 기록합니다."""
-        if not self._types:
+    def _flush_types(self, types: dict[str, ParsedType]):
+        """TYPE 노드를 UNWIND 배치로 일괄 DB에 기록합니다."""
+        if not types:
             return
 
         batch = []
-        for t in self._types.values():
+        for t in types.values():
             row = asdict(t)
             # list[ConstantInfo] → JSON 문자열
             row["constants"] = json.dumps(row["constants"], ensure_ascii=False) if row["constants"] else ""
@@ -130,13 +77,13 @@ class GraphWriter:
         except Exception as e:
             logger.error(f"Failed to batch upsert TYPEs: {e}")
 
-    def _flush_fields(self):
-        """축적된 FIELD 노드를 UNWIND 배치로 일괄 DB에 기록합니다."""
-        if not self._fields:
+    def _flush_fields(self, fields: dict[str, ParsedField]):
+        """FIELD 노드를 UNWIND 배치로 일괄 DB에 기록합니다."""
+        if not fields:
             return
 
         batch = []
-        for f in self._fields.values():
+        for f in fields.values():
             row = asdict(f)
             # TypeInfo → JSON 문자열, 키명을 DB 스키마에 맞춤 (field_type → type)
             row["type"] = json.dumps(row.pop("field_type"), ensure_ascii=False)
@@ -149,13 +96,13 @@ class GraphWriter:
         except Exception as e:
             logger.error(f"Failed to batch upsert FIELDs: {e}")
 
-    def _flush_methods(self):
-        """축적된 METHOD 노드를 UNWIND 배치로 일괄 DB에 기록합니다."""
-        if not self._methods:
+    def _flush_methods(self, methods: dict[str, ParsedMethod]):
+        """METHOD 노드를 UNWIND 배치로 일괄 DB에 기록합니다."""
+        if not methods:
             return
 
         batch = []
-        for m in self._methods.values():
+        for m in methods.values():
             row = asdict(m)
             # list[ParamInfo] → JSON 문자열
             row["params"] = json.dumps(row["params"], ensure_ascii=False)
@@ -216,17 +163,3 @@ class GraphWriter:
                 )
             except Exception as e:
                 logger.error(f"Failed to batch upsert CALLS (external) edges: {e}")
-
-    # -----------------------------------------------------------------------
-    # 메모리 정리
-    # -----------------------------------------------------------------------
-
-    def _clear(self):
-        """메모리 저장소를 초기화합니다."""
-        self._types.clear()
-        self._fields.clear()
-        self._methods.clear()
-        self._calls.clear()
-        self._param_edges.clear()
-        self._return_edges.clear()
-        self._file_contexts.clear()
