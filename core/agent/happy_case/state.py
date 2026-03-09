@@ -40,7 +40,7 @@ from pydantic import BaseModel, Field, field_validator
 class HappyCaseOutput(BaseModel):
     """LLM이 생성할 Happy Case 시나리오 구조 (요구사항 반영)"""
     test_case: str = Field(description="테스트하려는 API가 어떤 기능인지 설명 (Happy Case)")
-    input_data: str = Field(description="입력 데이터 예시 (순수한 형태의 JSON 객체 문자열 복사본)")
+    input_data: str = Field(description="입력 데이터 예시 (지시된 구조화된 텍스트 형식의 문자열)")
     expected_result: str = Field(description="예상 결과 예시 (순수한 형태의 JSON 객체 문자열 복사본)")
 
     @field_validator('input_data', 'expected_result', mode='before')
