@@ -39,9 +39,10 @@ from pydantic import BaseModel, Field, field_validator
 
 class HappyCaseOutput(BaseModel):
     """LLM이 생성할 Happy Case 시나리오 구조 (요구사항 반영)"""
-    test_case: str = Field(description="테스트하려는 API가 어떤 기능인지 설명 (Happy Case)")
-    input_data: str = Field(description="입력 데이터 예시 (지시된 구조화된 텍스트 형식의 문자열)")
-    expected_result: str = Field(description="예상 결과 예시 (순수한 형태의 JSON 객체 문자열 복사본)")
+    test_case: str = Field(description="해당 API의 기능 위주로 한국어로 설명 (성공 케이스)")
+    input_data: str = Field(description="입력 데이터 정보를 지정된 마크다운 리스트 형식으로 작성한 문자열")
+    expected_result: str = Field(description="성공 시 예상되는 응답 데이터를 지정된 마크다운 리스트 형식으로 작성한 문자열")
+
 
     @field_validator('input_data', 'expected_result', mode='before')
     @classmethod
@@ -55,12 +56,4 @@ class HappyCaseOutput(BaseModel):
             except: return str(v)
             
         cleaned = v.strip()
-        # 마크다운 호환 찌꺼기 제거
-        if cleaned.startswith("```json"):
-            cleaned = cleaned[7:]
-        elif cleaned.startswith("```"):
-            cleaned = cleaned[3:]
-        if cleaned.endswith("```"):
-            cleaned = cleaned[:-3]
-        
-        return cleaned.strip()
+        return cleaned
