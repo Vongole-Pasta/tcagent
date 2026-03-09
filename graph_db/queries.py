@@ -141,6 +141,54 @@ class CypherQueries:
            endpoint_m.signature as signature
     """
 
+    # --- AS-IS Node Loading Queries (증분 분석 최적화) ---
+
+    # [AS-IS TYPE 노드 로드]
+    # 변경 없는(AS-IS) 파일의 TYPE 노드를 DB에서 로드합니다.
+    # tree-sitter 파싱 대신 DB에서 이전 사이클의 노드 정보를 가져와 인메모리 인덱스를 구축합니다.
+    # Usage: core/analysis/analyzer.py
+    LOAD_ASIS_TYPES = """
+    MATCH (f:FILE {project: $project})-[:CONTAINS]->(t:TYPE)
+    WHERE f.path IN $paths
+    RETURN t.qualname as qualname, t.name as name, t.kind as kind,
+           t.constants as constants, t.supertypes as supertypes,
+           f.path as file_path
+    """
+
+    # [AS-IS FIELD 노드 로드]
+    # 변경 없는(AS-IS) 파일의 FIELD 노드를 DB에서 로드합니다.
+    # Usage: core/analysis/analyzer.py
+    LOAD_ASIS_FIELDS = """
+    MATCH (f:FILE {project: $project})-[:CONTAINS]->(t:TYPE)-[:CONTAINS]->(field:FIELD)
+    WHERE f.path IN $paths
+    RETURN field.qualname as qualname, field.name as name,
+           field.type as field_type, field.constraint as constraint,
+           t.qualname as type_qualname
+    """
+
+    # [AS-IS METHOD 노드 로드]
+    # 변경 없는(AS-IS) 파일의 METHOD 노드를 DB에서 로드합니다.
+    # Usage: core/analysis/analyzer.py
+    LOAD_ASIS_METHODS = """
+    MATCH (f:FILE {project: $project})-[:CONTAINS]->(t:TYPE)-[:CONTAINS]->(m:METHOD)
+    WHERE f.path IN $paths
+    RETURN m.qualname as qualname, m.name as name, m.source as source,
+           m.signature as signature, m.params as params, m.return_type as return_type,
+           m.hash as method_hash, m.last_scan_id as scan_id,
+           m.endpoint_uri as endpoint_uri, m.http_method as http_method,
+           t.qualname as class_qualname
+    """
+
+    # [AS-IS METHOD status 갱신]
+    # 증분 분석에서 AS-IS 파일은 write를 건너뛰므로, METHOD.status가 이전 사이클 값으로 남습니다.
+    # 대시보드 표시를 위해 AS-IS 파일의 METHOD status를 명시적으로 'AS-IS'로 갱신합니다.
+    # Usage: core/analysis/analyzer.py
+    BATCH_UPDATE_ASIS_METHOD_STATUS = """
+    UNWIND $paths AS path
+    MATCH (f:FILE {path: path, project: $project})-[:CONTAINS]->(t:TYPE)-[:CONTAINS]->(m:METHOD)
+    SET m.status = 'AS-IS'
+    """
+
     # --- Analysis Pipeline Queries (analyzer.py) ---
 
     # [FILE 노드 일괄 Upsert]
@@ -149,10 +197,11 @@ class CypherQueries:
     # Usage: core/analysis/analyzer.py
     BATCH_UPSERT_FILES = """
     UNWIND $batch AS row
-    MERGE (f:FILE {path: row.path, project: row.project})
+    MERGE (f:FILE {path: row.path})
     SET f.name = row.name,
         f.hash = row.hash,
-        f.language = row.language
+        f.language = row.language,
+        f.project = row.project
     """
 
     # [메서드 일괄 가지치기 (Pruning)]

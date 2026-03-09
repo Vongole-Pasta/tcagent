@@ -32,27 +32,66 @@ class GraphWriter:
     # 일괄 기록 (UNWIND 배치)
     # -----------------------------------------------------------------------
 
-    def flush(self, registry: ParsedRegistry):
-        """ParsedRegistry의 노드와 해석된 엣지(resolved)를 일괄 DB에 기록합니다."""
+    def write(self, registry: ParsedRegistry, changed: list[dict] = None,
+              unchanged: list[str] = None, project: str = None):
+        """
+        분석 결과를 일괄 DB에 기록합니다.
+
+        실행 순서 (의존성 기반):
+            1. AS-IS status — 변경 없는 메서드의 status를 'AS-IS'로 갱신
+            2. FILE 노드    — TYPE/METHOD가 FILE에 CONTAINS로 연결되므로 먼저 기록
+            3. 노드 (dirty)  — NEW/MODIFIED 파일의 TYPE/FIELD/METHOD만 기록
+            4. 엣지          — 변경분의 CALLS/HAS_PARAMETER/RETURNS 기록
+
+        증분 분석 최적화:
+            dirty set에 포함된 노드(NEW/MODIFIED)만 기록합니다.
+            AS-IS 노드는 DB에 이미 존재하므로 재기록 불필요.
+        """
         resolved = registry.resolved
+
+        # ── 1. 변경 없는 메서드 status 갱신 (대시보드 표시용) ──
+        self._update_asis_status(unchanged, project)
+
+        # ── 2. FILE 노드 저장 (TYPE/METHOD의 CONTAINS 연결 선행 조건) ──
+        if changed:
+            self._flush_files(changed)
+
+        # ── 3. 노드 저장 (변경분만) ──
+        dirty_types = {qn: t for qn, t in registry.types.items() if qn in registry.dirty_types}
+        dirty_fields = {qn: f for qn, f in registry.fields.items() if qn in registry.dirty_fields}
+        dirty_methods = {qn: m for qn, m in registry.methods.items() if qn in registry.dirty_methods}
+
         logger.info(
-            f"Flushing to DB: {len(registry.types)} types, "
-            f"{len(registry.fields)} fields, {len(registry.methods)} methods, "
+            f"Writing to DB: {len(unchanged or [])} unchanged, {len(changed or [])} changed, "
+            f"{len(dirty_types)} types, {len(dirty_fields)} fields, "
+            f"{len(dirty_methods)} methods, "
             f"{len(resolved.internal_calls) + len(resolved.external_calls)} calls, "
             f"{len(resolved.params)} params, {len(resolved.returns)} returns"
         )
 
-        # ── 노드 저장 ──
-        self._flush_types(registry.types)
-        self._flush_fields(registry.fields)
-        self._flush_methods(registry.methods)
+        self._flush_types(dirty_types)
+        self._flush_fields(dirty_fields)
+        self._flush_methods(dirty_methods)
 
-        # ── 엣지 저장 ──
+        # ── 4. 엣지 저장 (resolved에는 변경분만 있으므로 필터 불필요) ──
         self._flush_parameter_edges(resolved.params)
         self._flush_return_edges(resolved.returns)
         self._flush_calls(resolved.internal_calls, resolved.external_calls)
 
-        logger.info("Flush complete.")
+        logger.info("Write complete.")
+
+    # -----------------------------------------------------------------------
+    # FILE Flush
+    # -----------------------------------------------------------------------
+
+    def _flush_files(self, batch: list[dict]):
+        """FILE 노드를 UNWIND 배치로 일괄 DB에 기록합니다."""
+        try:
+            self.connector.execute_query(
+                CypherQueries.BATCH_UPSERT_FILES, {"batch": batch}
+            )
+        except Exception as e:
+            logger.error(f"Failed to batch upsert FILEs: {e}")
 
     # -----------------------------------------------------------------------
     # 노드 Flush
@@ -163,3 +202,36 @@ class GraphWriter:
                 )
             except Exception as e:
                 logger.error(f"Failed to batch upsert CALLS (external) edges: {e}")
+
+    # -----------------------------------------------------------------------
+    # 후처리 (write 이후 호출)
+    # -----------------------------------------------------------------------
+
+    def prune_removed_methods(self, batch: list[dict]):
+        """
+        변경 파일에서 삭제된 메서드를 DELETED 마킹하고 CALLS를 끊습니다.
+
+        write() 이후에 호출해야 합니다:
+            METHOD UPSERT로 scan_id가 갱신된 뒤 실행해야,
+            현존 메서드가 삭제된 것으로 오인되지 않습니다.
+        """
+        if not batch:
+            return
+        try:
+            self.connector.execute_query(
+                CypherQueries.BATCH_PRUNE_STALE_METHODS, {"batch": batch}
+            )
+        except Exception as e:
+            logger.error(f"Failed to prune removed methods: {e}")
+
+    def _update_asis_status(self, unchanged: list[str], project: str):
+        """변경 없는 파일의 METHOD 노드 status를 'AS-IS'로 갱신합니다."""
+        if not unchanged:
+            return
+        try:
+            self.connector.execute_query(
+                CypherQueries.BATCH_UPDATE_ASIS_METHOD_STATUS,
+                {"paths": unchanged, "project": project}
+            )
+        except Exception as e:
+            logger.error(f"Failed to update AS-IS method status: {e}")

@@ -46,12 +46,16 @@ class EdgeLinker:
 
         # 2) qualname → [부모 qualname] (상속 계층)
         #    supertypes의 단순 이름을 qualname으로 해석하여 저장
+        #    AS-IS 타입(DB 복원)은 supertypes가 이미 qualname이므로 직접 사용
         for t in self._registry.types.values():
             parents = []
             for parent_name in t.supertypes:
-                parent_q = self._resolve_type_name_global(parent_name)
-                if parent_q:
-                    parents.append(parent_q)
+                if parent_name in self._registry.types:
+                    parents.append(parent_name)                         # 이미 qualname (DB 복원)
+                else:
+                    parent_q = self._resolve_type_name_global(parent_name)
+                    if parent_q:
+                        parents.append(parent_q)                        # 단순 이름 → qualname
             if parents:
                 self._parent_types[t.qualname] = parents
 
@@ -101,11 +105,11 @@ class EdgeLinker:
         for t in self._registry.types.values():
             resolved = []
             for parent_name in t.supertypes:
-                parent_q = self._resolve_type_in_file(parent_name, t.file_path)
-                if parent_q:
-                    resolved.append(parent_q)
+                if parent_name in self._registry.types:
+                    resolved.append(parent_name)               # 이미 qualname (DB 복원) — skip
                 else:
-                    resolved.append(parent_name)  # 해석 실패 시 원본 유지
+                    parent_q = self._resolve_type_in_file(parent_name, t.file_path)
+                    resolved.append(parent_q or parent_name)   # 해석 실패 시 원본 유지
             t.supertypes = resolved
 
     # -----------------------------------------------------------------------

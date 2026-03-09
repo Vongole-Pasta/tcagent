@@ -5,6 +5,7 @@ DB 의존성 없음 — 파서와 라이터 사이의 중간 표현(Intermediate
 
 프로퍼티 JSON 타입(TypeInfo, ParamInfo 등)은 graph_db/schema.py에 정의되어 있습니다.
 """
+import json
 from dataclasses import dataclass, field
 from typing import Optional, TypedDict
 
@@ -21,6 +22,17 @@ class ParsedType:
     constants: list[ConstantInfo]   # ENUM 전용: ConstantInfo JSON 문자열
     supertypes: list[str] = field(default_factory=list)  # 상위 타입 이름 목록 (파서: 단순 이름 → EdgeLinker: qualname으로 해석)
 
+    @classmethod
+    def from_db_record(cls, record: dict) -> "ParsedType":
+        """DB 노드 레코드를 ParsedType으로 역직렬화합니다."""
+        constants = json.loads(record["constants"]) if record["constants"] else []
+        supertypes = record["supertypes"] if record["supertypes"] else []
+        return cls(
+            qualname=record["qualname"], name=record["name"],
+            kind=record["kind"], file_path=record["file_path"],
+            constants=constants, supertypes=supertypes,
+        )
+
 
 @dataclass
 class ParsedField:
@@ -30,6 +42,16 @@ class ParsedField:
     name: str               # 필드명
     field_type: TypeInfo    # TypeInfo JSON 문자열: {"given": ..., "layout": [...]}
     constraint: str = ""    # 유효성 제약조건 (예: "@NotBlank")
+
+    @classmethod
+    def from_db_record(cls, record: dict) -> "ParsedField":
+        """DB 노드 레코드를 ParsedField로 역직렬화합니다."""
+        field_type = json.loads(record["field_type"]) if record["field_type"] else {"given": "", "layout": []}
+        return cls(
+            qualname=record["qualname"], name=record["name"],
+            type_qualname=record["type_qualname"],
+            field_type=field_type, constraint=record.get("constraint", ""),
+        )
 
 
 @dataclass
@@ -46,6 +68,20 @@ class ParsedMethod:
     scan_id: Optional[str] = None
     endpoint_uri: str = ""  # REST 엔드포인트 URL
     http_method: str = ""   # HTTP 메서드
+
+    @classmethod
+    def from_db_record(cls, record: dict) -> "ParsedMethod":
+        """DB 노드 레코드를 ParsedMethod로 역직렬화합니다."""
+        params = json.loads(record["params"]) if record["params"] else []
+        return_type = json.loads(record["return_type"]) if record.get("return_type") else None
+        return cls(
+            qualname=record["qualname"], name=record["name"],
+            source=record.get("source", ""), class_qualname=record["class_qualname"],
+            signature=record.get("signature", ""), params=params,
+            return_type=return_type, method_hash=record.get("method_hash", ""),
+            scan_id=record.get("scan_id"), endpoint_uri=record.get("endpoint_uri", ""),
+            http_method=record.get("http_method", ""),
+        )
 
 
 @dataclass
@@ -117,6 +153,12 @@ class ParsedRegistry:
     fields: dict[str, ParsedField] = field(default_factory=dict)       # qualname → ParsedField
     methods: dict[str, ParsedMethod] = field(default_factory=dict)     # qualname → ParsedMethod
 
+    # 변경분 추적 (write 대상 식별)
+    # collect()으로 등록된 노드만 dirty에 포함, AS-IS 복원 노드는 미포함
+    dirty_types: set[str] = field(default_factory=set)
+    dirty_fields: set[str] = field(default_factory=set)
+    dirty_methods: set[str] = field(default_factory=set)
+
     # 엣지 저장소 (원시 — EdgeLinker가 해석)
     calls: list[ParsedCallEdge] = field(default_factory=list)
     param_edges: list[ParsedParameterEdge] = field(default_factory=list)
@@ -140,13 +182,16 @@ class ParsedRegistry:
           - 엣지 (순서 유지, 중복 허용)      → calls, param_edges, return_edges
           - 컨텍스트 (file_path 키)          → file_contexts
         """
-        # ── 노드 등록 (qualname 기준 upsert) ──
+        # ── 노드 등록 (qualname 기준 upsert) + dirty 추적 ──
         for t in result.types:
             self.types[t.qualname] = t
+            self.dirty_types.add(t.qualname)
         for f in result.fields:
             self.fields[f.qualname] = f
+            self.dirty_fields.add(f.qualname)
         for m in result.methods:
             self.methods[m.qualname] = m
+            self.dirty_methods.add(m.qualname)
 
         # ── 원시 엣지 축적 (EdgeLinker가 해석) ──
         self.calls.extend(result.calls)
