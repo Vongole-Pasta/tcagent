@@ -34,8 +34,26 @@ class WorkerState(TypedDict):
     worker_results: Annotated[NotRequired[List[Dict[str, Any]]], operator.add]  # 생성된 최종 결과 (시나리오)
     errors: Annotated[NotRequired[List[str]], operator.add]  # 워커에서 발생한 에러 기록
 
+import json
+from pydantic import BaseModel, Field, field_validator
+
 class HappyCaseOutput(BaseModel):
     """LLM이 생성할 Happy Case 시나리오 구조 (요구사항 반영)"""
-    test_case: str = Field(description="테스트하려는 API가 어떤 기능인지 설명 (Happy Case)")
-    input_data: str = Field(description="입력 데이터 예시 (JSON 형식 문자열 등)")
-    expected_result: str = Field(description="예상 결과 예시 (JSON 형식 문자열 등)")
+    test_case: str = Field(description="해당 API의 기능 위주로 한국어로 설명 (성공 케이스)")
+    input_data: str = Field(description="입력 데이터 정보를 지정된 마크다운 리스트 형식으로 작성한 문자열")
+    expected_result: str = Field(description="성공 시 예상되는 응답 데이터를 지정된 마크다운 리스트 형식으로 작성한 문자열")
+
+
+    @field_validator('input_data', 'expected_result', mode='before')
+    @classmethod
+    def format_json_string(cls, v):
+        """
+        LLM이 무리하게 감싼 마크다운 백틱(```json)이나 
+        최외곽의 불필요한 따옴표를 백엔드에서 1차적으로 걷어냅니다.
+        """
+        if not isinstance(v, str):
+            try: return json.dumps(v, ensure_ascii=False, indent=2)
+            except: return str(v)
+            
+        cleaned = v.strip()
+        return cleaned
