@@ -1,0 +1,1578 @@
+# ============================================================
+#  V&V 기대값 정의서 (수동 큐레이션)
+# ============================================================
+#
+#  이 파일은 .sample/ 소스코드를 사람이 직접 읽고 작성한 기대값입니다.
+#  파서가 자동 추출한 결과가 아니므로, 검증의 "정답지" 역할을 합니다.
+#
+#  구조:
+#    endpoints.<Controller>.<method>  — 엔드포인트별 기대값
+#    dto_fields.<DTO명>               — DTO/VO 필드 기대값
+#
+#  주의:
+#    - endpoint_uri에 trailing slash('/')가 붙은 경우는
+#      클래스 레벨 @RequestMapping만 존재하고 메서드 레벨 매핑이 없는 경우입니다.
+#    - param_types는 HAS_PARAMETER 관계로 연결될 타입명 목록입니다.
+#      (기본 타입 Long, String 등은 TYPE 노드가 아니므로 제외)
+#    - internal_calls 주석의 "2depth", "3depth"는 직접 호출이 아닌
+#      호출 체인 깊이를 나타냅니다. (CALLS*1.. 로 탐색)
+# ============================================================
+
+
+# ============================================================
+#  엔드포인트 기대값
+# ============================================================
+endpoints:
+
+  # ----------------------------------------------------------------
+  #  1. AuthController — 인증 (로그인/로그아웃)
+  #     클래스: @RestController @RequestMapping("/api/auth")
+  # ----------------------------------------------------------------
+  AuthController:
+    # 컨트롤러 클래스 레벨 필드 (DI 주입)
+    class_level:
+      fields:
+        - authenticationManager   # AuthenticationManager — Spring Security 인증 매니저
+        - jwtTokenProvider        # JwtTokenProvider — JWT 토큰 생성/검증
+        - memberRepository        # MemberRepository — 회원 조회 (DB)
+        - jwtExpiration           # long — 토큰 만료시간 (ms)
+
+    # POST /api/auth/login — 로그인 (JWT 발급)
+    login:
+      http_method: POST
+      endpoint_uri: /api/auth/login
+      params:
+        request: LoginRequest             # 로그인 요청 DTO (email, password)
+        httpRequest: HttpServletRequest    # 세션 처리용 서블릿 요청
+      param_annotations:
+        request: "@Valid @RequestBody"     # Bean Validation + JSON 바디
+      return_types:
+        - ApiResponse                     # 공통 응답 래퍼
+        - TokenResponse                   # JWT 토큰 응답 DTO
+      param_types:
+        - LoginRequest                    # HAS_PARAMETER 관계 대상
+      internal_calls:
+        - findByEmail                     # MemberRepository.findByEmail — 이메일로 회원 조회
+        - recordLogin                     # member.recordLogin() — 로그인 기록 (변수 타입 resolve 필요)
+        - recordLoginFailure              # Member::recordLoginFailure — 실패 기록 (메서드 레퍼런스)
+        - generateToken                   # JwtTokenProvider.generateToken — JWT 생성
+        - of                              # TokenResponse.of — 정적 팩토리
+        - success                         # ApiResponse.success — 성공 응답 생성
+        - now                             # 2depth: success → ApiResponse.Meta.now
+        - getMessage                      # 2depth: success → ApiResponseCode.getMessage (프로젝트 내부 Enum 메서드)
+      external_calls:
+        # ── 직접 호출 (login에서 직접) ──
+        - authenticate                    # authenticationManager.authenticate — Spring Security 인증
+        - email                           # request.email() — record accessor
+        - getContext                       # SecurityContextHolder.getContext — 보안 컨텍스트 획득
+        - getGrade                        # member.getGrade() — Enum getter
+        - getId                           # session.getId() — 세션 ID 획득
+        - getSession                      # httpRequest.getSession — 세션 획득
+        - ifPresent                       # Optional.ifPresent — catch 블록에서 실패 기록
+        - info                            # log.info — 로그인 성공 로깅
+        - name                            # Enum.name() — grade.name()
+        - ok                              # ResponseEntity.ok() — 200 응답 생성
+        - orElseThrow                     # Optional.orElseThrow — 회원 조회 실패 시 예외
+        - password                        # request.password() — record accessor
+        - setAttribute                    # session.setAttribute — 세션에 인증 정보 저장
+        - setAuthentication               # SecurityContext.setAuthentication — 인증 객체 설정
+        # ── 2depth: generateToken 내부 외부호출 ──
+        - builder                         # Jwts.builder() — JWT 빌더 생성
+        - claim                           # JwtBuilder.claim — 클레임 추가
+        - compact                         # JwtBuilder.compact — JWT 문자열 생성
+        - expiration                      # JwtBuilder.expiration — 만료시간 설정
+        - getTime                         # Date.getTime — 밀리초 획득
+        - issuedAt                        # JwtBuilder.issuedAt — 발급시간 설정
+        - signWith                        # JwtBuilder.signWith — 서명 키 설정
+        - subject                         # JwtBuilder.subject — subject 클레임 설정
+        # ── 2depth: success 내부 외부호출 ──
+        # ── 2depth+: now (success→now) 내부 외부호출 ──
+        - now                             # Instant.now() — 현재 시각
+        - randomUUID                      # UUID.randomUUID() — 고유 ID 생성
+        - substring                       # String.substring — 문자열 자르기
+        - toEpochMilli                    # Instant.toEpochMilli — 밀리초 변환
+        - toString                        # Object.toString — 문자열 변환
+
+    # POST /api/auth/logout — 로그아웃 (세션 무효화)
+    logout:
+      http_method: POST
+      endpoint_uri: /api/auth/logout
+      params:
+        request: HttpServletRequest       # 세션 접근용
+      param_annotations: {}
+      return_types: []                    # void 반환
+      param_types: []
+      internal_calls: []
+      external_calls:
+        - getSession                      # httpRequest.getSession(false)
+        - invalidate                      # session.invalidate()
+        - clearContext                     # SecurityContextHolder.clearContext()
+        - ok                              # ResponseEntity.ok()
+        - build                           # .build() — 빈 바디 응답 생성
+
+
+  # ----------------------------------------------------------------
+  #  2. MemberController — 회원 관리 (CRUD + 검색)
+  #     클래스: @RestController @RequestMapping("/api/members")
+  # ----------------------------------------------------------------
+  MemberController:
+    class_level:
+      fields:
+        - memberService                   # MemberService — 회원 비즈니스 로직
+
+    # POST /api/members/ — 회원 생성
+    createMember:
+      http_method: POST
+      endpoint_uri: "/api/members/"       # 메서드 레벨 매핑 없음 → trailing slash
+      params:
+        request: MemberCreateRequest      # 회원 생성 요청 DTO
+      param_annotations:
+        request: "@Valid @RequestBody"
+      return_types:
+        - ApiResponse
+        - MemberResponse                  # 회원 응답 DTO
+      param_types:
+        - MemberCreateRequest
+      internal_calls:
+        - createMember                    # MemberService.createMember
+        - success                         # ApiResponse.success
+        # ── 2depth: createMember 내부 ──
+        - validateEmail                   # this.validateEmail — 이메일 중복 검증
+        - from                            # MemberResponse.from — Entity→DTO 변환
+        - sendWelcome                     # NotificationService.sendWelcome — 환영 알림
+        - addAddress                      # member::addAddress — 메서드 레퍼런스
+        # ── 2depth: success 내부 ──
+        - now                             # Meta.now — 메타 정보 생성
+        - getMessage                      # ApiResponseCode.getMessage — 응답 코드 메시지
+        # ── 3depth: validateEmail 내부 ──
+        - existsByEmail                   # MemberRepository.existsByEmail — 이메일 존재 확인
+        # ── 3depth: from 내부 ──
+        - getId                           # BaseEntity.getId — PK 조회
+        - getFullName                     # Member.getFullName — 이름 조합
+        - isActive                        # Member.isActive — 활성 여부
+        # ── 3depth: sendWelcome 내부 ──
+        - sendToMember                    # NotificationService.sendToMember — SSE 알림 전송
+      external_calls:
+        # ── 직접 호출 (컨트롤러) ──
+        - body                            # ResponseEntity.body()
+        - status                          # ResponseEntity.status(CREATED)
+        # ── 2depth: createMember 내부 ──
+        - addresses                       # request.addresses() — record accessor
+        - email                           # request.email() — record accessor
+        - encode                          # passwordEncoder.encode — Spring Security
+        - firstName                       # request.firstName() — record accessor
+        - forEach                         # List.forEach — addAddress 반복
+        - lastName                        # request.lastName() — record accessor
+        - password                        # request.password() — record accessor
+        - save                            # memberRepository.save — JpaRepository 상속
+        # ── 2depth+: from (MemberResponse.from) 내부 ──
+        - getEmail                        # Lombok @Getter
+        - getGrade                        # Lombok @Getter
+        - getTags                         # Lombok @Getter
+        # ── 2depth+: now (Meta.now) 내부 ──
+        - now                             # Instant.now() — 현재 시각
+        - randomUUID                      # UUID.randomUUID() — 고유 ID
+        - substring                       # String.substring — 문자열 자르기
+        - toEpochMilli                    # Instant.toEpochMilli — 밀리초 변환
+        - toString                        # Object.toString — 문자열 변환
+        # ── 3depth: addAddress 내부 ──
+        - add                             # List.add — 주소 추가
+        # ── 3depth: sendWelcome 내부 ──
+        - info                            # log.info — 환영 알림 로깅
+        # ── 3depth+: sendToMember 내부 ──
+        - data                            # SseEmitter.EventBuilder.data
+        - event                           # SseEmitter.event — SSE 이벤트 생성
+        - get                             # Map.get — emitter 조회
+        - name                            # SseEmitter.EventBuilder.name
+        - remove                          # Map.remove — emitter 제거
+        - send                            # SseEmitter.send — SSE 전송
+        - warn                            # log.warn — 발송 실패 로깅
+
+    # GET /api/members/{id:[0-9]+} — 회원 단건 조회
+    getMember:
+      http_method: GET
+      endpoint_uri: "/api/members/{id:[0-9]+}"   # 정규식 PathVariable
+      params:
+        id: Long
+      param_annotations: {}
+      return_types:
+        - ApiResponse
+        - MemberResponse
+      param_types: []                     # Long은 기본 타입이라 TYPE 노드 없음
+      internal_calls:
+        - getMember                       # MemberService.getMember
+        - success                         # ApiResponse.success
+        # ── 2depth: getMember 내부 ──
+        - from                            # MemberResponse.from — Entity→DTO 변환
+        # ── 2depth: success 내부 ──
+        - now                             # Meta.now
+        - getMessage                      # ApiResponseCode.getMessage
+        # ── 3depth: from 내부 ──
+        - getId                           # BaseEntity.getId
+        - getFullName                     # Member.getFullName
+        - isActive                        # Member.isActive
+      external_calls:
+        # ── 직접 호출 (컨트롤러) ──
+        - ok                              # ResponseEntity.ok()
+        # ── 2depth: getMember 내부 ──
+        - findById                        # JpaRepository.findById — 상속 메서드
+        - orElseThrow                     # Optional.orElseThrow
+        # ── 2depth+: from 내부 ──
+        - getEmail                        # Lombok @Getter
+        - getGrade                        # Lombok @Getter
+        - getTags                         # Lombok @Getter
+        # ── 2depth+: now 내부 ──
+        - now                             # Instant.now()
+        - randomUUID                      # UUID.randomUUID()
+        - substring                       # String.substring
+        - toEpochMilli                    # Instant.toEpochMilli
+        - toString                        # Object.toString
+
+    # GET /api/members/ — 회원 목록 (페이징)
+    listMembers:
+      http_method: GET
+      endpoint_uri: "/api/members/"
+      params:
+        pageable: Pageable                # Spring Data 페이징 파라미터
+      param_annotations: {}
+      return_types:
+        - ApiResponse
+        - PagedResponse                   # 페이징 응답 래퍼
+        - MemberResponse
+      param_types: []
+      internal_calls:
+        - findMembers                     # MemberService.findMembers(Pageable)
+        - success                         # ApiResponse.success
+        # ── 2depth: findMembers 내부 ──
+        - from                            # PagedResponse.from + MemberResponse::from (메서드 레퍼런스)
+        # ── 2depth: success 내부 ──
+        - now                             # Meta.now
+        - getMessage                      # ApiResponseCode.getMessage
+        # ── 3depth: MemberResponse.from 내부 ──
+        - getId                           # BaseEntity.getId
+        - getFullName                     # Member.getFullName
+        - isActive                        # Member.isActive
+      external_calls:
+        # ── 직접 호출 (컨트롤러) ──
+        - ok                              # ResponseEntity.ok()
+        # ── 2depth: findMembers 내부 ──
+        - findAll                         # JpaRepository.findAll(Pageable) — 상속 메서드
+        - map                             # Page.map — 페이지 변환
+        # ── 2depth+: PagedResponse.from 내부 ──
+        - getContent                      # Page.getContent
+        - getNumber                       # Page.getNumber
+        - getSize                         # Page.getSize
+        - getTotalElements                # Page.getTotalElements
+        - getTotalPages                   # Page.getTotalPages
+        # ── 3depth: MemberResponse.from 내부 ──
+        - getEmail                        # Lombok @Getter
+        - getGrade                        # Lombok @Getter
+        - getTags                         # Lombok @Getter
+        # ── 2depth+: now 내부 ──
+        - now                             # Instant.now()
+        - randomUUID                      # UUID.randomUUID()
+        - substring                       # String.substring
+        - toEpochMilli                    # Instant.toEpochMilli
+        - toString                        # Object.toString
+
+    # GET|POST /api/members/search — 회원 검색
+    searchMembers:
+      http_method:                        # 복합 매핑 (GET + POST)
+        - GET
+        - POST
+        - "GET,POST"                      # 파서가 쉼표 구분 문자열로 저장할 수도 있음
+      endpoint_uri: /api/members/search
+      params:
+        keyword: String                   # 검색 키워드
+      param_annotations: {}
+      return_types:
+        - ApiResponse
+        - MemberResponse
+      param_types: []
+      internal_calls:
+        - searchMembers                   # MemberService.searchMembers
+        - success                         # ApiResponse.success
+        # ── 2depth: searchMembers 내부 ──
+        - findMembers                     # this.findMembers() — keyword blank일 때 전체 조회 위임
+        - findByFirstNameContainingOrLastNameContaining  # MemberRepository — Spring Data 쿼리 메서드
+        # ── 2depth: success 내부 ──
+        - now                             # Meta.now
+        - getMessage                      # ApiResponseCode.getMessage
+        # ── 3depth: MemberResponse::from (메서드 레퍼런스) ──
+        - from                            # MemberResponse.from — 검색 결과 변환
+        - getId                           # BaseEntity.getId
+        - getFullName                     # Member.getFullName
+        - isActive                        # Member.isActive
+      external_calls:
+        # ── 직접 호출 (컨트롤러) ──
+        - ok                              # ResponseEntity.ok()
+        # ── 2depth: searchMembers 내부 ──
+        - isBlank                         # String.isBlank — keyword 빈값 체크
+        - map                             # Page/Stream.map — 결과 변환
+        - toList                          # Stream.toList — 리스트 변환
+        - unpaged                         # Pageable.unpaged — 페이징 없이 전체 조회
+        # ── 3depth: findMembers() 내부 (keyword blank 분기) ──
+        - findAll                         # JpaRepository.findAll — 전체 조회
+        - stream                          # List.stream
+        # ── 3depth: MemberResponse.from 내부 ──
+        - getEmail                        # Lombok @Getter
+        - getGrade                        # Lombok @Getter
+        - getTags                         # Lombok @Getter
+        # ── 2depth+: now 내부 ──
+        - now                             # Instant.now()
+        - randomUUID                      # UUID.randomUUID()
+        - substring                       # String.substring
+        - toEpochMilli                    # Instant.toEpochMilli
+        - toString                        # Object.toString
+
+    # POST /api/members/{id}/profile-image — 프로필 이미지 업로드
+    uploadProfileImage:
+      http_method: POST
+      endpoint_uri: "/api/members/{id}/profile-image"
+      params:
+        id: Long
+        file: MultipartFile               # 업로드 파일
+      param_annotations: {}
+      return_types:
+        - ApiResponse
+      param_types: []
+      internal_calls:
+        - uploadProfileImage              # MemberService.uploadProfileImage
+        - success                         # ApiResponse.success
+        # ── 2depth: uploadProfileImage 내부 ──
+        - getId                           # BaseEntity.getId — 파일 경로 구성
+        # ── 2depth: success 내부 ──
+        - now                             # Meta.now
+        - getMessage                      # ApiResponseCode.getMessage
+      external_calls:
+        # ── 직접 호출 (컨트롤러) ──
+        - ok                              # ResponseEntity.ok()
+        # ── 2depth: uploadProfileImage 내부 ──
+        - findById                        # JpaRepository.findById
+        - getOriginalFilename             # MultipartFile.getOriginalFilename — 파일명 획득
+        - orElseThrow                     # Optional.orElseThrow
+        # ── 2depth+: now 내부 ──
+        - now                             # Instant.now()
+        - randomUUID                      # UUID.randomUUID()
+        - substring                       # String.substring
+        - toEpochMilli                    # Instant.toEpochMilli
+        - toString                        # Object.toString
+
+    # PUT /api/members/{id}/address — 주소 수정
+    updateAddress:
+      http_method: PUT
+      endpoint_uri: "/api/members/{id}/address"
+      params:
+        id: Long
+        address: Address                  # 주소 VO
+      param_annotations:
+        address: "@ModelAttribute"        # 폼 데이터 바인딩
+      return_types:
+        - ApiResponse
+        - MemberResponse
+      param_types:
+        - Address
+      internal_calls:
+        - updateAddress                   # MemberService.updateAddress
+        - success                         # ApiResponse.success
+        # ── 2depth: MemberService.updateAddress 내부 ──
+        - from                            # MemberResponse.from
+        - updateAddress                   # Member.updateAddress — 동명 다른 클래스 메서드
+        # ── 2depth: success 내부 ──
+        - now                             # Meta.now
+        - getMessage                      # ApiResponseCode.getMessage
+        # ── 3depth: from 내부 ──
+        - getId                           # BaseEntity.getId
+        - getFullName                     # Member.getFullName
+        - isActive                        # Member.isActive
+      external_calls:
+        # ── 직접 호출 (컨트롤러) ──
+        - ok                              # ResponseEntity.ok()
+        # ── 2depth: MemberService.updateAddress 내부 ──
+        - findById                        # JpaRepository.findById
+        - orElseThrow                     # Optional.orElseThrow
+        # ── 3depth: Member.updateAddress 내부 ──
+        - add                             # List.add — 새 주소 추가
+        - clear                           # List.clear — 기존 주소 삭제
+        # ── 3depth: from 내부 ──
+        - getEmail                        # Lombok @Getter
+        - getGrade                        # Lombok @Getter
+        - getTags                         # Lombok @Getter
+        # ── 2depth+: now 내부 ──
+        - now                             # Instant.now()
+        - randomUUID                      # UUID.randomUUID()
+        - substring                       # String.substring
+        - toEpochMilli                    # Instant.toEpochMilli
+        - toString                        # Object.toString
+
+    # GET /api/members/me — 현재 로그인 회원 조회
+    getCurrentMember:
+      http_method: GET
+      endpoint_uri: /api/members/me
+      params:
+        sessionId: String                 # 쿠키에서 추출
+        authToken: String                 # 헤더에서 추출
+      param_annotations:
+        sessionId: "@CookieValue"         # @CookieValue 어노테이션
+        authToken: "@RequestHeader"       # @RequestHeader 어노테이션
+      return_types:
+        - ApiResponse
+        - MemberResponse
+      param_types: []
+      internal_calls:
+        - getByToken                      # MemberService.getByToken — 토큰으로 회원 조회
+        - success                         # ApiResponse.success
+        # ── 2depth: getByToken 내부 ──
+        - getMember                       # MemberService.getMember — this.getMember 위임
+        # ── 2depth: success 내부 ──
+        - now                             # Meta.now
+        - getMessage                      # ApiResponseCode.getMessage
+        # ── 3depth: getMember 내부 ──
+        - from                            # MemberResponse.from
+        # ── 4depth: from 내부 ──
+        - getId                           # BaseEntity.getId
+        - getFullName                     # Member.getFullName
+        - isActive                        # Member.isActive
+      external_calls:
+        # ── 직접 호출 (컨트롤러) ──
+        - ok                              # ResponseEntity.ok()
+        # ── 2depth: getByToken 내부 ──
+        - parseLong                       # Long.parseLong — 토큰→ID 변환
+        # ── 3depth: getMember 내부 ──
+        - findById                        # JpaRepository.findById
+        - orElseThrow                     # Optional.orElseThrow
+        # ── 4depth: from 내부 ──
+        - getEmail                        # Lombok @Getter
+        - getGrade                        # Lombok @Getter
+        - getTags                         # Lombok @Getter
+        # ── 2depth+: now 내부 ──
+        - now                             # Instant.now()
+        - randomUUID                      # UUID.randomUUID()
+        - substring                       # String.substring
+        - toEpochMilli                    # Instant.toEpochMilli
+        - toString                        # Object.toString
+
+    # GET /api/members/audit — 감사 로그 기록
+    getAuditLog:
+      http_method: GET
+      endpoint_uri: /api/members/audit
+      params:
+        request: HttpServletRequest
+        response: HttpServletResponse
+      param_annotations: {}
+      return_types: []                    # void 반환
+      param_types: []
+      internal_calls:
+        - writeAuditLog                   # MemberService.writeAuditLog
+      external_calls:
+        # ── 2depth: writeAuditLog 내부 ──
+        - getMethod                       # HttpServletRequest.getMethod
+        - getRequestURI                   # HttpServletRequest.getRequestURI
+        - setHeader                       # HttpServletResponse.setHeader
+
+
+  # ----------------------------------------------------------------
+  #  3. ProductController — 상품 관리
+  #     클래스: @RestController @RequestMapping("/api/v1/products")
+  #     참고: Product 엔티티는 Lombok 미사용, 모든 getter를 직접 작성
+  # ----------------------------------------------------------------
+  ProductController:
+    class_level:
+      fields:
+        - productService                  # ProductService — 상품 비즈니스 로직
+
+    # GET /api/v1/products/{id} — 상품 단건 조회
+    getProduct:
+      http_method: GET
+      endpoint_uri: "/api/v1/products/{id}"
+      params:
+        id: Long
+      param_annotations: {}
+      return_types:
+        - ApiResponse
+        - Response                        # ProductDto.Response (내부 클래스)
+      param_types: []
+      internal_calls:
+        - getProduct                      # ProductService.getProduct
+        - success                         # ApiResponse.success
+        # ── 2depth: getProduct 내부 ──
+        - from                            # ProductDto.Response::from — 메서드 레퍼런스
+        # ── 2depth: success 내부 ──
+        - now                             # Meta.now
+        - getMessage                      # ApiResponseCode.getMessage
+        # ── 3depth: from 내부 (Product getter — 직접 작성) ──
+        - getId                           # BaseEntity.getId
+        - getName                         # Product.getName
+        - getPrice                        # Product.getPrice
+        - getDescription                  # Product.getDescription
+        - getCategory                     # Product.getCategory
+        - getStockQuantity                # Product.getStockQuantity
+        - isActive                        # Product.isActive
+      external_calls:
+        # ── 직접 호출 (컨트롤러) ──
+        - ok                              # ResponseEntity.ok()
+        # ── 2depth: getProduct 내부 ──
+        - findById                        # JpaRepository.findById
+        - map                             # Optional.map
+        - orElseThrow                     # Optional.orElseThrow
+        # ── 2depth+: now 내부 ──
+        - now                             # Instant.now()
+        - randomUUID                      # UUID.randomUUID()
+        - substring                       # String.substring
+        - toEpochMilli                    # Instant.toEpochMilli
+        - toString                        # Object.toString
+
+    # POST /api/v1/products/ — 상품 생성
+    createProduct:
+      http_method: POST
+      endpoint_uri: "/api/v1/products/"
+      params:
+        request: ProductDto.Create        # 내부 클래스 → 파서가 dot 표기법 사용
+      param_annotations:
+        request: "@Valid @RequestBody"
+      return_types:
+        - ApiResponse
+        - Response
+      param_types:
+        - Create                          # TYPE 노드명은 내부 클래스 short name
+      internal_calls:
+        - createProduct                   # ProductService.createProduct
+        - success                         # ApiResponse.success
+        # ── 2depth: createProduct 내부 (ProductDto.Create getter — 직접 작성) ──
+        - getCategoryId                   # Create.getCategoryId
+        - getName                         # Create.getName (+ Builder.name)
+        - getPrice                        # Create.getPrice
+        - getDescription                  # Create.getDescription
+        - getStockQuantity                # Create.getStockQuantity
+        # ── 2depth: createProduct 내부 (Builder 메서드 — 직접 작성) ──
+        - name                            # Builder.name — 빌더 setter
+        - price                           # Builder.price
+        - description                     # Builder.description
+        - category                        # Builder.category
+        - stockQuantity                   # Builder.stockQuantity
+        - build                           # Builder.build
+        - from                            # ProductDto.Response.from — Entity→DTO 변환
+        # ── 2depth: success 내부 ──
+        - now                             # Meta.now
+        - getMessage                      # ApiResponseCode.getMessage
+        # ── 3depth: from 내부 (Product getter) ──
+        - getId                           # BaseEntity.getId
+        - getCategory                     # Product.getCategory
+        - isActive                        # Product.isActive
+      external_calls:
+        # ── 직접 호출 (컨트롤러) ──
+        - body                            # ResponseEntity.body()
+        - status                          # ResponseEntity.status(CREATED)
+        # ── 2depth: createProduct 내부 ──
+        - findById                        # categoryRepository.findById — JpaRepository 상속
+        - orElseThrow                     # Optional.orElseThrow
+        - save                            # productRepository.save — JpaRepository 상속
+        # ── 2depth+: now 내부 ──
+        - now                             # Instant.now()
+        - randomUUID                      # UUID.randomUUID()
+        - substring                       # String.substring
+        - toEpochMilli                    # Instant.toEpochMilli
+        - toString                        # Object.toString
+
+    # PUT /api/v1/products/{id} — 상품 수정
+    updateProduct:
+      http_method: PUT
+      endpoint_uri: "/api/v1/products/{id}"
+      params:
+        id: Long
+        request: ProductDto.Update
+      param_annotations:
+        request: "@Valid @RequestBody"
+      return_types:
+        - ApiResponse
+        - Response
+      param_types:
+        - Update
+      internal_calls:
+        - updateProduct                   # ProductService.updateProduct
+        - success                         # ApiResponse.success
+        # ── 2depth: updateProduct 내부 ──
+        - from                            # ProductDto.Response.from
+        - updateInfo                      # Product.updateInfo — 상품 정보 수정
+        - getName                         # ProductDto.Update.getName (직접 작성)
+        - getPrice                        # ProductDto.Update.getPrice (직접 작성)
+        # ── 2depth: success 내부 ──
+        - now                             # Meta.now
+        - getMessage                      # ApiResponseCode.getMessage
+        # ── 3depth: from 내부 (Product getter) ──
+        - getId                           # BaseEntity.getId
+        - getDescription                  # Product.getDescription
+        - getCategory                     # Product.getCategory
+        - getStockQuantity                # Product.getStockQuantity
+        - isActive                        # Product.isActive
+      external_calls:
+        # ── 직접 호출 (컨트롤러) ──
+        - ok                              # ResponseEntity.ok()
+        # ── 2depth: updateProduct 내부 ──
+        - findById                        # JpaRepository.findById
+        - orElseThrow                     # Optional.orElseThrow
+        # ── 2depth+: now 내부 ──
+        - now                             # Instant.now()
+        - randomUUID                      # UUID.randomUUID()
+        - substring                       # String.substring
+        - toEpochMilli                    # Instant.toEpochMilli
+        - toString                        # Object.toString
+
+    # GET /api/v1/products/filter/{criteria} — 상품 필터링 (Matrix Variable)
+    filterProducts:
+      http_method: GET
+      endpoint_uri: "/api/v1/products/filter/{criteria}"
+      params:
+        criteria: "Map<String, String>"   # @MatrixVariable로 바인딩
+      param_annotations:
+        criteria: "@MatrixVariable"
+      return_types:
+        - ApiResponse
+        - Response
+      param_types: []
+      internal_calls:
+        - filterProducts                  # ProductService.filterProducts
+        - success                         # ApiResponse.success
+        # ── 2depth: filterProducts 내부 ──
+        - findByActiveTrue                # ProductRepository.findByActiveTrue — 사용자 정의 쿼리
+        - matchesCriteria                 # ProductService.matchesCriteria — 필터 로직
+        - from                            # ProductDto.Response::from — 메서드 레퍼런스
+        # ── 2depth: success 내부 ──
+        - now                             # Meta.now
+        - getMessage                      # ApiResponseCode.getMessage
+        # ── 3depth: matchesCriteria 내부 ──
+        - getAttributes                   # Product.getAttributes — 속성 맵 조회
+        # ── 3depth: from 내부 (Product getter) ──
+        - getId                           # BaseEntity.getId
+        - getName                         # Product.getName
+        - getPrice                        # Product.getPrice
+        - getDescription                  # Product.getDescription
+        - getCategory                     # Product.getCategory
+        - getStockQuantity                # Product.getStockQuantity
+        - isActive                        # Product.isActive
+      external_calls:
+        # ── 직접 호출 (컨트롤러) ──
+        - ok                              # ResponseEntity.ok()
+        # ── 2depth: filterProducts 내부 ──
+        - collect                         # Stream.collect
+        - filter                          # Stream.filter
+        - map                             # Stream.map
+        - stream                          # List.stream
+        - toList                          # Collectors.toList
+        # ── 3depth: matchesCriteria 내부 ──
+        - entrySet                        # Map.entrySet
+        - equalsIgnoreCase                # String.equalsIgnoreCase
+        - get                             # Map.get — 속성값 조회
+        - getKey                          # Map.Entry.getKey
+        - getValue                        # Map.Entry.getValue
+        # ── 2depth+: now 내부 ──
+        - now                             # Instant.now()
+        - randomUUID                      # UUID.randomUUID()
+        - substring                       # String.substring
+        - toEpochMilli                    # Instant.toEpochMilli
+        - toString                        # Object.toString
+
+    # GET /api/v1/products/async/{id} — 상품 비동기 조회 (CompletableFuture)
+    getProductAsync:
+      http_method: GET
+      endpoint_uri: "/api/v1/products/async/{id}"
+      params:
+        id: Long
+      param_annotations: {}
+      return_types:
+        - ApiResponse
+        - Response
+      param_types: []
+      internal_calls:
+        - getProduct                      # ProductService.getProduct
+        - success                         # ApiResponse.success
+        # ── 2depth: getProduct 내부 ──
+        - from                            # ProductDto.Response::from — 메서드 레퍼런스
+        # ── 2depth: success 내부 ──
+        - now                             # Meta.now
+        - getMessage                      # ApiResponseCode.getMessage
+        # ── 3depth: from 내부 (Product getter) ──
+        - getId                           # BaseEntity.getId
+        - getName                         # Product.getName
+        - getPrice                        # Product.getPrice
+        - getDescription                  # Product.getDescription
+        - getCategory                     # Product.getCategory
+        - getStockQuantity                # Product.getStockQuantity
+        - isActive                        # Product.isActive
+      external_calls:
+        # ── 직접 호출 (컨트롤러) ──
+        - ok                              # ResponseEntity.ok()
+        - supplyAsync                     # CompletableFuture.supplyAsync
+        # ── 2depth: getProduct 내부 ──
+        - findById                        # JpaRepository.findById
+        - map                             # Optional.map
+        - orElseThrow                     # Optional.orElseThrow
+        # ── 2depth+: now 내부 ──
+        - now                             # Instant.now()
+        - randomUUID                      # UUID.randomUUID()
+        - substring                       # String.substring
+        - toEpochMilli                    # Instant.toEpochMilli
+        - toString                        # Object.toString
+
+    # GET /api/v1/products/deferred/{id} — 상품 지연 조회 (DeferredResult)
+    getProductDeferred:
+      http_method: GET
+      endpoint_uri: "/api/v1/products/deferred/{id}"
+      params:
+        id: Long
+      param_annotations: {}
+      return_types:
+        - ApiResponse
+        - Response
+      param_types: []
+      internal_calls:
+        - getProduct                      # ProductService.getProduct
+        - success                         # ApiResponse.success
+        # ── 2depth: getProduct 내부 ──
+        - from                            # ProductDto.Response::from — 메서드 레퍼런스
+        # ── 2depth: success 내부 ──
+        - now                             # Meta.now
+        - getMessage                      # ApiResponseCode.getMessage
+        # ── 3depth: from 내부 (Product getter) ──
+        - getId                           # BaseEntity.getId
+        - getName                         # Product.getName
+        - getPrice                        # Product.getPrice
+        - getDescription                  # Product.getDescription
+        - getCategory                     # Product.getCategory
+        - getStockQuantity                # Product.getStockQuantity
+        - isActive                        # Product.isActive
+      external_calls:
+        # ── 직접 호출 (컨트롤러) ──
+        - exceptionally                   # CompletableFuture.exceptionally
+        - ok                              # ResponseEntity.ok()
+        - setErrorResult                  # DeferredResult.setErrorResult
+        - setResult                       # DeferredResult.setResult
+        - supplyAsync                     # CompletableFuture.supplyAsync
+        - thenAccept                      # CompletableFuture.thenAccept
+        # ── 2depth: getProduct 내부 ──
+        - findById                        # JpaRepository.findById
+        - map                             # Optional.map
+        - orElseThrow                     # Optional.orElseThrow
+        # ── 2depth+: now 내부 ──
+        - now                             # Instant.now()
+        - randomUUID                      # UUID.randomUUID()
+        - substring                       # String.substring
+        - toEpochMilli                    # Instant.toEpochMilli
+        - toString                        # Object.toString
+
+    # DELETE /api/v1/products/{id} — 상품 삭제
+    deleteProduct:
+      http_method: DELETE
+      endpoint_uri: "/api/v1/products/{id}"
+      params:
+        id: Long
+      param_annotations: {}
+      return_types: []                    # void — 204 No Content
+      param_types: []
+      internal_calls:
+        - deleteProduct                   # ProductService.deleteProduct
+        # ── 2depth: deleteProduct 내부 ──
+        - deactivate                      # Product.deactivate — 소프트 삭제
+      external_calls:
+        # ── 직접 호출 (컨트롤러) ──
+        - build                           # ResponseEntity.build()
+        - noContent                       # ResponseEntity.noContent()
+        # ── 2depth: deleteProduct 내부 ──
+        - findById                        # JpaRepository.findById
+        - orElseThrow                     # Optional.orElseThrow
+
+
+  # ----------------------------------------------------------------
+  #  4. ProductSearchController — 상품 검색 (HATEOAS 포함)
+  #     클래스: @RestController @RequestMapping("/api/products/search")
+  # ----------------------------------------------------------------
+  ProductSearchController:
+    class_level:
+      fields:
+        - productService
+
+    # GET /api/products/search/ — 상품 검색 v1 (단순)
+    searchV1:
+      http_method: GET
+      endpoint_uri: "/api/products/search/"
+      params:
+        q: String                         # 검색 키워드
+      param_annotations: {}
+      return_types:
+        - ApiResponse
+        - Response
+      param_types: []
+      internal_calls:
+        - search                          # ProductService.search
+        - success                         # ApiResponse.success
+        # ── 2depth: search 내부 ──
+        - findByNameContaining            # ProductRepository.findByNameContaining — 사용자 정의
+        - from                            # ProductDto.Response::from — 메서드 레퍼런스
+        # ── 2depth: success 내부 ──
+        - now                             # Meta.now
+        - getMessage                      # ApiResponseCode.getMessage
+        # ── 3depth: from 내부 (Product getter — 직접 작성) ──
+        - getId                           # BaseEntity.getId
+        - getName                         # Product.getName
+        - getPrice                        # Product.getPrice
+        - getDescription                  # Product.getDescription
+        - getCategory                     # Product.getCategory
+        - getStockQuantity                # Product.getStockQuantity
+        - isActive                        # Product.isActive
+      external_calls:
+        # ── 직접 호출 (컨트롤러) ──
+        - ok                              # ResponseEntity.ok()
+        # ── 2depth: search 내부 ──
+        - map                             # Page.map
+        - toList                          # Page.toList
+        - unpaged                         # Pageable.unpaged
+        # ── 2depth+: now 내부 ──
+        - now                             # Instant.now()
+        - randomUUID                      # UUID.randomUUID()
+        - substring                       # String.substring
+        - toEpochMilli                    # Instant.toEpochMilli
+        - toString                        # Object.toString
+
+    # GET /api/products/search/ — 상품 검색 v2 (페이징)
+    searchV2:
+      http_method: GET
+      endpoint_uri: "/api/products/search/"
+      params:
+        q: String
+        pageable: Pageable
+      param_annotations: {}
+      return_types:
+        - ApiResponse
+        - PagedResponse
+        - Response
+      param_types: []
+      internal_calls:
+        - searchPaged                     # ProductService.searchPaged
+        - success                         # ApiResponse.success
+        # ── 2depth: searchPaged 내부 ──
+        - findByNameContaining            # ProductRepository.findByNameContaining
+        - from                            # PagedResponse.from + ProductDto.Response::from
+        # ── 2depth: success 내부 ──
+        - now                             # Meta.now
+        - getMessage                      # ApiResponseCode.getMessage
+        # ── 3depth: ProductDto.Response.from 내부 ──
+        - getId                           # BaseEntity.getId
+        - getName                         # Product.getName
+        - getPrice                        # Product.getPrice
+        - getDescription                  # Product.getDescription
+        - getCategory                     # Product.getCategory
+        - getStockQuantity                # Product.getStockQuantity
+        - isActive                        # Product.isActive
+      external_calls:
+        # ── 직접 호출 (컨트롤러) ──
+        - ok                              # ResponseEntity.ok()
+        # ── 2depth: searchPaged 내부 ──
+        - map                             # Page.map
+        # ── 2depth+: PagedResponse.from 내부 ──
+        - getContent                      # Page.getContent
+        - getNumber                       # Page.getNumber
+        - getSize                         # Page.getSize
+        - getTotalElements                # Page.getTotalElements
+        - getTotalPages                   # Page.getTotalPages
+        # ── 2depth+: now 내부 ──
+        - now                             # Instant.now()
+        - randomUUID                      # UUID.randomUUID()
+        - substring                       # String.substring
+        - toEpochMilli                    # Instant.toEpochMilli
+        - toString                        # Object.toString
+
+    # GET /api/products/search/{id}/links — 상품 조회 + HATEOAS 링크
+    getProductWithLinks:
+      http_method: GET
+      endpoint_uri: "/api/products/search/{id}/links"
+      params:
+        id: Long
+      param_annotations: {}
+      return_types:
+        - Response                        # EntityModel<Response> 이지만 TYPE은 Response
+      param_types: []
+      internal_calls:
+        - getProduct                      # ProductService.getProduct
+        # ── 2depth: getProduct 내부 ──
+        - from                            # ProductDto.Response::from — 메서드 레퍼런스
+        # ── 3depth: from 내부 (Product getter) ──
+        - getId                           # BaseEntity.getId
+        - getName                         # Product.getName
+        - getPrice                        # Product.getPrice
+        - getDescription                  # Product.getDescription
+        - getCategory                     # Product.getCategory
+        - getStockQuantity                # Product.getStockQuantity
+        - isActive                        # Product.isActive
+      external_calls:
+        # ── 직접 호출 (컨트롤러) ──
+        - getProduct                      # methodOn 프록시 호출 — 링크 생성용
+        - getProductWithLinks             # methodOn 프록시 호출 — 셀프 링크 생성용
+        - linkTo                          # WebMvcLinkBuilder.linkTo
+        - methodOn                        # WebMvcLinkBuilder.methodOn
+        - of                              # EntityModel.of
+        - withRel                         # Link.withRel
+        - withSelfRel                     # Link.withSelfRel
+        # ── 2depth: getProduct 내부 ──
+        - findById                        # JpaRepository.findById
+        - map                             # Optional.map
+        - orElseThrow                     # Optional.orElseThrow
+
+
+  # ----------------------------------------------------------------
+  #  5. OrderController — 주문 관리
+  #     클래스: @RestController @RequestMapping("/api/orders")
+  #     참고: Order 엔티티는 Lombok @Getter 사용, 수동 메서드: addItem, setDeliveryInfo, changeStatus, recalculateTotal
+  #     참고: OrderItem 엔티티는 Lombok 미사용, 모든 getter를 직접 작성
+  #     참고: Product 엔티티는 Lombok 미사용, 모든 getter를 직접 작성
+  # ----------------------------------------------------------------
+  OrderController:
+    class_level:
+      fields:
+        - orderService                    # OrderService — 주문 비즈니스 로직
+
+    # POST /api/orders/ — 주문 생성
+    createOrder:
+      http_method: POST
+      endpoint_uri: "/api/orders/"
+      params:
+        request: OrderCreateRequest
+      param_annotations:
+        request: "@Valid @RequestBody"
+      return_types:
+        - ApiResponse
+        - OrderResponse
+      param_types:
+        - OrderCreateRequest
+      internal_calls:
+        - createOrder                     # OrderService.createOrder
+        - success                         # ApiResponse.success
+        # ── 2depth: createOrder 내부 ──
+        - from                            # OrderResponse.from — Entity→DTO 변환
+        - addItem                         # Order.addItem — 주문항목 추가 (수동 메서드)
+        - setDeliveryInfo                 # Order.setDeliveryInfo — 배송 정보 설정 (수동 메서드)
+        - validate                        # OrderValidator.validate — 주문 검증
+        - sendOrderConfirmation           # NotificationService.sendOrderConfirmation — 알림
+        - decreaseStock                   # Product.decreaseStock — 재고 차감 (수동 메서드)
+        - getProduct                      # OrderItem.getProduct — 수동 getter
+        - getQuantity                     # OrderItem.getQuantity — 수동 getter
+        # ── 2depth: success 내부 ──
+        - now                             # Meta.now
+        - getMessage                      # ApiResponseCode.getMessage
+        # ── 3depth: OrderResponse.from 내부 ──
+        - getId                           # BaseEntity.getId — 수동 getter
+        # ── 3depth: addItem 내부 ──
+        - recalculateTotal                # Order.recalculateTotal — private, 합계 재계산
+        # ── 3depth: validate 내부 ──
+        - validateStock                   # OrderValidator.validateStock — 재고 검증
+        - validateMemberGrade             # OrderValidator.validateMemberGrade — 등급 검증
+        # ── 3depth: sendOrderConfirmation 내부 ──
+        - sendToMember                    # NotificationService.sendToMember — SSE 전송
+        # ── 4depth: OrderItemResponse.from 내부 (OrderResponse.from에서 호출) ──
+        - getName                         # Product.getName — 수동 getter (OrderItemResponse.from + validateStock)
+        - getUnitPrice                    # OrderItem.getUnitPrice — 수동 getter
+        - getSubtotal                     # OrderItem.getSubtotal — 수동 getter (BigDecimal 연산)
+        # ── 4depth: validateStock 내부 ──
+        - isAvailable                     # Product.isAvailable — 수동 메서드
+        - getStockQuantity                # Product.getStockQuantity — 수동 getter
+        # ── 5depth: canTransitionTo는 createOrder에선 미사용 ──
+      external_calls:
+        # ── 직접 호출 (컨트롤러) ──
+        - status                          # ResponseEntity.status(CREATED)
+        - body                            # ResponseEntity.body()
+        # ── 2depth: createOrder 내부 ──
+        - findById                        # JpaRepository.findById — member, product 조회
+        - orElseThrow                     # Optional.orElseThrow
+        - memberId                        # OrderCreateRequest record accessor
+        - deliveryAddress                 # OrderCreateRequest record accessor
+        - recipientName                   # OrderCreateRequest record accessor
+        - phone                           # OrderCreateRequest record accessor
+        - items                           # OrderCreateRequest record accessor
+        - productId                       # OrderItemRequest record accessor
+        - quantity                        # OrderItemRequest record accessor
+        - getItems                        # Order Lombok @Getter
+        - forEach                         # Iterable.forEach — 재고 차감 루프
+        - save                            # JpaRepository.save — 주문 저장
+        # ── 3depth: OrderResponse.from 내부 ──
+        - getMember                       # Order Lombok @Getter
+        - getEmail                        # Member Lombok @Getter
+        - getStatus                       # Order Lombok @Getter
+        - getTotalAmount                  # Order Lombok @Getter
+        - stream                          # List.stream
+        - map                             # Stream.map
+        - toList                          # Stream.toList
+        # ── 3depth: addItem 내부 (List.add) ──
+        - add                             # List.add — items 리스트에 추가
+        # ── 3depth: sendOrderConfirmation 내부 ──
+        - info                            # log.info — 알림 로깅
+        # ── 4depth: recalculateTotal 내부 ──
+        - reduce                          # Stream.reduce — BigDecimal 합산
+        # ── 4depth: sendToMember 내부 ──
+        - get                             # Map.get — emitter 조회
+        - send                            # SseEmitter.send
+        - event                           # SseEmitter.event — 이벤트 빌더
+        - name                            # SseEmitter.EventBuilder.name
+        - data                            # SseEmitter.EventBuilder.data
+        - remove                          # Map.remove — emitter 제거
+        - warn                            # log.warn — 발송 실패 로깅
+        # ── 4depth: validateMemberGrade 내부 ──
+        - getGrade                        # Member Lombok @Getter
+        - mapToInt                        # Stream.mapToInt
+        - sum                             # IntStream.sum
+        # ── 5depth: getSubtotal 내부 ──
+        - multiply                        # BigDecimal.multiply
+        - valueOf                         # BigDecimal.valueOf
+        # ── 2depth+: now (Meta.now) 내부 ──
+        - now                             # Instant.now()
+        - randomUUID                      # UUID.randomUUID()
+        - substring                       # String.substring
+        - toEpochMilli                    # Instant.toEpochMilli
+        - toString                        # Object.toString
+
+    # GET /api/orders/{id} — 주문 단건 조회
+    getOrder:
+      http_method: GET
+      endpoint_uri: "/api/orders/{id}"
+      params:
+        id: Long
+      param_annotations: {}
+      return_types:
+        - ApiResponse
+        - OrderResponse
+      param_types: []
+      internal_calls:
+        - getOrder                        # OrderService.getOrder
+        - success                         # ApiResponse.success
+        # ── 2depth: getOrder 내부 ──
+        - from                            # OrderResponse.from
+        # ── 2depth: success 내부 ──
+        - now                             # Meta.now
+        - getMessage                      # ApiResponseCode.getMessage
+        # ── 3depth: OrderResponse.from 내부 ──
+        - getId                           # BaseEntity.getId — 수동 getter
+        # ── 4depth: OrderItemResponse.from 내부 ──
+        - getProduct                      # OrderItem.getProduct — 수동 getter
+        - getName                         # Product.getName — 수동 getter
+        - getQuantity                     # OrderItem.getQuantity — 수동 getter
+        - getUnitPrice                    # OrderItem.getUnitPrice — 수동 getter
+        - getSubtotal                     # OrderItem.getSubtotal — 수동 getter
+      external_calls:
+        # ── 직접 호출 (컨트롤러) ──
+        - ok                              # ResponseEntity.ok()
+        # ── 2depth: getOrder 내부 ──
+        - findById                        # JpaRepository.findById
+        - orElseThrow                     # Optional.orElseThrow
+        # ── 3depth: OrderResponse.from 내부 ──
+        - getItems                        # Order Lombok @Getter
+        - stream                          # List.stream
+        - map                             # Stream.map
+        - toList                          # Stream.toList
+        - getMember                       # Order Lombok @Getter
+        - getEmail                        # Member Lombok @Getter
+        - getStatus                       # Order Lombok @Getter
+        - getTotalAmount                  # Order Lombok @Getter
+        # ── 5depth: getSubtotal 내부 ──
+        - multiply                        # BigDecimal.multiply
+        - valueOf                         # BigDecimal.valueOf
+        # ── 2depth+: now (Meta.now) 내부 ──
+        - now                             # Instant.now()
+        - randomUUID                      # UUID.randomUUID()
+        - substring                       # String.substring
+        - toEpochMilli                    # Instant.toEpochMilli
+        - toString                        # Object.toString
+
+    # PATCH /api/orders/{id}/status — 주문 상태 변경
+    updateStatus:
+      http_method: PATCH
+      endpoint_uri: "/api/orders/{id}/status"
+      params:
+        id: Long
+        status: OrderStatus               # Enum 타입
+      param_annotations: {}
+      return_types:
+        - ApiResponse
+        - OrderResponse
+      param_types:
+        - OrderStatus
+      internal_calls:
+        - updateStatus                    # OrderService.updateStatus
+        - success                         # ApiResponse.success
+        # ── 2depth: updateStatus 내부 ──
+        - changeStatus                    # Order.changeStatus — 수동 메서드 (상태 전이 검증)
+        - from                            # OrderResponse.from
+        # ── 2depth: success 내부 ──
+        - now                             # Meta.now
+        - getMessage                      # ApiResponseCode.getMessage
+        # ── 3depth: changeStatus 내부 ──
+        - canTransitionTo                 # OrderStatus.canTransitionTo — 수동 메서드
+        # ── 3depth: OrderResponse.from 내부 ──
+        - getId                           # BaseEntity.getId — 수동 getter
+        # ── 4depth: OrderItemResponse.from 내부 ──
+        - getProduct                      # OrderItem.getProduct — 수동 getter
+        - getName                         # Product.getName — 수동 getter
+        - getQuantity                     # OrderItem.getQuantity — 수동 getter
+        - getUnitPrice                    # OrderItem.getUnitPrice — 수동 getter
+        - getSubtotal                     # OrderItem.getSubtotal — 수동 getter
+      external_calls:
+        # ── 직접 호출 (컨트롤러) ──
+        - ok                              # ResponseEntity.ok()
+        # ── 2depth: updateStatus 내부 ──
+        - findById                        # JpaRepository.findById
+        - orElseThrow                     # Optional.orElseThrow
+        # ── 3depth: OrderResponse.from 내부 ──
+        - getItems                        # Order Lombok @Getter
+        - stream                          # List.stream
+        - map                             # Stream.map
+        - toList                          # Stream.toList
+        - getMember                       # Order Lombok @Getter
+        - getEmail                        # Member Lombok @Getter
+        - getStatus                       # Order Lombok @Getter
+        - getTotalAmount                  # Order Lombok @Getter
+        # ── 5depth: getSubtotal 내부 ──
+        - multiply                        # BigDecimal.multiply
+        - valueOf                         # BigDecimal.valueOf
+        # ── 2depth+: now (Meta.now) 내부 ──
+        - now                             # Instant.now()
+        - randomUUID                      # UUID.randomUUID()
+        - substring                       # String.substring
+        - toEpochMilli                    # Instant.toEpochMilli
+        - toString                        # Object.toString
+
+    # GET /api/orders/reactive/{id} — 주문 리액티브 조회 (Mono)
+    getOrderReactive:
+      http_method: GET
+      endpoint_uri: "/api/orders/reactive/{id}"
+      params:
+        id: Long
+      param_annotations: {}
+      return_types:
+        - ApiResponse
+        - OrderResponse
+      param_types: []
+      internal_calls:
+        - getOrder                        # OrderService.getOrder — 람다 내부에서 호출
+        - success                         # ApiResponse.success — Mono.map 내부
+        # ── 2depth: getOrder 내부 ──
+        - from                            # OrderResponse.from
+        # ── 2depth: success 내부 ──
+        - now                             # Meta.now
+        - getMessage                      # ApiResponseCode.getMessage
+        # ── 3depth: OrderResponse.from 내부 ──
+        - getId                           # BaseEntity.getId — 수동 getter
+        # ── 4depth: OrderItemResponse.from 내부 ──
+        - getProduct                      # OrderItem.getProduct — 수동 getter
+        - getName                         # Product.getName — 수동 getter
+        - getQuantity                     # OrderItem.getQuantity — 수동 getter
+        - getUnitPrice                    # OrderItem.getUnitPrice — 수동 getter
+        - getSubtotal                     # OrderItem.getSubtotal — 수동 getter
+      external_calls:
+        # ── 직접 호출 (컨트롤러) ──
+        - fromCallable                    # Mono.fromCallable — 리액티브 래핑
+        - map                             # Mono.map — 결과 변환
+        - ok                              # ResponseEntity.ok()
+        # ── 2depth: getOrder 내부 ──
+        - findById                        # JpaRepository.findById
+        - orElseThrow                     # Optional.orElseThrow
+        # ── 3depth: OrderResponse.from 내부 ──
+        - getItems                        # Order Lombok @Getter
+        - stream                          # List.stream
+        - toList                          # Stream.toList
+        - getMember                       # Order Lombok @Getter
+        - getEmail                        # Member Lombok @Getter
+        - getStatus                       # Order Lombok @Getter
+        - getTotalAmount                  # Order Lombok @Getter
+        # ── 5depth: getSubtotal 내부 ──
+        - multiply                        # BigDecimal.multiply
+        - valueOf                         # BigDecimal.valueOf
+        # ── 2depth+: now (Meta.now) 내부 ──
+        - now                             # Instant.now()
+        - randomUUID                      # UUID.randomUUID()
+        - substring                       # String.substring
+        - toEpochMilli                    # Instant.toEpochMilli
+        - toString                        # Object.toString
+
+    # GET /api/orders/stream — 최근 주문 스트림 (SSE)
+    streamOrders:
+      http_method: GET
+      endpoint_uri: /api/orders/stream
+      params: {}                          # 파라미터 없음
+      param_annotations: {}
+      return_types:
+        - OrderResponse
+      param_types: []
+      internal_calls:
+        - streamRecentOrders              # OrderService.streamRecentOrders
+        # ── 2depth: streamRecentOrders 내부 ──
+        - findTop10ByOrderByCreatedAtDesc # OrderRepository — 사용자 정의 쿼리 메서드
+        - from                            # OrderResponse.from — 첫 번째 주문 변환
+        # ── 3depth: OrderResponse.from 내부 ──
+        - getId                           # BaseEntity.getId — 수동 getter
+        # ── 4depth: OrderItemResponse.from 내부 ──
+        - getProduct                      # OrderItem.getProduct — 수동 getter
+        - getName                         # Product.getName — 수동 getter
+        - getQuantity                     # OrderItem.getQuantity — 수동 getter
+        - getUnitPrice                    # OrderItem.getUnitPrice — 수동 getter
+        - getSubtotal                     # OrderItem.getSubtotal — 수동 getter
+      external_calls:
+        # ── 2depth: streamRecentOrders 내부 ──
+        - interval                        # Flux.interval — 2초 주기
+        - ofSeconds                       # Duration.ofSeconds
+        - map                             # Flux.map — 주문 변환
+        - filter                          # Flux.filter — null 제거
+        - isEmpty                         # List.isEmpty — 빈 목록 체크
+        - get                             # List.get(0) — 첫 번째 주문
+        # ── 3depth: OrderResponse.from 내부 ──
+        - getItems                        # Order Lombok @Getter
+        - stream                          # List.stream
+        - toList                          # Stream.toList
+        - getMember                       # Order Lombok @Getter
+        - getEmail                        # Member Lombok @Getter
+        - getStatus                       # Order Lombok @Getter
+        - getTotalAmount                  # Order Lombok @Getter
+        # ── 5depth: getSubtotal 내부 ──
+        - multiply                        # BigDecimal.multiply
+        - valueOf                         # BigDecimal.valueOf
+
+    # GET /api/orders/my — 내 주문 목록 (커스텀 어노테이션)
+    getMyOrders:
+      http_method: GET
+      endpoint_uri: /api/orders/my
+      params:
+        memberId: Long
+      param_annotations:
+        memberId: "@CurrentMember"        # 커스텀 어노테이션 (ArgumentResolver)
+      return_types:
+        - ApiResponse
+        - OrderResponse
+      param_types: []
+      internal_calls:
+        - getByMember                     # OrderService.getByMember
+        - success                         # ApiResponse.success
+        # ── 2depth: getByMember 내부 ──
+        - findByMemberId                  # OrderRepository.findByMemberId — 사용자 정의 쿼리
+        - from                            # OrderResponse::from — 메서드 레퍼런스
+        # ── 2depth: success 내부 ──
+        - now                             # Meta.now
+        - getMessage                      # ApiResponseCode.getMessage
+        # ── 3depth: OrderResponse.from 내부 ──
+        - getId                           # BaseEntity.getId — 수동 getter
+        # ── 4depth: OrderItemResponse.from 내부 ──
+        - getProduct                      # OrderItem.getProduct — 수동 getter
+        - getName                         # Product.getName — 수동 getter
+        - getQuantity                     # OrderItem.getQuantity — 수동 getter
+        - getUnitPrice                    # OrderItem.getUnitPrice — 수동 getter
+        - getSubtotal                     # OrderItem.getSubtotal — 수동 getter
+      external_calls:
+        # ── 직접 호출 (컨트롤러) ──
+        - ok                              # ResponseEntity.ok()
+        # ── 2depth: getByMember 내부 ──
+        - stream                          # List.stream
+        - map                             # Stream.map
+        - toList                          # Stream.toList
+        # ── 3depth: OrderResponse.from 내부 ──
+        - getItems                        # Order Lombok @Getter
+        - getMember                       # Order Lombok @Getter
+        - getEmail                        # Member Lombok @Getter
+        - getStatus                       # Order Lombok @Getter
+        - getTotalAmount                  # Order Lombok @Getter
+        # ── 5depth: getSubtotal 내부 ──
+        - multiply                        # BigDecimal.multiply
+        - valueOf                         # BigDecimal.valueOf
+        # ── 2depth+: now (Meta.now) 내부 ──
+        - now                             # Instant.now()
+        - randomUUID                      # UUID.randomUUID()
+        - substring                       # String.substring
+        - toEpochMilli                    # Instant.toEpochMilli
+        - toString                        # Object.toString
+
+    # GET /api/orders/{id}/invoice — 주문서 다운로드 (바이너리)
+    downloadInvoice:
+      http_method: GET
+      endpoint_uri: "/api/orders/{id}/invoice"
+      params:
+        id: Long
+      param_annotations: {}
+      return_types: []                    # ResponseEntity<byte[]> — TYPE 노드 없음
+      param_types: []
+      internal_calls:
+        - generateInvoice                 # OrderService.generateInvoice
+        # ── 2depth: generateInvoice 내부 ──
+        - getId                           # BaseEntity.getId — 수동 getter (order.getId())
+      external_calls:
+        # ── 직접 호출 (컨트롤러) ──
+        - ok                              # ResponseEntity.ok()
+        - header                          # ResponseEntity.ok().header(CONTENT_DISPOSITION)
+        - body                            # .body(bytes)
+        # ── 2depth: generateInvoice 내부 ──
+        - findById                        # JpaRepository.findById
+        - orElseThrow                     # Optional.orElseThrow
+        - getTotalAmount                  # Order Lombok @Getter
+        - getBytes                        # String.getBytes
+
+
+  # ----------------------------------------------------------------
+  #  6. NotificationController — 알림 (SSE + 벌크)
+  #     클래스: @RestController @RequestMapping("/api/notifications")
+  # ----------------------------------------------------------------
+  NotificationController:
+    class_level:
+      fields:
+        - notificationService             # NotificationService — 알림 비즈니스 로직
+
+    # GET /api/notifications/subscribe — SSE 구독
+    subscribe:
+      http_method: GET
+      endpoint_uri: /api/notifications/subscribe
+      params:
+        memberId: Long
+      param_annotations: {}
+      return_types: []                    # SseEmitter — TYPE 노드 없음
+      param_types: []
+      internal_calls:
+        - createEmitter                   # NotificationService.createEmitter
+      external_calls:
+        # ── 2depth: createEmitter 내부 ──
+        - put                             # Map.put — emitters에 등록
+        - onCompletion                    # SseEmitter.onCompletion — 완료 콜백
+        - onTimeout                       # SseEmitter.onTimeout — 타임아웃 콜백
+        - remove                          # Map.remove — 콜백 내부 emitter 제거
+
+    # POST /api/notifications/send — 벌크 알림 발송
+    sendNotification:
+      http_method: POST
+      endpoint_uri: /api/notifications/send
+      params:
+        request: NotificationRequest
+      param_annotations: {}
+      return_types: []                    # void — 200 OK (ResponseEntity<Void>)
+      param_types:
+        - NotificationRequest
+      internal_calls:
+        - sendBulk                        # NotificationService.sendBulk
+        # ── 2depth: sendBulk 내부 ──
+        - sendToMember                    # NotificationService.sendToMember — private
+      external_calls:
+        # ── 직접 호출 (컨트롤러) ──
+        - ok                              # ResponseEntity.ok()
+        - build                           # ResponseEntity.BodyBuilder.build()
+        - memberIds                       # NotificationRequest record accessor
+        - message                         # NotificationRequest record accessor
+        # ── 3depth: sendToMember 내부 ──
+        - get                             # Map.get — emitter 조회
+        - send                            # SseEmitter.send — SSE 전송
+        - event                           # SseEmitter.event — 이벤트 빌더
+        - name                            # SseEmitter.EventBuilder.name
+        - data                            # SseEmitter.EventBuilder.data
+        - remove                          # Map.remove — emitter 제거
+        - warn                            # log.warn — 발송 실패 로깅
+
+
+# ============================================================
+#  DTO / VO 필드 기대값
+# ============================================================
+#
+#  각 DTO의 필드명, 타입, 제약조건(@Validation 어노테이션)을 정의합니다.
+#  constraint가 빈 문자열("")이면 검증 어노테이션이 없는 필드입니다.
+# ============================================================
+dto_fields:
+
+  # ---- Auth 관련 DTO ----
+
+  # 로그인 요청
+  LoginRequest:
+    email:
+      type: String
+      constraint: "@NotBlank @Email"      # 빈값 불가 + 이메일 형식
+    password:
+      type: String
+      constraint: "@NotBlank"
+
+  # JWT 토큰 응답
+  TokenResponse:
+    accessToken:
+      type: String
+      constraint: ""
+    tokenType:
+      type: String
+      constraint: ""
+    expiresIn:
+      type: long                          # primitive long
+      constraint: ""
+
+  # ---- Member 관련 DTO ----
+
+  # 회원 생성 요청
+  MemberCreateRequest:
+    email:
+      type: String
+      constraint: "@NotBlank @Email"
+    firstName:
+      type: String
+      constraint: "@NotBlank"
+    lastName:
+      type: String
+      constraint: "@NotBlank"
+    password:
+      type: String
+      constraint: ""
+    addresses:
+      type: "List<Address>"              # 중첩 VO 리스트
+      constraint: "@Valid"               # 리스트 내 각 Address도 검증
+
+  # 회원 응답
+  MemberResponse:
+    id:
+      type: Long                          # wrapper Long
+      constraint: ""
+    email:
+      type: String
+      constraint: ""
+    fullName:
+      type: String
+      constraint: ""
+    grade:
+      type: MemberGrade                   # Enum 타입
+      constraint: ""
+    tags:
+      type: "List<String>"
+      constraint: ""
+    active:
+      type: boolean                       # primitive boolean
+      constraint: ""
+
+  # 주소 VO (Value Object)
+  Address:
+    street:
+      type: String
+      constraint: ""
+    city:
+      type: String
+      constraint: ""
+    zipCode:
+      type: String
+      constraint: ""
+
+  # ---- Product 관련 DTO ----
+
+  # 상품 생성 요청 (ProductDto.Create 내부 클래스)
+  Create:
+    name:
+      type: String
+      constraint: "@NotBlank"
+    price:
+      type: BigDecimal
+      constraint: "@NotNull"
+    description:
+      type: String
+      constraint: ""
+    categoryId:
+      type: Long
+      constraint: ""
+    stockQuantity:
+      type: int                           # primitive int
+      constraint: ""
+
+  # 상품 수정 요청 (ProductDto.Update 내부 클래스)
+  Update:
+    name:
+      type: String
+      constraint: ""
+    price:
+      type: BigDecimal
+      constraint: ""
+
+  # 상품 응답 (ProductDto.Response 내부 클래스)
+  Response:
+    id:
+      type: Long
+      constraint: ""
+    name:
+      type: String
+      constraint: ""
+    price:
+      type: BigDecimal
+      constraint: ""
+    description:
+      type: String
+      constraint: ""
+    categoryName:
+      type: String
+      constraint: ""
+    stockQuantity:
+      type: int
+      constraint: ""
+    active:
+      type: boolean
+      constraint: ""
+
+  # ---- Order 관련 DTO ----
+
+  # 주문 생성 요청
+  OrderCreateRequest:
+    memberId:
+      type: Long
+      constraint: "@NotNull"
+    items:
+      type: "List<OrderItemRequest>"
+      constraint: "@Valid"               # 리스트 내 각 항목도 검증
+    recipientName:
+      type: String
+      constraint: ""
+    phone:
+      type: String
+      constraint: ""
+    deliveryAddress:
+      type: Address
+      constraint: "@Valid"               # 중첩 VO 검증
+
+  # 주문 항목 요청
+  OrderItemRequest:
+    productId:
+      type: Long
+      constraint: "@NotNull"
+    quantity:
+      type: int
+      constraint: "@Min(1)"             # 최소 1개
+
+  # 주문 응답
+  OrderResponse:
+    id:
+      type: Long
+      constraint: ""
+    memberEmail:
+      type: String
+      constraint: ""
+    status:
+      type: OrderStatus                   # Enum 타입
+      constraint: ""
+    items:
+      type: "List<OrderItemResponse>"
+      constraint: ""
+    totalAmount:
+      type: BigDecimal
+      constraint: ""
+
+  # 주문 항목 응답
+  OrderItemResponse:
+    productName:
+      type: String
+      constraint: ""
+    quantity:
+      type: int
+      constraint: ""
+    unitPrice:
+      type: BigDecimal
+      constraint: ""
+    subtotal:
+      type: BigDecimal
+      constraint: ""
+
+  # ---- Notification 관련 DTO ----
+
+  # 알림 발송 요청
+  NotificationRequest:
+    memberIds:
+      type: "List<Long>"
+      constraint: ""
+    message:
+      type: String
+      constraint: ""
