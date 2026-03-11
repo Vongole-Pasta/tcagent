@@ -5,7 +5,7 @@ class HappyCaseQueries:
     # 1. METHOD -> (HAS_PARAMETER|RETURNS) -> TYPE (직접 관계)
     # 2. METHOD -> (CONTAINS) -> PARAMETER -> (OF_TYPE) -> TYPE (실제 스캔 구조)
     RETRIEVER_NODE_GET_DTO_STRUCTURE = """
-    MATCH (m:METHOD {signature: $signature})
+    MATCH (m:METHOD {qualname: $qualname})
     OPTIONAL MATCH (m)-[:HAS_PARAMETER|RETURNS]->(root1:TYPE)
     OPTIONAL MATCH (m)-[:CONTAINS]->(:PARAMETER)-[:OF_TYPE]->(root2:TYPE)
     WITH DISTINCT root1, root2
