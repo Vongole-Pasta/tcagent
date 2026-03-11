@@ -87,7 +87,8 @@ class HappyCaseAgentNodes:
         """
         group = state["group"]
         methods_context = []
-        all_dtos = {}
+        request_dtos = {}
+        response_dtos = {}
 
         for qual in group["endpoint_qualnames"]:
 
@@ -111,10 +112,16 @@ class HappyCaseAgentNodes:
                 "returnType": method_node.get("return_type")
             })
             # _collect_dto_info를 통해 파라미터/반환 타입 및 중첩 DTO들의 필드 구조를 수집합니다.
-            self._collect_dto_info(qual, all_dtos)
+            self._collect_dto_info(qual, request_dtos, response_dtos)
 
         return {
-            "context": {"methods": methods_context, "dto_context": all_dtos}
+            "context": {
+                "methods": methods_context, 
+                "dto_context": {
+                    "request": request_dtos,
+                    "response": response_dtos
+                }
+            }
         }
 
     def generator_worker_node(self, state: WorkerState):
@@ -164,13 +171,20 @@ class HappyCaseAgentNodes:
         
         return {"scenarios": scenarios}
 
-    def _collect_dto_info(self, method_qualname, dtos_context):
+    def _collect_dto_info(self, method_qualname, request_dtos, response_dtos):
         """
-        특정 메서드의 파라미터/반환 타입 및 중첩 DTO의 필드 구조를 수집합니다.
+        특정 메서드의 파라미터(Request) 및 반환 타입(Response) 중첩 DTO의 필드 구조를 분리하여 수집합니다.
         Cypher 홉(Hop) 수 10은 'TYPE-FIELD-TYPE' 구조를 고려할 때 최대 5단계의 중첩을 의미합니다.
-        결과는 dtos_context 딕셔너리에 {타입명: [{name, type}, ...]} 형태로 누적됩니다.
         """
-        results = self.db_client.execute_query(HappyCaseQueries.RETRIEVER_NODE_GET_DTO_STRUCTURE, {"qualname": method_qualname})
+        # Request DTO 조회
+        req_results = self.db_client.execute_query(HappyCaseQueries.RETRIEVER_NODE_GET_REQUEST_DTO_STRUCTURE, {"qualname": method_qualname})
+        self._populate_dtos(req_results, request_dtos)
+
+        # Response DTO 조회
+        res_results = self.db_client.execute_query(HappyCaseQueries.RETRIEVER_NODE_GET_RESPONSE_DTO_STRUCTURE, {"qualname": method_qualname})
+        self._populate_dtos(res_results, response_dtos)
+
+    def _populate_dtos(self, results, dtos_context):
         for row in results:
             t_name = row["type_name"]
             if t_name not in dtos_context:
