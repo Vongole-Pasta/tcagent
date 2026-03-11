@@ -39,9 +39,10 @@ class GraphWriter:
 
         실행 순서 (의존성 기반):
             1. AS-IS status — 변경 없는 메서드의 status를 'AS-IS'로 갱신
-            2. FILE 노드    — TYPE/METHOD가 FILE에 CONTAINS로 연결되므로 먼저 기록
+            2. FILE 노드    — 모든 FILE 노드 기록
             3. 노드 (dirty)  — NEW/MODIFIED 파일의 TYPE/FIELD/METHOD만 기록
-            4. 엣지          — 변경분의 CALLS/HAS_PARAMETER/RETURNS 기록
+            4. 구조 엣지     — CONTAINS (FILE→TYPE, TYPE→FIELD, TYPE→METHOD, FIELD→TYPE)
+            5. 의미 엣지     — CALLS, HAS_PARAMETER, RETURNS
 
         증분 분석 최적화:
             dirty set에 포함된 노드(NEW/MODIFIED)만 기록합니다.
@@ -52,9 +53,9 @@ class GraphWriter:
         # ── 1. 변경 없는 메서드 status 갱신 (대시보드 표시용) ──
         self._update_asis_status(unchanged, project)
 
-        # ── 2. FILE 노드 저장 (TYPE/METHOD의 CONTAINS 연결 선행 조건) ──
+        # ── 2. FILE 노드 저장 ──
         if changed:
-            self._flush_files(changed)
+            self._flush_file_nodes(changed)
 
         # ── 3. 노드 저장 (변경분만) ──
         dirty_types = {qn: t for qn, t in registry.types.items() if qn in registry.dirty_types}
@@ -63,20 +64,24 @@ class GraphWriter:
 
         logger.info(
             f"Writing to DB: {len(unchanged or [])} unchanged, {len(changed or [])} changed, "
-            f"{len(dirty_types)} types, {len(dirty_fields)} fields, "
-            f"{len(dirty_methods)} methods, "
-            f"{len(resolved.internal_calls) + len(resolved.external_calls)} calls, "
-            f"{len(resolved.params)} params, {len(resolved.returns)} returns"
+            f"{len(dirty_types)} type nodes, {len(dirty_fields)} field nodes, "
+            f"{len(dirty_methods)} method nodes, "
+            f"{len(resolved.internal_calls_edges) + len(resolved.external_calls_edges)} calls edges, "
+            f"{len(resolved.has_parameter_edges)} has_parameter edges, {len(resolved.returns_edges)} returns edges, "
+            f"{len(resolved.contains_edges)} field → type contains"
         )
 
-        self._flush_types(dirty_types)
-        self._flush_fields(dirty_fields)
-        self._flush_methods(dirty_methods)
+        self._flush_type_nodes(dirty_types)
+        self._flush_field_nodes(dirty_fields)
+        self._flush_method_nodes(dirty_methods)
 
-        # ── 4. 엣지 저장 (resolved에는 변경분만 있으므로 필터 불필요) ──
-        self._flush_parameter_edges(resolved.params)
-        self._flush_return_edges(resolved.returns)
-        self._flush_calls(resolved.internal_calls, resolved.external_calls)
+        # ── 4. 구조 엣지 (CONTAINS 4종) ──
+        self._flush_contains_edges(dirty_types, dirty_fields, dirty_methods, resolved.contains_edges)
+
+        # ── 5. 의미 엣지 ──
+        self._flush_parameter_edges(resolved.has_parameter_edges)
+        self._flush_return_edges(resolved.returns_edges)
+        self._flush_calls_edges(resolved.internal_calls_edges, resolved.external_calls_edges)
 
         logger.info("Write complete.")
 
@@ -84,7 +89,7 @@ class GraphWriter:
     # FILE Flush
     # -----------------------------------------------------------------------
 
-    def _flush_files(self, batch: list[dict]):
+    def _flush_file_nodes(self, batch: list[dict]):
         """FILE 노드를 UNWIND 배치로 일괄 DB에 기록합니다."""
         try:
             self.connector.execute_query(
@@ -97,7 +102,7 @@ class GraphWriter:
     # 노드 Flush
     # -----------------------------------------------------------------------
 
-    def _flush_types(self, types: dict[str, ParsedType]):
+    def _flush_type_nodes(self, types: dict[str, ParsedType]):
         """TYPE 노드를 UNWIND 배치로 일괄 DB에 기록합니다."""
         if not types:
             return
@@ -116,7 +121,7 @@ class GraphWriter:
         except Exception as e:
             logger.error(f"Failed to batch upsert TYPEs: {e}")
 
-    def _flush_fields(self, fields: dict[str, ParsedField]):
+    def _flush_field_nodes(self, fields: dict[str, ParsedField]):
         """FIELD 노드를 UNWIND 배치로 일괄 DB에 기록합니다."""
         if not fields:
             return
@@ -135,7 +140,7 @@ class GraphWriter:
         except Exception as e:
             logger.error(f"Failed to batch upsert FIELDs: {e}")
 
-    def _flush_methods(self, methods: dict[str, ParsedMethod]):
+    def _flush_method_nodes(self, methods: dict[str, ParsedMethod]):
         """METHOD 노드를 UNWIND 배치로 일괄 DB에 기록합니다."""
         if not methods:
             return
@@ -160,7 +165,68 @@ class GraphWriter:
             logger.error(f"Failed to batch upsert METHODs: {e}")
 
     # -----------------------------------------------------------------------
-    # 엣지 Flush (UNWIND 배치)
+    # 구조 엣지 Flush (CONTAINS 4종)
+    # -----------------------------------------------------------------------
+
+    def _flush_contains_edges(self, types: dict[str, ParsedType],
+                              fields: dict[str, ParsedField],
+                              methods: dict[str, ParsedMethod],
+                              field_type_edges: list[dict]):
+        """CONTAINS 구조 엣지 4종을 DB에 기록합니다."""
+        self._flush_file_contains_type_edges(types)
+        self._flush_type_contains_field_edges(fields)
+        self._flush_type_contains_method_edges(methods)
+        self._flush_field_contains_type_edges(field_type_edges)
+
+    def _flush_file_contains_type_edges(self, types: dict[str, ParsedType]):
+        """FILE→CONTAINS→TYPE 엣지를 DB에 기록합니다."""
+        if not types:
+            return
+        batch = [{"file_path": t.file_path, "qualname": t.qualname} for t in types.values()]
+        try:
+            self.connector.execute_query(
+                CypherQueries.BATCH_UPSERT_FILE_CONTAINS_TYPE, {"batch": batch}
+            )
+        except Exception as e:
+            logger.error(f"Failed to flush FILE→CONTAINS→TYPE: {e}")
+
+    def _flush_type_contains_field_edges(self, fields: dict[str, ParsedField]):
+        """TYPE→CONTAINS→FIELD 엣지를 DB에 기록합니다."""
+        if not fields:
+            return
+        batch = [{"type_qualname": f.type_qualname, "qualname": f.qualname} for f in fields.values()]
+        try:
+            self.connector.execute_query(
+                CypherQueries.BATCH_UPSERT_TYPE_CONTAINS_FIELD, {"batch": batch}
+            )
+        except Exception as e:
+            logger.error(f"Failed to flush TYPE→CONTAINS→FIELD: {e}")
+
+    def _flush_type_contains_method_edges(self, methods: dict[str, ParsedMethod]):
+        """TYPE→CONTAINS→METHOD 엣지를 DB에 기록합니다."""
+        if not methods:
+            return
+        batch = [{"class_qualname": m.class_qualname, "qualname": m.qualname} for m in methods.values()]
+        try:
+            self.connector.execute_query(
+                CypherQueries.BATCH_UPSERT_TYPE_CONTAINS_METHOD, {"batch": batch}
+            )
+        except Exception as e:
+            logger.error(f"Failed to flush TYPE→CONTAINS→METHOD: {e}")
+
+    def _flush_field_contains_type_edges(self, batch: list[dict]):
+        """FIELD→CONTAINS→TYPE 엣지를 DB에 기록합니다."""
+        if not batch:
+            return
+        try:
+            self.connector.execute_query(
+                CypherQueries.BATCH_UPSERT_FIELD_CONTAINS_TYPE, {"batch": batch}
+            )
+        except Exception as e:
+            logger.error(f"Failed to flush FIELD→CONTAINS→TYPE: {e}")
+
+    # -----------------------------------------------------------------------
+    # 의미 엣지 Flush (UNWIND 배치)
     # -----------------------------------------------------------------------
 
     def _flush_parameter_edges(self, batch: list[dict]):
@@ -185,7 +251,7 @@ class GraphWriter:
         except Exception as e:
             logger.error(f"Failed to batch upsert RETURNS edges: {e}")
 
-    def _flush_calls(self, resolved_batch: list[dict], external_batch: list[dict]):
+    def _flush_calls_edges(self, resolved_batch: list[dict], external_batch: list[dict]):
         """CALLS 엣지를 DB에 기록합니다."""
         if resolved_batch:
             try:

@@ -79,3 +79,7 @@ frontend/yarn-error.log*
 # LangGraph
 .langgraph_api/
 langgraph.json
+
+# ETC
+CLAUDE.md
+.claude/settings.json
