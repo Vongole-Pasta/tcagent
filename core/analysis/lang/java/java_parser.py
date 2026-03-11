@@ -278,11 +278,14 @@ class JavaParser:
                 if name_node and type_node:
                     field_name = source_code[name_node.start_byte:name_node.end_byte].decode("utf-8")
                     field_type_str = source_code[type_node.start_byte:type_node.end_byte].decode("utf-8")
+                    # Record 파라미터의 어노테이션을 constraint로 추출 (예: @NotBlank @Email)
+                    constraint = self._extract_annotations(param, source_code)
                     result.fields.append(ParsedField(
                         qualname=f"{type_qualname}.{field_name}",
                         type_qualname=type_qualname,
                         name=field_name,
                         field_type=self._build_typeinfo(field_type_str),
+                        constraint=constraint,
                     ))
 
     # 애노테이션 처리 (FIELD.constraint, METHOD.params.annotation 등)
