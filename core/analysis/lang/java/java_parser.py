@@ -539,15 +539,15 @@ class JavaParser:
         body_node = method_node.child_by_field_name("body")
         if not body_node:
             return
-        calls: list[tuple[str, str, int, str, str]] = []
+        calls: list[tuple[str, str, int, list[str], str]] = []
         self._extract_method_calls(body_node, source_code, calls)
-        for target_name, obj_name, arg_count, recv_method, recv_object in calls:
+        for target_name, obj_name, arg_count, recv_chain, recv_object in calls:
             result.calls.append(ParsedCallEdge(
                 caller_qualname=qualname,
                 target_method_name=target_name,
                 object_name=obj_name,
                 arg_count=arg_count,
-                receiver_method=recv_method,
+                receiver_chain=recv_chain,
                 receiver_object=recv_object,
             ))
 
@@ -591,7 +591,11 @@ class JavaParser:
     def _process_invocation(self, invocation_node, source_code: bytes, calls: list):
         """
         하나의 method_invocation 노드에서 호출 정보를 추출합니다.
-        인자 개수와 체이닝 수신 정보도 함께 추출합니다.
+        체이닝은 AST를 재귀적으로 언와인딩하여 무한 뎁스까지 추적합니다.
+
+        예: a.getUser().getAddress().getCity()
+          AST: method_invocation(method_invocation(method_invocation(a, getUser), getAddress), getCity)
+          → receiver_chain=["getUser", "getAddress"], receiver_object="a", target="getCity"
         """
         obj_node = invocation_node.child_by_field_name("object")
         name_node = invocation_node.child_by_field_name("name")
@@ -605,23 +609,48 @@ class JavaParser:
         arg_count = self._count_arguments(args_node) if args_node else 0
 
         obj_name = ""
-        receiver_method = ""
+        receiver_chain: list[str] = []
         receiver_object = ""
 
         if obj_node:
             if obj_node.type == "method_invocation":
-                # 체이닝: a.getUser().getName()
-                # → getName()의 수신 객체는 getUser()의 리턴값
-                chain_name = obj_node.child_by_field_name("name")
-                chain_obj = obj_node.child_by_field_name("object")
-                if chain_name:
-                    receiver_method = source_code[chain_name.start_byte:chain_name.end_byte].decode("utf-8")
-                if chain_obj and chain_obj.type != "method_invocation":
-                    receiver_object = source_code[chain_obj.start_byte:chain_obj.end_byte].decode("utf-8")
+                # 체이닝: AST를 루트까지 재귀적으로 언와인딩
+                receiver_object, receiver_chain = self._unwind_chain(obj_node, source_code)
             else:
                 obj_name = source_code[obj_node.start_byte:obj_node.end_byte].decode("utf-8")
 
-        calls.append((method_name, obj_name, arg_count, receiver_method, receiver_object))
+        calls.append((method_name, obj_name, arg_count, receiver_chain, receiver_object))
+
+    def _unwind_chain(self, invocation_node, source_code: bytes) -> tuple[str, list[str]]:
+        """
+        체이닝된 method_invocation AST를 루트까지 재귀적으로 언와인딩합니다.
+
+        예: a.getUser().getAddress() (이것이 getCity()의 obj_node)
+          → ("a", ["getUser", "getAddress"])
+
+        Returns:
+            (root_object, chain) 튜플
+            - root_object: 체이닝의 루트 객체명 (예: "a")
+            - chain: 메서드 호출 순서 (루트→말단). 예: ["getUser", "getAddress"]
+        """
+        chain: list[str] = []
+        current = invocation_node
+
+        # method_invocation을 따라 올라가며 메서드명 수집
+        while current and current.type == "method_invocation":
+            name_node = current.child_by_field_name("name")
+            if name_node:
+                chain.append(source_code[name_node.start_byte:name_node.end_byte].decode("utf-8"))
+            current = current.child_by_field_name("object")
+
+        # current는 체이닝의 루트 (identifier, field_access 등)
+        root_object = ""
+        if current:
+            root_object = source_code[current.start_byte:current.end_byte].decode("utf-8")
+
+        # chain은 말단→루트 순으로 수집되었으므로 뒤집어서 루트→말단 순으로
+        chain.reverse()
+        return root_object, chain
 
     def _process_method_reference(self, ref_node, source_code: bytes, calls: list):
         """
@@ -649,7 +678,7 @@ class JavaParser:
         if obj_text == "this":
             obj_text = ""
 
-        calls.append((method_name, obj_text, 0, "", ""))
+        calls.append((method_name, obj_text, 0, [], ""))
 
     def _count_arguments(self, args_node) -> int:
         """argument_list 노드에서 인자 개수를 셉니다."""
