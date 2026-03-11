@@ -106,7 +106,6 @@ class HappyCaseAgentNodes:
 
             methods_context.append({
                 "name": method_node.get("name"),
-                "signature": sig,
                 "source": method_node.get("source"),
                 "params": params_info,
                 "returnType": method_node.get("return_type")
