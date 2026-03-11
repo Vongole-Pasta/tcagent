@@ -479,10 +479,12 @@ class JavaParser:
     # -----------------------------------------------------------------------
 
     def _extract_method_calls(self, node, source_code: bytes, calls: list):
-        """AST를 재귀 순회하며 메서드 호출(method_invocation)을 수집합니다."""
+        """AST를 재귀 순회하며 메서드 호출(method_invocation)과 메서드 참조(method_reference)를 수집합니다."""
         for child in node.children:
             if child.type == "method_invocation":
                 self._process_invocation(child, source_code, calls)
+            elif child.type == "method_reference": # :: 로 참조되는 메서드 감지
+                self._process_method_reference(child, source_code, calls)
             # 내부 클래스/메서드 선언은 별도 스코프이므로 진입하지 않음
             if child.type not in ("class_declaration", "interface_declaration", "method_declaration"):
                 self._extract_method_calls(child, source_code, calls)
@@ -521,6 +523,34 @@ class JavaParser:
                 obj_name = source_code[obj_node.start_byte:obj_node.end_byte].decode("utf-8")
 
         calls.append((method_name, obj_name, arg_count, receiver_method, receiver_object))
+
+    def _process_method_reference(self, ref_node, source_code: bytes, calls: list):
+        """
+        메서드 참조(::) 노드에서 호출 정보를 추출합니다.
+        예: Member::recordLoginFailure, this::toResponse, ProductDto.Response::from
+        AST 구조: method_reference → identifier(객체) :: identifier(메서드)
+        """
+        # :: 기준 왼쪽(객체/타입)과 오른쪽(메서드명) 추출
+        # tree-sitter에서 method_reference의 children: [object, "::", name]
+        obj_text = ""
+        method_name = ""
+        for child in ref_node.children:
+            if child.type == "::":
+                continue
+            # 마지막 identifier가 메서드명, 그 앞이 객체/타입
+            if not method_name and not obj_text:
+                obj_text = source_code[child.start_byte:child.end_byte].decode("utf-8")
+            elif obj_text and not method_name:
+                method_name = source_code[child.start_byte:child.end_byte].decode("utf-8")
+
+        if not method_name:
+            return
+
+        # this 참조는 obj_name 비워둠 (자기 클래스 내부 호출)
+        if obj_text == "this":
+            obj_text = ""
+
+        calls.append((method_name, obj_text, 0, "", ""))
 
     def _count_arguments(self, args_node) -> int:
         """argument_list 노드에서 인자 개수를 셉니다."""
