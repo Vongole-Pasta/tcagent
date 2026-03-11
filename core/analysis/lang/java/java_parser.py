@@ -292,6 +292,12 @@ class JavaParser:
         (예: "@NotBlank(message="....")", "@PathVariable(value="xxx")" 등)
         """
         modifiers_node = node.child_by_field_name("modifiers")
+        # formal_parameter 등 일부 노드는 modifiers가 named field가 아니므로 children 순회 fallback
+        if not modifiers_node:
+            for child in node.children:
+                if child.type == "modifiers":
+                    modifiers_node = child
+                    break
         if not modifiers_node:
             return ""
 
@@ -302,7 +308,7 @@ class JavaParser:
                     source_code[child.start_byte:child.end_byte].decode("utf-8")
                 )
 
-        return ", ".join(annotations) if annotations else ""
+        return " ".join(annotations) if annotations else ""
 
     # 상위 타입 추출 (extends + implements → supertypes 통합)
     def _extract_supertypes(self, node, source_code: bytes) -> list[str]:
