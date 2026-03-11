@@ -68,6 +68,8 @@ class ParsedMethod:
     scan_id: Optional[str] = None
     endpoint_uri: str = ""  # REST 엔드포인트 URL
     http_method: str = ""   # HTTP 메서드
+    local_vars: dict[str, str] = field(default_factory=dict)  # 로컬 변수 타입 맵 (변수명 → 타입명). EdgeLinker 해석용, DB 미저장.
+    unresolved_vars: dict[str, tuple[str, str]] = field(default_factory=dict)  # var 선언 중 메서드 리턴타입 추론 필요 (변수명 → (메서드명, 객체명)). EdgeLinker가 해석.
 
     @classmethod
     def from_db_record(cls, record: dict) -> "ParsedMethod":

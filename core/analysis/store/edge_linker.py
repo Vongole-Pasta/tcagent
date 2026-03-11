@@ -81,6 +81,7 @@ class EdgeLinker:
         2. 엣지 배치 생성 (DB 기록용 dict 리스트)
         """
         self.resolve_supertype_qualnames()
+        self._resolve_unresolved_vars()
 
         resolved_calls, external_calls = self.resolve_calls(self._registry.calls)
 
@@ -112,6 +113,36 @@ class EdgeLinker:
                     parent_q = self._resolve_type_in_file(parent_name, t.file_path)
                     resolved.append(parent_q or parent_name)   # 해석 실패 시 원본 유지
             t.supertypes = resolved
+
+    def _resolve_unresolved_vars(self):
+        """
+        var 선언 중 메서드 리턴타입 추론이 필요한 변수를 해석합니다.
+        unresolved_vars의 (메서드명, 객체명)으로 가상 호출을 해석하고,
+        해당 메서드의 리턴타입을 local_vars에 추가합니다.
+        CALLS 해석 전에 실행되어야 합니다.
+        """
+        for method in self._registry.methods.values():
+            if not method.unresolved_vars:
+                continue
+
+            for var_name, (target_method, obj_name) in method.unresolved_vars.items():
+                # 가상 ParsedCallEdge를 만들어 기존 해석 로직 재활용
+                virtual_call = ParsedCallEdge(
+                    caller_qualname=method.qualname,
+                    target_method_name=target_method,
+                    object_name=obj_name,
+                )
+                resolved_qualname = self._resolve_call_target(virtual_call)
+                if not resolved_qualname:
+                    continue
+
+                # 해석된 메서드의 리턴타입에서 첫 번째 타입명 추출
+                resolved_method = self._registry.methods.get(resolved_qualname)
+                if not resolved_method or not resolved_method.return_type:
+                    continue
+                layout = resolved_method.return_type.get("layout", [])
+                if layout:
+                    method.local_vars[var_name] = layout[0]
 
     # -----------------------------------------------------------------------
     # CALLS 해석
@@ -218,6 +249,19 @@ class EdgeLinker:
                 field_type_name = field.field_type["layout"][0]
                 type_q = (self._resolve_type_in_file(field_type_name, caller_file)
                           if caller_file else self._resolve_type_name_global(field_type_name))
+                if type_q:
+                    methods = self._find_method_in_hierarchy(type_q, call.target_method_name)
+                    return self._pick_by_arg_count(methods, call.arg_count)
+
+        # Case 1c: obj_name이 로컬 변수명 → 로컬 변수의 타입에서 탐색
+        #   예: Member member = repo.find(...); 
+        #      member.recordLogin()
+        #   → obj="member", local_vars={"member": "Member"} → Member 타입에서 recordLogin 탐색
+        if caller_method and caller_method.local_vars:
+            local_type_name = caller_method.local_vars.get(obj)
+            if local_type_name:
+                type_q = (self._resolve_type_in_file(local_type_name, caller_file)
+                          if caller_file else self._resolve_type_name_global(local_type_name))
                 if type_q:
                     methods = self._find_method_in_hierarchy(type_q, call.target_method_name)
                     return self._pick_by_arg_count(methods, call.arg_count)

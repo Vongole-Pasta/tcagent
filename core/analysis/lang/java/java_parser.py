@@ -409,6 +409,9 @@ class JavaParser:
         # METHOD.qualname 조립 (패키지명.클래스명.함수이름(매개변수 타입, ..))
         qualname = f"{class_qualname}.{method_name}({','.join(param_types)})"
 
+        # METHOD.local_vars 추출 (로컬 변수 타입 맵 — EdgeLinker가 호출 해석 시 참조)
+        local_vars, unresolved_vars = self._extract_local_vars(method_node, source_code)
+
         # ParsedMethod로 result.methods에 추가
         result.methods.append(ParsedMethod(
             qualname=qualname,
@@ -422,12 +425,108 @@ class JavaParser:
             scan_id=scan_id,
             endpoint_uri=endpoint_uri,
             http_method=http_method,
+            local_vars=local_vars,
+            unresolved_vars=unresolved_vars,
         ))
 
         # --- 엣지 정보 수집 ---
         self._collect_call_edges(method_node, source_code, qualname, result)
         self._collect_parameter_edges(params, qualname, result)
         self._collect_return_edge(return_type, qualname, result)
+
+    # -----------------------------------------------------------------------
+    # 로컬 변수 타입 맵 추출
+    # -----------------------------------------------------------------------
+
+    def _extract_local_vars(
+        self, method_node, source_code: bytes,
+    ) -> tuple[dict[str, str], dict[str, tuple[str, str]]]:
+        """
+        메서드 바디의 local_variable_declaration에서 로컬 변수 타입 정보를 추출합니다.
+
+        Returns:
+            (local_vars, unresolved_vars) 튜플
+            - local_vars: 타입이 확정된 변수 {변수명 → 타입명}
+            - unresolved_vars: 메서드 리턴타입 추론 필요 {변수명 → (메서드명, 객체명)}
+        """
+        body_node = method_node.child_by_field_name("body")
+        if not body_node:
+            return {}, {}
+
+        local_vars: dict[str, str] = {}
+        unresolved_vars: dict[str, tuple[str, str]] = {}
+        self._scan_local_vars(body_node, source_code, local_vars, unresolved_vars)
+        return local_vars, unresolved_vars
+
+    def _scan_local_vars(
+        self, node, source_code: bytes,
+        local_vars: dict[str, str],
+        unresolved_vars: dict[str, tuple[str, str]],
+    ):
+        """AST를 재귀 순회하며 지역 변수 선언을 수집합니다."""
+        for child in node.children:
+            if child.type == "local_variable_declaration":
+                type_node = child.child_by_field_name("type")
+                if not type_node:
+                    continue
+                type_str = source_code[type_node.start_byte:type_node.end_byte].decode("utf-8")
+                # var 키워드 → 우변 패턴에 따라 타입 추론 시도
+                if type_str == "var":
+                    self._infer_var_types(child, source_code, local_vars, unresolved_vars)
+                    continue
+                # 제네릭 제거한 단순 타입명 (예: List<Member> → List)
+                simple_type = self.generic_pattern.sub("", type_str)
+                for decl in child.children:
+                    if decl.type == "variable_declarator":
+                        name_node = decl.child_by_field_name("name")
+                        if name_node:
+                            var_name = source_code[name_node.start_byte:name_node.end_byte].decode("utf-8")
+                            local_vars[var_name] = simple_type
+            # 내부 클래스/람다 선언은 일단 진입하지 않음
+            elif child.type not in ("class_declaration", "lambda_expression"):
+                self._scan_local_vars(child, source_code, local_vars, unresolved_vars)
+
+    def _infer_var_types(
+        self, decl_node, source_code: bytes,
+        local_vars: dict[str, str],
+        unresolved_vars: dict[str, tuple[str, str]],
+    ):
+        """
+        var 타입으로 된 지역변수의 타입을 추론합니다.
+        1. 가능한 케이스: 
+        인스턴스 구문인 경우 (var a = new Type();) → local_vars에 저장
+        2. 추가작업이 필요한 케이스:
+        함수호출인 경우 (var a = obj.foo();) → unresolved_vars에 저장 
+        (EdgeLinker가 함수 호출의 리턴 타입을 가지고 해석)
+        """
+        for decl in decl_node.children:
+            if decl.type != "variable_declarator":
+                continue
+            name_node = decl.child_by_field_name("name")
+            value_node = decl.child_by_field_name("value")
+            if not name_node or not value_node:
+                continue
+            var_name = source_code[name_node.start_byte:name_node.end_byte].decode("utf-8")
+
+            if value_node.type == "object_creation_expression":
+                # new Type<...>() → 타입 즉시 확정
+                creation_type = value_node.child_by_field_name("type")
+                if not creation_type:
+                    continue
+                type_str = source_code[creation_type.start_byte:creation_type.end_byte].decode("utf-8")
+                local_vars[var_name] = self.generic_pattern.sub("", type_str)
+
+            elif value_node.type == "method_invocation":
+                # obj.method() / method() → EdgeLinker에서 리턴타입 해석 필요
+                method_name_node = value_node.child_by_field_name("name")
+                obj_node = value_node.child_by_field_name("object")
+                if not method_name_node:
+                    continue
+                method_name = source_code[method_name_node.start_byte:method_name_node.end_byte].decode("utf-8")
+                obj_name = ""
+                if obj_node and obj_node.type != "method_invocation":
+                    obj_name = source_code[obj_node.start_byte:obj_node.end_byte].decode("utf-8")
+                unresolved_vars[var_name] = (method_name, obj_name)
 
     # -----------------------------------------------------------------------
     # 엣지 수집
