@@ -85,10 +85,11 @@ class EdgeLinker:
         resolved_calls, external_calls = self.resolve_calls(self._registry.calls)
 
         return ResolvedEdges(
-            params=self.resolve_parameter_edges(self._registry.param_edges),
-            returns=self.resolve_return_edges(self._registry.return_edges),
-            internal_calls=resolved_calls,
-            external_calls=external_calls,
+            contains_edges          = self.resolve_field_type_edges(),
+            internal_calls_edges    = resolved_calls,
+            external_calls_edges    = external_calls,
+            has_parameter_edges     = self.resolve_parameter_edges(self._registry.param_edges),
+            returns_edges           = self.resolve_return_edges(self._registry.return_edges),
         )
 
     # -----------------------------------------------------------------------
@@ -311,6 +312,31 @@ class EdgeLinker:
                 if type_qualname:
                     batch.append({
                         "method_qualname": edge.method_qualname,
+                        "type_qualname": type_qualname,
+                    })
+        return batch
+
+    def resolve_field_type_edges(self) -> list[dict]:
+        """FIELD→CONTAINS→TYPE 엣지를 해석하여 DB 기록용 배치를 반환합니다."""
+        batch = []
+        for f in self._registry.fields.values():
+            # 변경분만 처리 (증분 분석)
+            if f.qualname not in self._registry.dirty_fields:
+                continue
+
+            if not f.field_type or not f.field_type.get("layout"):
+                continue
+
+            # 필드가 속한 TYPE의 file_path → import 컨텍스트 활용
+            parent_type = self._registry.types.get(f.type_qualname)
+            file_path = parent_type.file_path if parent_type else None
+
+            for type_name in f.field_type["layout"]:
+                type_qualname = (self._resolve_type_in_file(type_name, file_path)
+                                 if file_path else self._resolve_type_name_global(type_name))
+                if type_qualname:
+                    batch.append({
+                        "field_qualname": f.qualname,
                         "type_qualname": type_qualname,
                     })
         return batch
