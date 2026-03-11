@@ -266,7 +266,23 @@ class EdgeLinker:
                     methods = self._find_method_in_hierarchy(type_q, call.target_method_name)
                     return self._pick_by_arg_count(methods, call.arg_count)
 
-        # Case 1d: obj_name에 '.'이 포함된 복합 객체명 해석
+        # Case 1d: obj_name이 메서드 파라미터명 → 파라미터의 타입에서 탐색
+        #   예: MemberResponse.from(Member member) 내에서 member.getId()
+        #   → obj="member", params=[{name:"member", type:{layout:["Member"]}}] → Member 타입에서 getId 탐색
+        if caller_method and caller_method.params:
+            for param in caller_method.params:
+                if param["name"] == obj and param["type"].get("layout"):
+                    param_type_name = param["type"]["layout"][0]
+                    type_q = (self._resolve_type_in_file(param_type_name, caller_file)
+                              if caller_file else self._resolve_type_name_global(param_type_name))
+                    if type_q:
+                        methods = self._find_method_in_hierarchy(type_q, call.target_method_name)
+                        result = self._pick_by_arg_count(methods, call.arg_count)
+                        if result:
+                            return result
+                    break  # 파라미터명 매칭 후 타입 해석 실패 시 다음 케이스로
+
+        # Case 1e: obj_name에 '.'이 포함된 복합 객체명 해석
         #   예1: ApiResponseCode.SUCCESS.getMessage() → obj="ApiResponseCode.SUCCESS"
         #        → "ApiResponseCode" ENUM 타입의 상수 "SUCCESS" → 해당 enum에서 getMessage 탐색
         #   예2: Outer.Inner.foo() → obj="Outer.Inner"
