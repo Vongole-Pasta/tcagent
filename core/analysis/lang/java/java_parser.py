@@ -219,11 +219,24 @@ class JavaParser:
                                 result, qualname, scan_id)
 
     # -----------------------------------------------------------------------
+    # 바디 멤버 순회 유틸리티
+    # -----------------------------------------------------------------------
+    def _iter_body_members(self, body_node):
+        """클래스/enum 바디의 멤버 노드를 순회합니다.
+        enum의 경우 필드/메서드/생성자가 enum_body_declarations 안에 있으므로,
+        해당 노드 내부까지 한 레벨 더 탐색합니다."""
+        for child in body_node.children:
+            if child.type == "enum_body_declarations":
+                yield from child.children
+            else:
+                yield child
+
+    # -----------------------------------------------------------------------
     # 필드 처리
     # -----------------------------------------------------------------------
     def _process_field(self, class_body_node, source_code: bytes, type_qualname: str, result: ParsedFileResult):
         """클래스 바디에서 field_declaration 노드를 찾아 ParsedField로 수집합니다."""
-        for child in class_body_node.children:
+        for child in self._iter_body_members(class_body_node):
             if child.type == "field_declaration":
                 # 타입 추출
                 type_node = child.child_by_field_name("type")
@@ -356,7 +369,7 @@ class JavaParser:
     # -----------------------------------------------------------------------
     def _process_method(self, class_body_node, source_code: bytes, class_qualname: str, result: ParsedFileResult, scan_id: str | None, base_uri: str):
         """클래스 바디에서 method_declaration/constructor_declaration을 찾아 처리합니다."""
-        for child in class_body_node.children:
+        for child in self._iter_body_members(class_body_node):
             if child.type in ["method_declaration", "constructor_declaration"]:
                 self._process_each_method(child, source_code, class_qualname, result, scan_id, base_uri)
 
