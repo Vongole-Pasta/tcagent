@@ -81,8 +81,8 @@ def _make_colors(out) -> _Colors:
 #  기대값 로드 (expected.yaml)
 # ============================================================
 
-def _load_expected() -> tuple[dict, dict]:
-    """YAML 기대값 파일을 로드하여 (EXPECTED, EXPECTED_DTO_FIELDS) 반환"""
+def _load_expected() -> dict:
+    """YAML 기대값 파일을 로드하여 EXPECTED(endpoints) 반환"""
     yaml_path = Path(__file__).parent / "expected.yaml"
     if not yaml_path.exists():
         print(f"오류: 기대값 파일이 없습니다: {yaml_path}")
@@ -92,31 +92,67 @@ def _load_expected() -> tuple[dict, dict]:
         data = yaml.safe_load(f)
 
     endpoints = data.get("endpoints", {})
-    dto_fields = data.get("dto_fields", {})
 
     # YAML에서 빈 매핑({})은 None으로 로드될 수 있으므로 보정
     for ctrl, ctrl_data in endpoints.items():
+        # class_level.fields가 None이면 빈 dict로 보정
+        cl = ctrl_data.get("class_level")
+        if cl and cl.get("fields") is None:
+            cl["fields"] = {}
         for method, method_data in ctrl_data.items():
             if method == "class_level":
                 continue
             if not isinstance(method_data, dict):
                 continue
-            for key in ("params", "param_annotations"):
+            for key in ("params", "param_annotations", "related_types"):
                 if method_data.get(key) is None:
                     method_data[key] = {}
             for key in ("return_types", "param_types", "internal_calls", "external_calls"):
                 if method_data.get(key) is None:
                     method_data[key] = []
 
-    return endpoints, dto_fields
+    return endpoints
 
 
-EXPECTED, EXPECTED_DTO_FIELDS = _load_expected()
+EXPECTED = _load_expected()
 
 
 # ============================================================
 #  유틸리티
 # ============================================================
+
+def _match_call(expected_name: str, actual_names: set[str], actual_qualnames: set[str]) -> bool:
+    """기대값 이름이 DB 실측값에 존재하는지 판별.
+
+    - 단순 이름(`.` 미포함): name 필드 exact match
+    - qualified name(`.` 포함): qualname 필드 endswith match (괄호 제거 후)
+    """
+    if "." not in expected_name:
+        return expected_name in actual_names
+    for qn in actual_qualnames:
+        # METHOD qualname에는 파라미터 괄호가 있으므로 제거 후 비교
+        clean_qn = qn.split("(")[0] if "(" in qn else qn
+        if clean_qn.endswith(expected_name):
+            return True
+    return False
+
+
+def _reverse_match(db_name: str, db_qualname: str, expected_set: set[str]) -> bool:
+    """DB 호출이 기대값 집합에 포함되는지 역방향 판별.
+
+    - 기대값이 단순 이름이면: db_name exact match
+    - 기대값이 qualified name이면: db_qualname endswith match (괄호 제거 후)
+    """
+    clean_qn = db_qualname.split("(")[0] if db_qualname and "(" in db_qualname else (db_qualname or "")
+    for exp in expected_set:
+        if "." not in exp:
+            if db_name == exp:
+                return True
+        else:
+            if clean_qn.endswith(exp):
+                return True
+    return False
+
 
 def parse_endpoint(endpoint_str: str) -> tuple[str, str]:
     """'AuthController.login()' → ('AuthController', 'login')"""
@@ -150,19 +186,6 @@ def resolve_output_path(filename: str | None, extension: str) -> str | None:
     return str(output_dir / filename)
 
 
-def collect_related_dtos(ctrl: str, method: str) -> dict:
-    """메서드의 params, param_types, return_types에서 관련 DTO를 찾아 반환"""
-    method_data = EXPECTED[ctrl][method]
-    type_names = set()
-    type_names.update(method_data.get("param_types", []))
-    type_names.update(method_data.get("return_types", []))
-    type_names.update(method_data.get("params", {}).values())
-
-    related = {}
-    for dto_name, fields in EXPECTED_DTO_FIELDS.items():
-        if dto_name in type_names:
-            related[dto_name] = fields
-    return related
 
 
 # ============================================================
@@ -173,7 +196,7 @@ def _format_expected_text(ctrl: str, method: str) -> str:
     """기대값을 사람이 읽기 편한 텍스트 형식으로 포맷."""
     class_level = EXPECTED[ctrl].get("class_level", {})
     exp = EXPECTED[ctrl][method]
-    related_dtos = collect_related_dtos(ctrl, method)
+    related_types = exp.get("related_types", {})
 
     lines = []
     lines.append("━" * 64)
@@ -185,7 +208,12 @@ def _format_expected_text(ctrl: str, method: str) -> str:
     if class_level.get("base_uri"):
         lines.append(f"  기본 URI: {class_level['base_uri']}")
     if class_level.get("fields"):
-        lines.append(f"  DI 필드:  {', '.join(class_level['fields'])}")
+        fields = class_level["fields"]
+        if isinstance(fields, dict):
+            field_strs = [f"{k}: {v}" for k, v in fields.items()]
+        else:
+            field_strs = list(fields)
+        lines.append(f"  DI 필드:  {', '.join(field_strs)}")
 
     # ── 메서드 기본 정보 ──
     lines.append(f"\n{'─' * 64}")
@@ -232,13 +260,13 @@ def _format_expected_text(ctrl: str, method: str) -> str:
         for i, call in enumerate(external, 1):
             lines.append(f"    {i:>3}. {call}")
 
-    # ── 관련 DTO 필드 ──
-    if related_dtos:
+    # ── 관련 타입 필드 (endpoint별 직접 명시) ──
+    if related_types:
         lines.append(f"\n{'─' * 64}")
-        lines.append(f"  관련 DTO 필드")
+        lines.append(f"  관련 타입 필드")
         lines.append(f"{'─' * 64}")
-        for dto_name, fields in related_dtos.items():
-            lines.append(f"\n  {dto_name}:")
+        for type_name, fields in related_types.items():
+            lines.append(f"\n  {type_name}:")
             for fname, finfo in fields.items():
                 constraint = finfo.get("constraint", "")
                 c_str = f"  [{constraint}]" if constraint else ""
@@ -475,60 +503,135 @@ def step1_type_contains_field(db, report, ctrl, expected_fields):
             report.add("1", f"FIELD[{f}]", "연결됨", "없음", MISSING)
 
 
-def step2_field_contains_type(db, report, ctrl):
-    """2단계. 필드 → 타입 연결 확인"""
+def step2_field_contains_type(db, report, ctrl, expected_fields, related_types):
+    """2단계. 필드 → 타입 연결 확인
+
+    YAML 기대값에서 각 필드의 타입을 가져와, 해당 타입이 DB에 TYPE 노드로
+    존재하는 경우에만 FIELD→TYPE 연결을 기대합니다.
+    primitive(long, int 등)나 JDK 타입(String 등)은 TYPE 노드가 없으므로 스킵.
+
+    검증 대상:
+      1) 컨트롤러 클래스 필드 — YAML class_level.fields (dict: name→type)
+      2) 관련 타입 필드 — YAML endpoint별 related_types (dict: name→{type, constraint})
+    """
     print_step_header(report, 2,
         "필드 → 타입 연결 확인",
         "각 필드(FIELD)가 자신의 타입에 해당하는 TYPE 노드와 연결되어 있는지 확인합니다.\n"
         "  예: orderService(FIELD) → OrderService(TYPE). 이 연결이 없으면\n"
-        "  TC 생성 시 필드를 통한 호출 추적이 불가능합니다.",
+        "  TC 생성 시 필드를 통한 호출 추적이 불가능합니다.\n"
+        "  검증 범위: 컨트롤러 클래스 필드 + endpoint별 관련 타입 필드 (YAML 기대값 기준)\n"
+        "  스킵 대상: 타입이 DB에 TYPE 노드로 존재하지 않는 필드 (primitive, JDK 타입 등)",
         {
             OK:        "필드와 타입이 정상적으로 연결되어 있습니다.",
             KNOWN_BUG: "파서가 이 연결을 아직 구현하지 못했습니다 (전체 DB에서 0건).",
         })
-    records = db.execute_query("""
-        MATCH (t:TYPE {name: $ctrl})-[:CONTAINS]->(f:FIELD)-[:CONTAINS]->(ft:TYPE)
-        RETURN f.name AS field_name, ft.name AS type_name
-    """, {"ctrl": ctrl})
 
-    # 해당 컨트롤러의 모든 필드를 조회하여, 각 필드별로 TYPE 연결 여부를 표시
-    all_fields = db.execute_query("""
-        MATCH (t:TYPE {name: $ctrl})-[:CONTAINS]->(f:FIELD)
-        RETURN f.name AS name, f.type AS type ORDER BY f.name
-    """, {"ctrl": ctrl})
+    c = report.c
 
-    connected = {}
-    if records:
-        for r in records:
-            connected[r["field_name"]] = r["type_name"]
-
-    if not all_fields:
-        report._print(f"    (필드 없음 — 이 단계 스킵)")
-        return
-
-    # 전체 DB에서 FIELD→TYPE 엣지가 몇 건인지 확인 (파서 전반 미구현 판별용)
+    # ── 전체 DB에서 FIELD→TYPE 엣지 건수 (파서 전반 미구현 판별용) ──
     count_records = db.execute_query(
         "MATCH (:FIELD)-[:CONTAINS]->(:TYPE) RETURN count(*) AS cnt")
     cnt = count_records[0]["cnt"] if count_records else 0
 
-    for f in all_fields:
-        fname = f["name"]
-        ftype = f["type"]
-        if isinstance(ftype, str):
-            try:
-                ftype = json.loads(ftype)
-            except (json.JSONDecodeError, TypeError):
-                pass
-        type_str = ftype.get("given", str(ftype)) if isinstance(ftype, dict) else str(ftype)
+    # ── 검증 대상 수집: (소속 TYPE, 필드명, 필드 타입) 튜플 목록 ──
+    # 기대값 기반으로 수집하여, 타입이 DB에 TYPE 노드로 존재하는 것만 검증
+    targets = []  # [(owner_type, field_name, field_type_str, label)]
 
-        if fname in connected:
-            report.add("2", f"FIELD[{fname}] ({type_str}) → TYPE[{connected[fname]}]",
-                       "연결됨", "연결됨", OK)
-        else:
-            report.add("2", f"FIELD[{fname}] ({type_str}) → TYPE 연결",
-                       f"{fname}의 타입({type_str})에 해당하는 TYPE과 연결 필요",
-                       f"연결 없음 (전체 DB FIELD→TYPE: {cnt}건)",
-                       KNOWN_BUG)
+    # 1) 컨트롤러 클래스 필드 (YAML class_level.fields dict)
+    if expected_fields:
+        for fname, ftype_str in expected_fields.items():
+            targets.append((ctrl, fname, str(ftype_str), f"{ctrl} (컨트롤러)"))
+
+    # 2) endpoint별 관련 타입 필드 (YAML related_types)
+    for type_name, fields in related_types.items():
+        for fname, finfo in fields.items():
+            ftype_str = str(finfo.get("type", ""))
+            targets.append((type_name, fname, ftype_str, type_name))
+
+    if not targets:
+        report._print(f"  {c.DIM}(해당 없음 — 검증 대상 필드가 없습니다){c.RESET}")
+        return
+
+    # ── 각 필드의 타입이 DB에 TYPE 노드로 존재하는지 캐싱 확인 ──
+    type_exists_cache = {}
+
+    def _type_exists_in_db(type_name: str) -> bool:
+        """타입명이 DB에 TYPE 노드로 존재하는지 확인 (캐싱)."""
+        if type_name in type_exists_cache:
+            return type_exists_cache[type_name]
+        result = db.execute_query(
+            "MATCH (t:TYPE {name: $name}) RETURN t.name LIMIT 1",
+            {"name": type_name})
+        exists = bool(result)
+        type_exists_cache[type_name] = exists
+        return exists
+
+    def _extract_base_type(type_str: str) -> str:
+        """'List<Address>' → 'Address', 'Map<Long, SseEmitter>' → 'Map' 등
+        제네릭 내부의 프로젝트 타입도 추출."""
+        # 제네릭 래퍼 안의 타입 추출 시도
+        import re
+        # List<Address> → Address, List<OrderItemRequest> → OrderItemRequest
+        inner = re.findall(r'<(.+?)>', type_str)
+        if inner:
+            # 제네릭 인자들 중 프로젝트 TYPE이 있으면 그것을 반환
+            for arg in inner[0].split(","):
+                arg = arg.strip().split("<")[0].strip()
+                if arg and not arg[0].islower() and _type_exists_in_db(arg):
+                    return arg
+        # 기본: 제네릭 제거 후 base name
+        return type_str.split("<")[0].split("[")[0].strip()
+
+    # ── 소속 TYPE별로 그룹핑하여 출력 ──
+    from collections import OrderedDict
+    grouped = OrderedDict()  # label → [(owner, fname, ftype_str)]
+    for owner, fname, ftype_str, label in targets:
+        grouped.setdefault(label, []).append((owner, fname, ftype_str))
+
+    found_any = False
+    for label, items in grouped.items():
+        # 이 그룹에서 연결 대상이 있는지 미리 확인
+        connectable = []
+        skipped = []
+        for owner, fname, ftype_str in items:
+            base_type = _extract_base_type(ftype_str)
+            if _type_exists_in_db(base_type):
+                connectable.append((owner, fname, ftype_str, base_type))
+            else:
+                skipped.append((fname, ftype_str))
+
+        if not connectable and not skipped:
+            continue
+
+        found_any = True
+        report._print(f"\n  {c.BOLD}── {label} ──{c.RESET}")
+
+        # DB에서 실제 연결 조회
+        if connectable:
+            owner_name = connectable[0][0]
+            connected_records = db.execute_query("""
+                MATCH (t:TYPE {name: $type_name})-[:CONTAINS]->(f:FIELD)-[:CONTAINS]->(ft:TYPE)
+                RETURN f.name AS field_name, ft.name AS type_name
+            """, {"type_name": owner_name})
+            connected = {r["field_name"]: r["type_name"] for r in connected_records} if connected_records else {}
+
+            for owner, fname, ftype_str, base_type in connectable:
+                if fname in connected:
+                    report.add("2", f"FIELD[{fname}] ({ftype_str}) → TYPE[{connected[fname]}]",
+                               "연결됨", "연결됨", OK)
+                else:
+                    report.add("2", f"FIELD[{fname}] ({ftype_str}) → TYPE[{base_type}] 연결",
+                               f"{fname}의 타입({base_type})에 해당하는 TYPE과 연결 필요",
+                               f"연결 없음 (전체 DB FIELD→TYPE: {cnt}건)",
+                               KNOWN_BUG)
+
+        # 스킵된 필드 (primitive/JDK 타입)
+        if skipped:
+            for fname, ftype_str in skipped:
+                report._print(f"  {c.DIM}  (스킵) FIELD[{fname}] ({ftype_str}) — TYPE 노드 없음{c.RESET}")
+
+    if not found_any:
+        report._print(f"    {c.DIM}(필드 없음 — 이 단계 스킵){c.RESET}")
 
 
 # ============================================================
@@ -653,7 +756,7 @@ def step5_returns(db, report, ctrl, method, expected_return_types):
     print_step_header(report, 5,
         "리턴 타입 연결 검증",
         "메서드의 반환 타입이 RETURNS 관계로 TYPE 노드에 연결되어 있는지 확인합니다.\n"
-        "  void, byte[] 등 기본형은 return_types가 비어있으므로 이 단계를 건너뜁니다.",
+        "  void, byte[] 등 기본형은 RETURNS 연결이 없으므로 이 단계를 건너뜁니다.",
         {
             OK:      "리턴 타입이 정상적으로 연결되어 있습니다.",
             MISSING: "리턴 타입 연결이 DB에 없습니다.",
@@ -694,11 +797,13 @@ def step6_internal_calls(db, report, ctrl, method, expected_internal):
     records = db.execute_query("""
         MATCH (t:TYPE {name: $ctrl})-[:CONTAINS]->(m:METHOD {name: $method})
         OPTIONAL MATCH (m)-[:CALLS*1..]->(target:METHOD)
-        RETURN collect(DISTINCT target.name) AS calls
+        RETURN collect(DISTINCT target.name) AS calls,
+               collect(DISTINCT target.qualname) AS qualnames
     """, {"ctrl": ctrl, "method": method})
-    actual = set(x for x in (records[0]["calls"] if records else []) if x)
+    actual_names = set(x for x in (records[0]["calls"] if records else []) if x)
+    actual_qualnames = set(x for x in (records[0]["qualnames"] if records else []) if x)
     for call in expected_internal:
-        found = call in actual
+        found = _match_call(call, actual_names, actual_qualnames)
         report.add("6", f"내부 호출 → {call}",
                    "도달 가능", "도달 가능" if found else "도달 불가",
                    OK if found else MISSING)
@@ -727,11 +832,13 @@ def step7_external_calls(db, report, ctrl, method, expected_external):
     records = db.execute_query("""
         MATCH (t:TYPE {name: $ctrl})-[:CONTAINS]->(m:METHOD {name: $method})
         OPTIONAL MATCH (m)-[:CALLS*1..]->(target:EXTERNAL_CALL)
-        RETURN collect(DISTINCT target.name) AS calls
+        RETURN collect(DISTINCT target.name) AS calls,
+               collect(DISTINCT target.qualname) AS qualnames
     """, {"ctrl": ctrl, "method": method})
-    actual = set(x for x in (records[0]["calls"] if records else []) if x)
+    actual_names = set(x for x in (records[0]["calls"] if records else []) if x)
+    actual_qualnames = set(x for x in (records[0]["qualnames"] if records else []) if x)
     for call in expected_external:
-        found = call in actual
+        found = _match_call(call, actual_names, actual_qualnames)
         report.add("7", f"외부 호출 → {call}",
                    "도달 가능", "도달 가능" if found else "도달 불가",
                    OK if found else MISSING)
@@ -755,69 +862,83 @@ def step8_reverse_verification(db, report, ctrl, method, expected_internal, expe
                            "                  → 파서가 변수 타입을 해석하지 못해 잘못 분류한 것입니다.",
         })
 
-    # DB에서 전체 호출 수집 (CALLS*1.. 전체 깊이)
+    # DB에서 전체 호출 수집 (CALLS*1.. 전체 깊이, name + qualname 쌍)
     records = db.execute_query("""
         MATCH (t:TYPE {name: $ctrl})-[:CONTAINS]->(m:METHOD {name: $method})
         OPTIONAL MATCH (m)-[:CALLS*1..]->(int_target:METHOD)
         OPTIONAL MATCH (m)-[:CALLS*1..]->(ext_target:EXTERNAL_CALL)
-        RETURN collect(DISTINCT int_target.name) AS db_internal,
-               collect(DISTINCT ext_target.name) AS db_external
+        RETURN collect(DISTINCT [int_target.name, int_target.qualname]) AS db_internal,
+               collect(DISTINCT [ext_target.name, ext_target.qualname]) AS db_external
     """, {"ctrl": ctrl, "method": method})
 
-    db_internal = set(x for x in (records[0]["db_internal"] if records else []) if x)
-    db_external = set(x for x in (records[0]["db_external"] if records else []) if x)
+    # DB 결과를 (name, qualname) 쌍 리스트로 정리
+    db_internal_pairs = [(p[0], p[1] or "") for p in (records[0]["db_internal"] if records else []) if p[0]]
+    db_external_pairs = [(p[0], p[1] or "") for p in (records[0]["db_external"] if records else []) if p[0]]
     exp_internal = set(expected_internal) if expected_internal else set()
     exp_external = set(expected_external) if expected_external else set()
     all_expected = exp_internal | exp_external
 
     c = report.c
+
     # ── 8-1. 잉여 내부 호출 ──
-    surplus_internal = sorted(db_internal - all_expected)
-    report._print(f"\n  {c.BOLD}8-1. 잉여 내부 호출 ({len(surplus_internal)}건){c.RESET}")
+    surplus_int = [(n, q) for n, q in db_internal_pairs
+                   if not _reverse_match(n, q, all_expected)]
+    surplus_int.sort(key=lambda x: x[0])
+    report._print(f"\n  {c.BOLD}8-1. 잉여 내부 호출 ({len(surplus_int)}건){c.RESET}")
     report._print(f"       {c.DIM}DB가 내부 메서드(METHOD)로 감지했지만, 소스코드 기대값(YAML)의{c.RESET}")
     report._print(f"       {c.DIM}internal_calls / external_calls 어디에도 없는 호출입니다.{c.RESET}")
-    if surplus_internal:
-        for s in surplus_internal:
-            report.add("8", f"[잉여 내부 호출] {s}",
+    if surplus_int:
+        for n, q in surplus_int:
+            report.add("8", f"[잉여 내부 호출] {n} (qualname: {q})",
                        "YAML에 있어야 하나 없음 (YAML 누락 또는 파서 오류)",
                        "DB에서 내부 메서드(METHOD)로 감지됨", SURPLUS)
     else:
         report._print(f"    {c.DIM}(없음 — 모든 DB 내부 호출이 기대값과 일치){c.RESET}")
 
     # ── 8-2. 잉여 외부 호출 ──
-    surplus_external = sorted(db_external - all_expected)
-    report._print(f"\n  {c.BOLD}8-2. 잉여 외부 호출 ({len(surplus_external)}건){c.RESET}")
+    surplus_ext = [(n, q) for n, q in db_external_pairs
+                   if not _reverse_match(n, q, all_expected)]
+    surplus_ext.sort(key=lambda x: x[0])
+    report._print(f"\n  {c.BOLD}8-2. 잉여 외부 호출 ({len(surplus_ext)}건){c.RESET}")
     report._print(f"       {c.DIM}DB가 외부 호출(EXTERNAL_CALL)로 감지했지만, 소스코드 기대값(YAML)의{c.RESET}")
     report._print(f"       {c.DIM}internal_calls / external_calls 어디에도 없는 호출입니다.{c.RESET}")
-    if surplus_external:
-        for s in surplus_external:
-            report.add("8", f"[잉여 외부 호출] {s}",
+    if surplus_ext:
+        for n, q in surplus_ext:
+            report.add("8", f"[잉여 외부 호출] {n} (qualname: {q})",
                        "YAML에 있어야 하나 없음 (YAML 누락 또는 파서 오류)",
                        "DB에서 외부 호출(EXTERNAL_CALL)로 감지됨", SURPLUS)
     else:
         report._print(f"    {c.DIM}(없음 — 모든 DB 외부 호출이 기대값과 일치){c.RESET}")
 
     # ── 8-3. 오분류: 소스코드에서는 내부 메서드인데 DB에서는 EXTERNAL_CALL ──
-    misclass_int_to_ext = sorted(exp_internal & db_external)
+    # DB 외부 호출 중 YAML internal에만 매칭되는 것 (external에는 매칭 안 됨)
+    misclass_int_to_ext = [(n, q) for n, q in db_external_pairs
+                           if _reverse_match(n, q, exp_internal)
+                           and not _reverse_match(n, q, exp_external)]
+    misclass_int_to_ext.sort(key=lambda x: x[0])
     report._print(f"\n  {c.BOLD}8-3. 오분류: 내부 → 외부 ({len(misclass_int_to_ext)}건){c.RESET}")
     report._print(f"       {c.DIM}소스코드상 사용자가 직접 작성한 내부 메서드인데,{c.RESET}")
     report._print(f"       {c.DIM}파서가 EXTERNAL_CALL(라이브러리 호출)로 잘못 분류한 경우입니다.{c.RESET}")
     if misclass_int_to_ext:
-        for m in misclass_int_to_ext:
-            report.add("8", f"[오분류 내부→외부] {m}",
+        for n, q in misclass_int_to_ext:
+            report.add("8", f"[오분류 내부→외부] {n} (qualname: {q})",
                        "내부 메서드(METHOD)로 분류되어야 함",
                        "EXTERNAL_CALL로 잘못 분류됨", MISCLASSIFIED)
     else:
         report._print(f"    {c.DIM}(없음){c.RESET}")
 
     # ── 8-4. 오분류: 소스코드에서는 외부 호출인데 DB에서는 내부 METHOD ──
-    misclass_ext_to_int = sorted(exp_external & db_internal)
+    # DB 내부 호출 중 YAML external에만 매칭되는 것 (internal에는 매칭 안 됨)
+    misclass_ext_to_int = [(n, q) for n, q in db_internal_pairs
+                           if _reverse_match(n, q, exp_external)
+                           and not _reverse_match(n, q, exp_internal)]
+    misclass_ext_to_int.sort(key=lambda x: x[0])
     report._print(f"\n  {c.BOLD}8-4. 오분류: 외부 → 내부 ({len(misclass_ext_to_int)}건){c.RESET}")
     report._print(f"       {c.DIM}소스코드상 프레임워크/라이브러리의 외부 호출인데,{c.RESET}")
     report._print(f"       {c.DIM}파서가 내부 METHOD(사용자 작성 코드)로 잘못 분류한 경우입니다.{c.RESET}")
     if misclass_ext_to_int:
-        for m in misclass_ext_to_int:
-            report.add("8", f"[오분류 외부→내부] {m}",
+        for n, q in misclass_ext_to_int:
+            report.add("8", f"[오분류 외부→내부] {n} (qualname: {q})",
                        "외부 호출(EXTERNAL_CALL)로 분류되어야 함",
                        "내부 METHOD로 잘못 분류됨", MISCLASSIFIED)
     else:
@@ -921,12 +1042,16 @@ def cross_check(db, report, ctrl, method, all_expected_calls):
             MATCH (c:TYPE {name: $ctrl})-[:CONTAINS]->(m:METHOD {name: $method})
             OPTIONAL MATCH (m)-[:CALLS*1..]->(t:METHOD)
             OPTIONAL MATCH (m)-[:CALLS*1..]->(e:EXTERNAL_CALL)
-            RETURN collect(DISTINCT t.name) + collect(DISTINCT e.name) AS all
+            RETURN collect(DISTINCT t.name) + collect(DISTINCT e.name) AS all_names,
+                   collect(DISTINCT t.qualname) + collect(DISTINCT e.qualname) AS all_qualnames
         """, {"ctrl": ctrl, "method": method})
-        all_captured = set(
-            x for x in (all_captured_records[0]["all"] if all_captured_records else []) if x
+        all_names = set(
+            x for x in (all_captured_records[0]["all_names"] if all_captured_records else []) if x
         )
-        missing = [c for c in all_expected_calls if c not in all_captured]
+        all_qualnames = set(
+            x for x in (all_captured_records[0]["all_qualnames"] if all_captured_records else []) if x
+        )
+        missing = [c for c in all_expected_calls if not _match_call(c, all_names, all_qualnames)]
 
     # 3. qualname 불완전 — receiver가 해석되지 않은 EXTERNAL_CALL
     incomplete = db.execute_query("""
@@ -996,10 +1121,10 @@ def execute_verify(endpoint: str, output_filename: str | None):
         db = DBClient()
         method_expected = EXPECTED[ctrl][method]
         class_level = EXPECTED[ctrl].get("class_level", {})
-        related_dtos = collect_related_dtos(ctrl, method)
+        related_types = method_expected.get("related_types", {})
 
         report = Report(out)
-        expected_fields = class_level.get("fields", [])
+        expected_fields = class_level.get("fields", {})
         expected_internal = method_expected.get("internal_calls", [])
         expected_external = method_expected.get("external_calls", [])
         expected_param_types = method_expected.get("param_types", [])
@@ -1022,7 +1147,7 @@ def execute_verify(endpoint: str, output_filename: str | None):
 
         # ── 구조 검증 (1~2단계) ──
         step1_type_contains_field(db, report, ctrl, expected_fields)
-        step2_field_contains_type(db, report, ctrl)
+        step2_field_contains_type(db, report, ctrl, expected_fields, related_types)
 
         # ── 속성 검증 (3단계) ──
         step3_method_attributes(db, report, ctrl, method, method_expected)
@@ -1039,7 +1164,7 @@ def execute_verify(endpoint: str, output_filename: str | None):
         )
 
         # ── DTO 필드 검증 (9단계) ──
-        step9_dto_fields(db, report, related_dtos)
+        step9_dto_fields(db, report, related_types)
 
         # ── 최종 리포트 ──
         failed = report.summary()

@@ -7,7 +7,7 @@
 #
 #  구조:
 #    endpoints.<Controller>.<method>  — 엔드포인트별 기대값
-#    dto_fields.<DTO명>               — DTO/VO 필드 기대값
+#    endpoints.<Controller>.<method>.related_types — endpoint별 관련 타입 필드 (소스 기반 직접 명시)
 #
 #  주의:
 #    - endpoint_uri에 trailing slash('/')가 붙은 경우는
@@ -32,10 +32,10 @@ endpoints:
     # 컨트롤러 클래스 레벨 필드 (DI 주입)
     class_level:
       fields:
-        - authenticationManager   # AuthenticationManager — Spring Security 인증 매니저
-        - jwtTokenProvider        # JwtTokenProvider — JWT 토큰 생성/검증
-        - memberRepository        # MemberRepository — 회원 조회 (DB)
-        - jwtExpiration           # long — 토큰 만료시간 (ms)
+        authenticationManager: AuthenticationManager   # Spring Security 인증 매니저
+        jwtTokenProvider: JwtTokenProvider              # JWT 토큰 생성/검증
+        memberRepository: MemberRepository              # 회원 조회 (DB)
+        jwtExpiration: long                             # 토큰 만료시간 (ms) — primitive
 
     # POST /api/auth/login — 로그인 (JWT 발급)
     login:
@@ -58,7 +58,7 @@ endpoints:
         - generateToken                   # JwtTokenProvider.generateToken — JWT 생성
         - of                              # TokenResponse.of — 정적 팩토리
         - success                         # ApiResponse.success — 성공 응답 생성
-        - now                             # 2depth: success → ApiResponse.Meta.now
+        - Meta.now                        # 2depth: success → ApiResponse.Meta.now
         - getMessage                      # 2depth: success → ApiResponseCode.getMessage (프로젝트 내부 Enum 메서드)
       external_calls:
         # ── 직접 호출 (login에서 직접) ──
@@ -87,11 +87,62 @@ endpoints:
         - subject                         # JwtBuilder.subject — subject 클레임 설정
         # ── 2depth: success 내부 외부호출 ──
         # ── 2depth+: now (success→now) 내부 외부호출 ──
-        - now                             # Instant.now() — 현재 시각
+        - Instant.now                     # Instant.now() — 현재 시각
         - randomUUID                      # UUID.randomUUID() — 고유 ID 생성
         - substring                       # String.substring — 문자열 자르기
         - toEpochMilli                    # Instant.toEpochMilli — 밀리초 변환
         - toString                        # Object.toString — 문자열 변환
+      # ── 관련 타입 필드 (소스코드 기반 직접 명시) ──
+      related_types:
+        # 소스: .sample/.../member/dto/LoginRequest.java (record, L11-14)
+        LoginRequest:
+          email:
+            type: String
+            constraint: "@NotBlank @Email"
+          password:
+            type: String
+            constraint: "@NotBlank"
+        # 소스: .sample/.../member/dto/TokenResponse.java (record, L8-12)
+        TokenResponse:
+          accessToken:
+            type: String
+            constraint: ""
+          tokenType:
+            type: String
+            constraint: ""
+          expiresIn:
+            type: long
+            constraint: ""
+        # 소스: .sample/.../common/ApiResponse.java (class, L17-22)
+        ApiResponse:
+          code:
+            type: ApiResponseCode
+            constraint: ""
+          message:
+            type: String
+            constraint: ""
+          data:
+            type: T
+            constraint: ""
+          meta:
+            type: Meta
+            constraint: ""
+        # 소스: .sample/.../common/ApiResponse.java (내부 static class Meta, L77-98)
+        Meta:
+          timestamp:
+            type: long
+            constraint: ""
+          traceId:
+            type: String
+            constraint: ""
+        # 소스: .sample/.../common/ApiResponseCode.java (enum, L21-22)
+        ApiResponseCode:
+          code:
+            type: String
+            constraint: ""
+          message:
+            type: String
+            constraint: ""
 
     # POST /api/auth/logout — 로그아웃 (세션 무효화)
     logout:
@@ -109,6 +160,7 @@ endpoints:
         - clearContext                     # SecurityContextHolder.clearContext()
         - ok                              # ResponseEntity.ok()
         - build                           # .build() — 빈 바디 응답 생성
+      related_types: {}                    # DTO 사용 없음
 
 
   # ----------------------------------------------------------------
@@ -118,7 +170,7 @@ endpoints:
   MemberController:
     class_level:
       fields:
-        - memberService                   # MemberService — 회원 비즈니스 로직
+        memberService: MemberService              # 회원 비즈니스 로직
 
     # POST /api/members/ — 회원 생성
     createMember:
@@ -142,7 +194,7 @@ endpoints:
         - sendWelcome                     # NotificationService.sendWelcome — 환영 알림
         - addAddress                      # member::addAddress — 메서드 레퍼런스
         # ── 2depth: success 내부 ──
-        - now                             # Meta.now — 메타 정보 생성
+        - Meta.now                        # Meta.now — 메타 정보 생성
         - getMessage                      # ApiResponseCode.getMessage — 응답 코드 메시지
         # ── 3depth: validateEmail 내부 ──
         - existsByEmail                   # MemberRepository.existsByEmail — 이메일 존재 확인
@@ -170,7 +222,7 @@ endpoints:
         - getGrade                        # Lombok @Getter
         - getTags                         # Lombok @Getter
         # ── 2depth+: now (Meta.now) 내부 ──
-        - now                             # Instant.now() — 현재 시각
+        - Instant.now                     # Instant.now() — 현재 시각
         - randomUUID                      # UUID.randomUUID() — 고유 ID
         - substring                       # String.substring — 문자열 자르기
         - toEpochMilli                    # Instant.toEpochMilli — 밀리초 변환
@@ -187,6 +239,85 @@ endpoints:
         - remove                          # Map.remove — emitter 제거
         - send                            # SseEmitter.send — SSE 전송
         - warn                            # log.warn — 발송 실패 로깅
+      related_types:
+        # 소스: .sample/.../member/dto/MemberCreateRequest.java (record, L15-21)
+        MemberCreateRequest:
+          email:
+            type: String
+            constraint: "@NotBlank @Email"
+          firstName:
+            type: String
+            constraint: "@NotBlank"
+          lastName:
+            type: String
+            constraint: "@NotBlank"
+          password:
+            type: String
+            constraint: ""
+          addresses:
+            type: "List<Address>"
+            constraint: "@Valid"
+        # 소스: .sample/.../member/dto/MemberResponse.java (record, L13-19)
+        MemberResponse:
+          id:
+            type: Long
+            constraint: ""
+          email:
+            type: String
+            constraint: ""
+          fullName:
+            type: String
+            constraint: ""
+          grade:
+            type: MemberGrade
+            constraint: ""
+          tags:
+            type: "List<String>"
+            constraint: ""
+          active:
+            type: boolean
+            constraint: ""
+        # 소스: .sample/.../member/entity/Address.java (class, L11-15)
+        Address:
+          street:
+            type: String
+            constraint: ""
+          city:
+            type: String
+            constraint: ""
+          zipCode:
+            type: String
+            constraint: ""
+        # 소스: .sample/.../common/ApiResponse.java (class, L17-22)
+        ApiResponse:
+          code:
+            type: ApiResponseCode
+            constraint: ""
+          message:
+            type: String
+            constraint: ""
+          data:
+            type: T
+            constraint: ""
+          meta:
+            type: Meta
+            constraint: ""
+        # 소스: .sample/.../common/ApiResponse.java (내부 static class Meta, L77-98)
+        Meta:
+          timestamp:
+            type: long
+            constraint: ""
+          traceId:
+            type: String
+            constraint: ""
+        # 소스: .sample/.../common/ApiResponseCode.java (enum, L21-22)
+        ApiResponseCode:
+          code:
+            type: String
+            constraint: ""
+          message:
+            type: String
+            constraint: ""
 
     # GET /api/members/{id:[0-9]+} — 회원 단건 조회
     getMember:
@@ -205,7 +336,7 @@ endpoints:
         # ── 2depth: getMember 내부 ──
         - from                            # MemberResponse.from — Entity→DTO 변환
         # ── 2depth: success 내부 ──
-        - now                             # Meta.now
+        - Meta.now                        # Meta.now
         - getMessage                      # ApiResponseCode.getMessage
         # ── 3depth: from 내부 ──
         - getId                           # BaseEntity.getId
@@ -222,11 +353,62 @@ endpoints:
         - getGrade                        # Lombok @Getter
         - getTags                         # Lombok @Getter
         # ── 2depth+: now 내부 ──
-        - now                             # Instant.now()
+        - Instant.now                     # Instant.now()
         - randomUUID                      # UUID.randomUUID()
         - substring                       # String.substring
         - toEpochMilli                    # Instant.toEpochMilli
         - toString                        # Object.toString
+      related_types:
+        # 소스: .sample/.../member/dto/MemberResponse.java (record, L13-19)
+        MemberResponse:
+          id:
+            type: Long
+            constraint: ""
+          email:
+            type: String
+            constraint: ""
+          fullName:
+            type: String
+            constraint: ""
+          grade:
+            type: MemberGrade
+            constraint: ""
+          tags:
+            type: "List<String>"
+            constraint: ""
+          active:
+            type: boolean
+            constraint: ""
+        # 소스: .sample/.../common/ApiResponse.java (class, L17-22)
+        ApiResponse:
+          code:
+            type: ApiResponseCode
+            constraint: ""
+          message:
+            type: String
+            constraint: ""
+          data:
+            type: T
+            constraint: ""
+          meta:
+            type: Meta
+            constraint: ""
+        # 소스: .sample/.../common/ApiResponse.java (내부 static class Meta, L77-98)
+        Meta:
+          timestamp:
+            type: long
+            constraint: ""
+          traceId:
+            type: String
+            constraint: ""
+        # 소스: .sample/.../common/ApiResponseCode.java (enum, L21-22)
+        ApiResponseCode:
+          code:
+            type: String
+            constraint: ""
+          message:
+            type: String
+            constraint: ""
 
     # GET /api/members/ — 회원 목록 (페이징)
     listMembers:
@@ -246,7 +428,7 @@ endpoints:
         # ── 2depth: findMembers 내부 ──
         - from                            # PagedResponse.from + MemberResponse::from (메서드 레퍼런스)
         # ── 2depth: success 내부 ──
-        - now                             # Meta.now
+        - Meta.now                        # Meta.now
         - getMessage                      # ApiResponseCode.getMessage
         # ── 3depth: MemberResponse.from 내부 ──
         - getId                           # BaseEntity.getId
@@ -269,11 +451,79 @@ endpoints:
         - getGrade                        # Lombok @Getter
         - getTags                         # Lombok @Getter
         # ── 2depth+: now 내부 ──
-        - now                             # Instant.now()
+        - Instant.now                     # Instant.now()
         - randomUUID                      # UUID.randomUUID()
         - substring                       # String.substring
         - toEpochMilli                    # Instant.toEpochMilli
         - toString                        # Object.toString
+      related_types:
+        # 소스: .sample/.../common/PagedResponse.java (record, L11-17)
+        PagedResponse:
+          content:
+            type: "List<T>"
+            constraint: ""
+          page:
+            type: int
+            constraint: ""
+          size:
+            type: int
+            constraint: ""
+          totalElements:
+            type: long
+            constraint: ""
+          totalPages:
+            type: int
+            constraint: ""
+        # 소스: .sample/.../member/dto/MemberResponse.java (record, L13-19)
+        MemberResponse:
+          id:
+            type: Long
+            constraint: ""
+          email:
+            type: String
+            constraint: ""
+          fullName:
+            type: String
+            constraint: ""
+          grade:
+            type: MemberGrade
+            constraint: ""
+          tags:
+            type: "List<String>"
+            constraint: ""
+          active:
+            type: boolean
+            constraint: ""
+        # 소스: .sample/.../common/ApiResponse.java (class, L17-22)
+        ApiResponse:
+          code:
+            type: ApiResponseCode
+            constraint: ""
+          message:
+            type: String
+            constraint: ""
+          data:
+            type: T
+            constraint: ""
+          meta:
+            type: Meta
+            constraint: ""
+        # 소스: .sample/.../common/ApiResponse.java (내부 static class Meta, L77-98)
+        Meta:
+          timestamp:
+            type: long
+            constraint: ""
+          traceId:
+            type: String
+            constraint: ""
+        # 소스: .sample/.../common/ApiResponseCode.java (enum, L21-22)
+        ApiResponseCode:
+          code:
+            type: String
+            constraint: ""
+          message:
+            type: String
+            constraint: ""
 
     # GET|POST /api/members/search — 회원 검색
     searchMembers:
@@ -296,7 +546,7 @@ endpoints:
         - findMembers                     # this.findMembers() — keyword blank일 때 전체 조회 위임
         - findByFirstNameContainingOrLastNameContaining  # MemberRepository — Spring Data 쿼리 메서드
         # ── 2depth: success 내부 ──
-        - now                             # Meta.now
+        - Meta.now                        # Meta.now
         - getMessage                      # ApiResponseCode.getMessage
         # ── 3depth: MemberResponse::from (메서드 레퍼런스) ──
         - from                            # MemberResponse.from — 검색 결과 변환
@@ -319,11 +569,63 @@ endpoints:
         - getGrade                        # Lombok @Getter
         - getTags                         # Lombok @Getter
         # ── 2depth+: now 내부 ──
-        - now                             # Instant.now()
+        - Instant.now                     # Instant.now()
         - randomUUID                      # UUID.randomUUID()
         - substring                       # String.substring
         - toEpochMilli                    # Instant.toEpochMilli
         - toString                        # Object.toString
+      # searchMembers: return ResponseEntity<ApiResponse<List<MemberResponse>>>
+      related_types:
+        # 소스: .sample/.../member/dto/MemberResponse.java (record, L13-19)
+        MemberResponse:
+          id:
+            type: Long
+            constraint: ""
+          email:
+            type: String
+            constraint: ""
+          fullName:
+            type: String
+            constraint: ""
+          grade:
+            type: MemberGrade
+            constraint: ""
+          tags:
+            type: "List<String>"
+            constraint: ""
+          active:
+            type: boolean
+            constraint: ""
+        # 소스: .sample/.../common/ApiResponse.java (class, L17-22)
+        ApiResponse:
+          code:
+            type: ApiResponseCode
+            constraint: ""
+          message:
+            type: String
+            constraint: ""
+          data:
+            type: T
+            constraint: ""
+          meta:
+            type: Meta
+            constraint: ""
+        # 소스: .sample/.../common/ApiResponse.java (내부 static class Meta, L77-98)
+        Meta:
+          timestamp:
+            type: long
+            constraint: ""
+          traceId:
+            type: String
+            constraint: ""
+        # 소스: .sample/.../common/ApiResponseCode.java (enum, L21-22)
+        ApiResponseCode:
+          code:
+            type: String
+            constraint: ""
+          message:
+            type: String
+            constraint: ""
 
     # POST /api/members/{id}/profile-image — 프로필 이미지 업로드
     uploadProfileImage:
@@ -342,7 +644,7 @@ endpoints:
         # ── 2depth: uploadProfileImage 내부 ──
         - getId                           # BaseEntity.getId — 파일 경로 구성
         # ── 2depth: success 내부 ──
-        - now                             # Meta.now
+        - Meta.now                        # Meta.now
         - getMessage                      # ApiResponseCode.getMessage
       external_calls:
         # ── 직접 호출 (컨트롤러) ──
@@ -352,11 +654,43 @@ endpoints:
         - getOriginalFilename             # MultipartFile.getOriginalFilename — 파일명 획득
         - orElseThrow                     # Optional.orElseThrow
         # ── 2depth+: now 내부 ──
-        - now                             # Instant.now()
+        - Instant.now                     # Instant.now()
         - randomUUID                      # UUID.randomUUID()
         - substring                       # String.substring
         - toEpochMilli                    # Instant.toEpochMilli
         - toString                        # Object.toString
+      # uploadProfileImage: return ResponseEntity<ApiResponse<String>> — data는 String(URL)
+      related_types:
+        # 소스: .sample/.../common/ApiResponse.java (class, L17-22)
+        ApiResponse:
+          code:
+            type: ApiResponseCode
+            constraint: ""
+          message:
+            type: String
+            constraint: ""
+          data:
+            type: T
+            constraint: ""
+          meta:
+            type: Meta
+            constraint: ""
+        # 소스: .sample/.../common/ApiResponse.java (내부 static class Meta, L77-98)
+        Meta:
+          timestamp:
+            type: long
+            constraint: ""
+          traceId:
+            type: String
+            constraint: ""
+        # 소스: .sample/.../common/ApiResponseCode.java (enum, L21-22)
+        ApiResponseCode:
+          code:
+            type: String
+            constraint: ""
+          message:
+            type: String
+            constraint: ""
 
     # PUT /api/members/{id}/address — 주소 수정
     updateAddress:
@@ -379,7 +713,7 @@ endpoints:
         - from                            # MemberResponse.from
         - updateAddress                   # Member.updateAddress — 동명 다른 클래스 메서드
         # ── 2depth: success 내부 ──
-        - now                             # Meta.now
+        - Meta.now                        # Meta.now
         - getMessage                      # ApiResponseCode.getMessage
         # ── 3depth: from 내부 ──
         - getId                           # BaseEntity.getId
@@ -399,11 +733,74 @@ endpoints:
         - getGrade                        # Lombok @Getter
         - getTags                         # Lombok @Getter
         # ── 2depth+: now 내부 ──
-        - now                             # Instant.now()
+        - Instant.now                     # Instant.now()
         - randomUUID                      # UUID.randomUUID()
         - substring                       # String.substring
         - toEpochMilli                    # Instant.toEpochMilli
         - toString                        # Object.toString
+      # updateAddress: param Address, return ResponseEntity<ApiResponse<MemberResponse>>
+      related_types:
+        # 소스: .sample/.../member/entity/Address.java (class, L11-15)
+        Address:
+          street:
+            type: String
+            constraint: ""
+          city:
+            type: String
+            constraint: ""
+          zipCode:
+            type: String
+            constraint: ""
+        # 소스: .sample/.../member/dto/MemberResponse.java (record, L13-19)
+        MemberResponse:
+          id:
+            type: Long
+            constraint: ""
+          email:
+            type: String
+            constraint: ""
+          fullName:
+            type: String
+            constraint: ""
+          grade:
+            type: MemberGrade
+            constraint: ""
+          tags:
+            type: "List<String>"
+            constraint: ""
+          active:
+            type: boolean
+            constraint: ""
+        # 소스: .sample/.../common/ApiResponse.java (class, L17-22)
+        ApiResponse:
+          code:
+            type: ApiResponseCode
+            constraint: ""
+          message:
+            type: String
+            constraint: ""
+          data:
+            type: T
+            constraint: ""
+          meta:
+            type: Meta
+            constraint: ""
+        # 소스: .sample/.../common/ApiResponse.java (내부 static class Meta, L77-98)
+        Meta:
+          timestamp:
+            type: long
+            constraint: ""
+          traceId:
+            type: String
+            constraint: ""
+        # 소스: .sample/.../common/ApiResponseCode.java (enum, L21-22)
+        ApiResponseCode:
+          code:
+            type: String
+            constraint: ""
+          message:
+            type: String
+            constraint: ""
 
     # GET /api/members/me — 현재 로그인 회원 조회
     getCurrentMember:
@@ -425,7 +822,7 @@ endpoints:
         # ── 2depth: getByToken 내부 ──
         - getMember                       # MemberService.getMember — this.getMember 위임
         # ── 2depth: success 내부 ──
-        - now                             # Meta.now
+        - Meta.now                        # Meta.now
         - getMessage                      # ApiResponseCode.getMessage
         # ── 3depth: getMember 내부 ──
         - from                            # MemberResponse.from
@@ -446,11 +843,63 @@ endpoints:
         - getGrade                        # Lombok @Getter
         - getTags                         # Lombok @Getter
         # ── 2depth+: now 내부 ──
-        - now                             # Instant.now()
+        - Instant.now                     # Instant.now()
         - randomUUID                      # UUID.randomUUID()
         - substring                       # String.substring
         - toEpochMilli                    # Instant.toEpochMilli
         - toString                        # Object.toString
+      # getCurrentMember: return ResponseEntity<ApiResponse<MemberResponse>>
+      related_types:
+        # 소스: .sample/.../member/dto/MemberResponse.java (record, L13-19)
+        MemberResponse:
+          id:
+            type: Long
+            constraint: ""
+          email:
+            type: String
+            constraint: ""
+          fullName:
+            type: String
+            constraint: ""
+          grade:
+            type: MemberGrade
+            constraint: ""
+          tags:
+            type: "List<String>"
+            constraint: ""
+          active:
+            type: boolean
+            constraint: ""
+        # 소스: .sample/.../common/ApiResponse.java (class, L17-22)
+        ApiResponse:
+          code:
+            type: ApiResponseCode
+            constraint: ""
+          message:
+            type: String
+            constraint: ""
+          data:
+            type: T
+            constraint: ""
+          meta:
+            type: Meta
+            constraint: ""
+        # 소스: .sample/.../common/ApiResponse.java (내부 static class Meta, L77-98)
+        Meta:
+          timestamp:
+            type: long
+            constraint: ""
+          traceId:
+            type: String
+            constraint: ""
+        # 소스: .sample/.../common/ApiResponseCode.java (enum, L21-22)
+        ApiResponseCode:
+          code:
+            type: String
+            constraint: ""
+          message:
+            type: String
+            constraint: ""
 
     # GET /api/members/audit — 감사 로그 기록
     getAuditLog:
@@ -469,6 +918,7 @@ endpoints:
         - getMethod                       # HttpServletRequest.getMethod
         - getRequestURI                   # HttpServletRequest.getRequestURI
         - setHeader                       # HttpServletResponse.setHeader
+      related_types: {}                    # void 반환, DTO 사용 없음
 
 
   # ----------------------------------------------------------------
@@ -479,7 +929,7 @@ endpoints:
   ProductController:
     class_level:
       fields:
-        - productService                  # ProductService — 상품 비즈니스 로직
+        productService: ProductService            # 상품 비즈니스 로직
 
     # GET /api/v1/products/{id} — 상품 단건 조회
     getProduct:
@@ -498,7 +948,7 @@ endpoints:
         # ── 2depth: getProduct 내부 ──
         - from                            # ProductDto.Response::from — 메서드 레퍼런스
         # ── 2depth: success 내부 ──
-        - now                             # Meta.now
+        - Meta.now                        # Meta.now
         - getMessage                      # ApiResponseCode.getMessage
         # ── 3depth: from 내부 (Product getter — 직접 작성) ──
         - getId                           # BaseEntity.getId
@@ -516,11 +966,66 @@ endpoints:
         - map                             # Optional.map
         - orElseThrow                     # Optional.orElseThrow
         # ── 2depth+: now 내부 ──
-        - now                             # Instant.now()
+        - Instant.now                     # Instant.now()
         - randomUUID                      # UUID.randomUUID()
         - substring                       # String.substring
         - toEpochMilli                    # Instant.toEpochMilli
         - toString                        # Object.toString
+      # getProduct: return ResponseEntity<ApiResponse<ProductDto.Response>>
+      related_types:
+        # 소스: .sample/.../product/dto/ProductDto.java (내부 record Response, L93-101)
+        Response:
+          id:
+            type: Long
+            constraint: ""
+          name:
+            type: String
+            constraint: ""
+          price:
+            type: BigDecimal
+            constraint: ""
+          description:
+            type: String
+            constraint: ""
+          categoryName:
+            type: String
+            constraint: ""
+          stockQuantity:
+            type: int
+            constraint: ""
+          active:
+            type: boolean
+            constraint: ""
+        # 소스: .sample/.../common/ApiResponse.java (class, L17-22)
+        ApiResponse:
+          code:
+            type: ApiResponseCode
+            constraint: ""
+          message:
+            type: String
+            constraint: ""
+          data:
+            type: T
+            constraint: ""
+          meta:
+            type: Meta
+            constraint: ""
+        # 소스: .sample/.../common/ApiResponse.java (내부 static class Meta, L77-98)
+        Meta:
+          timestamp:
+            type: long
+            constraint: ""
+          traceId:
+            type: String
+            constraint: ""
+        # 소스: .sample/.../common/ApiResponseCode.java (enum, L21-22)
+        ApiResponseCode:
+          code:
+            type: String
+            constraint: ""
+          message:
+            type: String
+            constraint: ""
 
     # POST /api/v1/products/ — 상품 생성
     createProduct:
@@ -553,7 +1058,7 @@ endpoints:
         - build                           # Builder.build
         - from                            # ProductDto.Response.from — Entity→DTO 변환
         # ── 2depth: success 내부 ──
-        - now                             # Meta.now
+        - Meta.now                        # Meta.now
         - getMessage                      # ApiResponseCode.getMessage
         # ── 3depth: from 내부 (Product getter) ──
         - getId                           # BaseEntity.getId
@@ -568,11 +1073,83 @@ endpoints:
         - orElseThrow                     # Optional.orElseThrow
         - save                            # productRepository.save — JpaRepository 상속
         # ── 2depth+: now 내부 ──
-        - now                             # Instant.now()
+        - Instant.now                     # Instant.now()
         - randomUUID                      # UUID.randomUUID()
         - substring                       # String.substring
         - toEpochMilli                    # Instant.toEpochMilli
         - toString                        # Object.toString
+      # createProduct: param ProductDto.Create, return ResponseEntity<ApiResponse<ProductDto.Response>>
+      related_types:
+        # 소스: .sample/.../product/dto/ProductDto.java (내부 static class Create, L21-62)
+        Create:
+          name:
+            type: String
+            constraint: "@NotBlank"
+          price:
+            type: BigDecimal
+            constraint: "@NotNull"
+          description:
+            type: String
+            constraint: ""
+          categoryId:
+            type: Long
+            constraint: ""
+          stockQuantity:
+            type: int
+            constraint: ""
+        # 소스: .sample/.../product/dto/ProductDto.java (내부 record Response, L93-101)
+        Response:
+          id:
+            type: Long
+            constraint: ""
+          name:
+            type: String
+            constraint: ""
+          price:
+            type: BigDecimal
+            constraint: ""
+          description:
+            type: String
+            constraint: ""
+          categoryName:
+            type: String
+            constraint: ""
+          stockQuantity:
+            type: int
+            constraint: ""
+          active:
+            type: boolean
+            constraint: ""
+        # 소스: .sample/.../common/ApiResponse.java (class, L17-22)
+        ApiResponse:
+          code:
+            type: ApiResponseCode
+            constraint: ""
+          message:
+            type: String
+            constraint: ""
+          data:
+            type: T
+            constraint: ""
+          meta:
+            type: Meta
+            constraint: ""
+        # 소스: .sample/.../common/ApiResponse.java (내부 static class Meta, L77-98)
+        Meta:
+          timestamp:
+            type: long
+            constraint: ""
+          traceId:
+            type: String
+            constraint: ""
+        # 소스: .sample/.../common/ApiResponseCode.java (enum, L21-22)
+        ApiResponseCode:
+          code:
+            type: String
+            constraint: ""
+          message:
+            type: String
+            constraint: ""
 
     # PUT /api/v1/products/{id} — 상품 수정
     updateProduct:
@@ -597,7 +1174,7 @@ endpoints:
         - getName                         # ProductDto.Update.getName (직접 작성)
         - getPrice                        # ProductDto.Update.getPrice (직접 작성)
         # ── 2depth: success 내부 ──
-        - now                             # Meta.now
+        - Meta.now                        # Meta.now
         - getMessage                      # ApiResponseCode.getMessage
         # ── 3depth: from 내부 (Product getter) ──
         - getId                           # BaseEntity.getId
@@ -612,11 +1189,74 @@ endpoints:
         - findById                        # JpaRepository.findById
         - orElseThrow                     # Optional.orElseThrow
         # ── 2depth+: now 내부 ──
-        - now                             # Instant.now()
+        - Instant.now                     # Instant.now()
         - randomUUID                      # UUID.randomUUID()
         - substring                       # String.substring
         - toEpochMilli                    # Instant.toEpochMilli
         - toString                        # Object.toString
+      # updateProduct: param ProductDto.Update, return ResponseEntity<ApiResponse<ProductDto.Response>>
+      related_types:
+        # 소스: .sample/.../product/dto/ProductDto.java (내부 static class Update, L67-86)
+        Update:
+          name:
+            type: String
+            constraint: ""
+          price:
+            type: BigDecimal
+            constraint: ""
+        # 소스: .sample/.../product/dto/ProductDto.java (내부 record Response, L93-101)
+        Response:
+          id:
+            type: Long
+            constraint: ""
+          name:
+            type: String
+            constraint: ""
+          price:
+            type: BigDecimal
+            constraint: ""
+          description:
+            type: String
+            constraint: ""
+          categoryName:
+            type: String
+            constraint: ""
+          stockQuantity:
+            type: int
+            constraint: ""
+          active:
+            type: boolean
+            constraint: ""
+        # 소스: .sample/.../common/ApiResponse.java (class, L17-22)
+        ApiResponse:
+          code:
+            type: ApiResponseCode
+            constraint: ""
+          message:
+            type: String
+            constraint: ""
+          data:
+            type: T
+            constraint: ""
+          meta:
+            type: Meta
+            constraint: ""
+        # 소스: .sample/.../common/ApiResponse.java (내부 static class Meta, L77-98)
+        Meta:
+          timestamp:
+            type: long
+            constraint: ""
+          traceId:
+            type: String
+            constraint: ""
+        # 소스: .sample/.../common/ApiResponseCode.java (enum, L21-22)
+        ApiResponseCode:
+          code:
+            type: String
+            constraint: ""
+          message:
+            type: String
+            constraint: ""
 
     # GET /api/v1/products/filter/{criteria} — 상품 필터링 (Matrix Variable)
     filterProducts:
@@ -638,7 +1278,7 @@ endpoints:
         - matchesCriteria                 # ProductService.matchesCriteria — 필터 로직
         - from                            # ProductDto.Response::from — 메서드 레퍼런스
         # ── 2depth: success 내부 ──
-        - now                             # Meta.now
+        - Meta.now                        # Meta.now
         - getMessage                      # ApiResponseCode.getMessage
         # ── 3depth: matchesCriteria 내부 ──
         - getAttributes                   # Product.getAttributes — 속성 맵 조회
@@ -666,11 +1306,66 @@ endpoints:
         - getKey                          # Map.Entry.getKey
         - getValue                        # Map.Entry.getValue
         # ── 2depth+: now 내부 ──
-        - now                             # Instant.now()
+        - Instant.now                     # Instant.now()
         - randomUUID                      # UUID.randomUUID()
         - substring                       # String.substring
         - toEpochMilli                    # Instant.toEpochMilli
         - toString                        # Object.toString
+      # filterProducts: return ResponseEntity<ApiResponse<List<ProductDto.Response>>>
+      related_types:
+        # 소스: .sample/.../product/dto/ProductDto.java (내부 record Response, L93-101)
+        Response:
+          id:
+            type: Long
+            constraint: ""
+          name:
+            type: String
+            constraint: ""
+          price:
+            type: BigDecimal
+            constraint: ""
+          description:
+            type: String
+            constraint: ""
+          categoryName:
+            type: String
+            constraint: ""
+          stockQuantity:
+            type: int
+            constraint: ""
+          active:
+            type: boolean
+            constraint: ""
+        # 소스: .sample/.../common/ApiResponse.java (class, L17-22)
+        ApiResponse:
+          code:
+            type: ApiResponseCode
+            constraint: ""
+          message:
+            type: String
+            constraint: ""
+          data:
+            type: T
+            constraint: ""
+          meta:
+            type: Meta
+            constraint: ""
+        # 소스: .sample/.../common/ApiResponse.java (내부 static class Meta, L77-98)
+        Meta:
+          timestamp:
+            type: long
+            constraint: ""
+          traceId:
+            type: String
+            constraint: ""
+        # 소스: .sample/.../common/ApiResponseCode.java (enum, L21-22)
+        ApiResponseCode:
+          code:
+            type: String
+            constraint: ""
+          message:
+            type: String
+            constraint: ""
 
     # GET /api/v1/products/async/{id} — 상품 비동기 조회 (CompletableFuture)
     getProductAsync:
@@ -689,7 +1384,7 @@ endpoints:
         # ── 2depth: getProduct 내부 ──
         - from                            # ProductDto.Response::from — 메서드 레퍼런스
         # ── 2depth: success 내부 ──
-        - now                             # Meta.now
+        - Meta.now                        # Meta.now
         - getMessage                      # ApiResponseCode.getMessage
         # ── 3depth: from 내부 (Product getter) ──
         - getId                           # BaseEntity.getId
@@ -708,11 +1403,66 @@ endpoints:
         - map                             # Optional.map
         - orElseThrow                     # Optional.orElseThrow
         # ── 2depth+: now 내부 ──
-        - now                             # Instant.now()
+        - Instant.now                     # Instant.now()
         - randomUUID                      # UUID.randomUUID()
         - substring                       # String.substring
         - toEpochMilli                    # Instant.toEpochMilli
         - toString                        # Object.toString
+      # getProductAsync: return CompletableFuture<ResponseEntity<ApiResponse<ProductDto.Response>>>
+      related_types:
+        # 소스: .sample/.../product/dto/ProductDto.java (내부 record Response, L93-101)
+        Response:
+          id:
+            type: Long
+            constraint: ""
+          name:
+            type: String
+            constraint: ""
+          price:
+            type: BigDecimal
+            constraint: ""
+          description:
+            type: String
+            constraint: ""
+          categoryName:
+            type: String
+            constraint: ""
+          stockQuantity:
+            type: int
+            constraint: ""
+          active:
+            type: boolean
+            constraint: ""
+        # 소스: .sample/.../common/ApiResponse.java (class, L17-22)
+        ApiResponse:
+          code:
+            type: ApiResponseCode
+            constraint: ""
+          message:
+            type: String
+            constraint: ""
+          data:
+            type: T
+            constraint: ""
+          meta:
+            type: Meta
+            constraint: ""
+        # 소스: .sample/.../common/ApiResponse.java (내부 static class Meta, L77-98)
+        Meta:
+          timestamp:
+            type: long
+            constraint: ""
+          traceId:
+            type: String
+            constraint: ""
+        # 소스: .sample/.../common/ApiResponseCode.java (enum, L21-22)
+        ApiResponseCode:
+          code:
+            type: String
+            constraint: ""
+          message:
+            type: String
+            constraint: ""
 
     # GET /api/v1/products/deferred/{id} — 상품 지연 조회 (DeferredResult)
     getProductDeferred:
@@ -731,7 +1481,7 @@ endpoints:
         # ── 2depth: getProduct 내부 ──
         - from                            # ProductDto.Response::from — 메서드 레퍼런스
         # ── 2depth: success 내부 ──
-        - now                             # Meta.now
+        - Meta.now                        # Meta.now
         - getMessage                      # ApiResponseCode.getMessage
         # ── 3depth: from 내부 (Product getter) ──
         - getId                           # BaseEntity.getId
@@ -754,11 +1504,66 @@ endpoints:
         - map                             # Optional.map
         - orElseThrow                     # Optional.orElseThrow
         # ── 2depth+: now 내부 ──
-        - now                             # Instant.now()
+        - Instant.now                     # Instant.now()
         - randomUUID                      # UUID.randomUUID()
         - substring                       # String.substring
         - toEpochMilli                    # Instant.toEpochMilli
         - toString                        # Object.toString
+      # getProductDeferred: return DeferredResult<ResponseEntity<ApiResponse<ProductDto.Response>>>
+      related_types:
+        # 소스: .sample/.../product/dto/ProductDto.java (내부 record Response, L93-101)
+        Response:
+          id:
+            type: Long
+            constraint: ""
+          name:
+            type: String
+            constraint: ""
+          price:
+            type: BigDecimal
+            constraint: ""
+          description:
+            type: String
+            constraint: ""
+          categoryName:
+            type: String
+            constraint: ""
+          stockQuantity:
+            type: int
+            constraint: ""
+          active:
+            type: boolean
+            constraint: ""
+        # 소스: .sample/.../common/ApiResponse.java (class, L17-22)
+        ApiResponse:
+          code:
+            type: ApiResponseCode
+            constraint: ""
+          message:
+            type: String
+            constraint: ""
+          data:
+            type: T
+            constraint: ""
+          meta:
+            type: Meta
+            constraint: ""
+        # 소스: .sample/.../common/ApiResponse.java (내부 static class Meta, L77-98)
+        Meta:
+          timestamp:
+            type: long
+            constraint: ""
+          traceId:
+            type: String
+            constraint: ""
+        # 소스: .sample/.../common/ApiResponseCode.java (enum, L21-22)
+        ApiResponseCode:
+          code:
+            type: String
+            constraint: ""
+          message:
+            type: String
+            constraint: ""
 
     # DELETE /api/v1/products/{id} — 상품 삭제
     deleteProduct:
@@ -780,6 +1585,7 @@ endpoints:
         # ── 2depth: deleteProduct 내부 ──
         - findById                        # JpaRepository.findById
         - orElseThrow                     # Optional.orElseThrow
+      related_types: {}                    # ResponseEntity<Void> — DTO 사용 없음
 
 
   # ----------------------------------------------------------------
@@ -789,7 +1595,7 @@ endpoints:
   ProductSearchController:
     class_level:
       fields:
-        - productService
+        productService: ProductService
 
     # GET /api/products/search/ — 상품 검색 v1 (단순)
     searchV1:
@@ -809,7 +1615,7 @@ endpoints:
         - findByNameContaining            # ProductRepository.findByNameContaining — 사용자 정의
         - from                            # ProductDto.Response::from — 메서드 레퍼런스
         # ── 2depth: success 내부 ──
-        - now                             # Meta.now
+        - Meta.now                        # Meta.now
         - getMessage                      # ApiResponseCode.getMessage
         # ── 3depth: from 내부 (Product getter — 직접 작성) ──
         - getId                           # BaseEntity.getId
@@ -827,11 +1633,66 @@ endpoints:
         - toList                          # Page.toList
         - unpaged                         # Pageable.unpaged
         # ── 2depth+: now 내부 ──
-        - now                             # Instant.now()
+        - Instant.now                     # Instant.now()
         - randomUUID                      # UUID.randomUUID()
         - substring                       # String.substring
         - toEpochMilli                    # Instant.toEpochMilli
         - toString                        # Object.toString
+      # searchV1: return ResponseEntity<ApiResponse<List<ProductDto.Response>>>
+      related_types:
+        # 소스: .sample/.../product/dto/ProductDto.java (내부 record Response, L93-101)
+        Response:
+          id:
+            type: Long
+            constraint: ""
+          name:
+            type: String
+            constraint: ""
+          price:
+            type: BigDecimal
+            constraint: ""
+          description:
+            type: String
+            constraint: ""
+          categoryName:
+            type: String
+            constraint: ""
+          stockQuantity:
+            type: int
+            constraint: ""
+          active:
+            type: boolean
+            constraint: ""
+        # 소스: .sample/.../common/ApiResponse.java (class, L17-22)
+        ApiResponse:
+          code:
+            type: ApiResponseCode
+            constraint: ""
+          message:
+            type: String
+            constraint: ""
+          data:
+            type: T
+            constraint: ""
+          meta:
+            type: Meta
+            constraint: ""
+        # 소스: .sample/.../common/ApiResponse.java (내부 static class Meta, L77-98)
+        Meta:
+          timestamp:
+            type: long
+            constraint: ""
+          traceId:
+            type: String
+            constraint: ""
+        # 소스: .sample/.../common/ApiResponseCode.java (enum, L21-22)
+        ApiResponseCode:
+          code:
+            type: String
+            constraint: ""
+          message:
+            type: String
+            constraint: ""
 
     # GET /api/products/search/ — 상품 검색 v2 (페이징)
     searchV2:
@@ -853,7 +1714,7 @@ endpoints:
         - findByNameContaining            # ProductRepository.findByNameContaining
         - from                            # PagedResponse.from + ProductDto.Response::from
         # ── 2depth: success 내부 ──
-        - now                             # Meta.now
+        - Meta.now                        # Meta.now
         - getMessage                      # ApiResponseCode.getMessage
         # ── 3depth: ProductDto.Response.from 내부 ──
         - getId                           # BaseEntity.getId
@@ -875,11 +1736,83 @@ endpoints:
         - getTotalElements                # Page.getTotalElements
         - getTotalPages                   # Page.getTotalPages
         # ── 2depth+: now 내부 ──
-        - now                             # Instant.now()
+        - Instant.now                     # Instant.now()
         - randomUUID                      # UUID.randomUUID()
         - substring                       # String.substring
         - toEpochMilli                    # Instant.toEpochMilli
         - toString                        # Object.toString
+      # searchV2: return ResponseEntity<ApiResponse<PagedResponse<ProductDto.Response>>>
+      related_types:
+        # 소스: .sample/.../common/PagedResponse.java (record, L11-17)
+        PagedResponse:
+          content:
+            type: "List<T>"
+            constraint: ""
+          page:
+            type: int
+            constraint: ""
+          size:
+            type: int
+            constraint: ""
+          totalElements:
+            type: long
+            constraint: ""
+          totalPages:
+            type: int
+            constraint: ""
+        # 소스: .sample/.../product/dto/ProductDto.java (내부 record Response, L93-101)
+        Response:
+          id:
+            type: Long
+            constraint: ""
+          name:
+            type: String
+            constraint: ""
+          price:
+            type: BigDecimal
+            constraint: ""
+          description:
+            type: String
+            constraint: ""
+          categoryName:
+            type: String
+            constraint: ""
+          stockQuantity:
+            type: int
+            constraint: ""
+          active:
+            type: boolean
+            constraint: ""
+        # 소스: .sample/.../common/ApiResponse.java (class, L17-22)
+        ApiResponse:
+          code:
+            type: ApiResponseCode
+            constraint: ""
+          message:
+            type: String
+            constraint: ""
+          data:
+            type: T
+            constraint: ""
+          meta:
+            type: Meta
+            constraint: ""
+        # 소스: .sample/.../common/ApiResponse.java (내부 static class Meta, L77-98)
+        Meta:
+          timestamp:
+            type: long
+            constraint: ""
+          traceId:
+            type: String
+            constraint: ""
+        # 소스: .sample/.../common/ApiResponseCode.java (enum, L21-22)
+        ApiResponseCode:
+          code:
+            type: String
+            constraint: ""
+          message:
+            type: String
+            constraint: ""
 
     # GET /api/products/search/{id}/links — 상품 조회 + HATEOAS 링크
     getProductWithLinks:
@@ -892,7 +1825,7 @@ endpoints:
         - Response                        # EntityModel<Response> 이지만 TYPE은 Response
       param_types: []
       internal_calls:
-        - getProduct                      # ProductService.getProduct
+        - ProductService.getProduct       # ProductService.getProduct
         # ── 2depth: getProduct 내부 ──
         - from                            # ProductDto.Response::from — 메서드 레퍼런스
         # ── 3depth: from 내부 (Product getter) ──
@@ -916,6 +1849,31 @@ endpoints:
         - findById                        # JpaRepository.findById
         - map                             # Optional.map
         - orElseThrow                     # Optional.orElseThrow
+      # getProductWithLinks: return EntityModel<ProductDto.Response> — EntityModel은 외부 타입
+      related_types:
+        # 소스: .sample/.../product/dto/ProductDto.java (내부 record Response, L93-101)
+        Response:
+          id:
+            type: Long
+            constraint: ""
+          name:
+            type: String
+            constraint: ""
+          price:
+            type: BigDecimal
+            constraint: ""
+          description:
+            type: String
+            constraint: ""
+          categoryName:
+            type: String
+            constraint: ""
+          stockQuantity:
+            type: int
+            constraint: ""
+          active:
+            type: boolean
+            constraint: ""
 
 
   # ----------------------------------------------------------------
@@ -928,7 +1886,7 @@ endpoints:
   OrderController:
     class_level:
       fields:
-        - orderService                    # OrderService — 주문 비즈니스 로직
+        orderService: OrderService                # 주문 비즈니스 로직
 
     # POST /api/orders/ — 주문 생성
     createOrder:
@@ -956,7 +1914,7 @@ endpoints:
         - getProduct                      # OrderItem.getProduct — 수동 getter
         - getQuantity                     # OrderItem.getQuantity — 수동 getter
         # ── 2depth: success 내부 ──
-        - now                             # Meta.now
+        - Meta.now                        # Meta.now
         - getMessage                      # ApiResponseCode.getMessage
         # ── 3depth: OrderResponse.from 내부 ──
         - getId                           # BaseEntity.getId — 수동 getter
@@ -1022,11 +1980,110 @@ endpoints:
         - multiply                        # BigDecimal.multiply
         - valueOf                         # BigDecimal.valueOf
         # ── 2depth+: now (Meta.now) 내부 ──
-        - now                             # Instant.now()
+        - Instant.now                     # Instant.now()
         - randomUUID                      # UUID.randomUUID()
         - substring                       # String.substring
         - toEpochMilli                    # Instant.toEpochMilli
         - toString                        # Object.toString
+      # createOrder: param OrderCreateRequest, return ResponseEntity<ApiResponse<OrderResponse>>
+      related_types:
+        # 소스: .sample/.../order/dto/OrderCreateRequest.java (record, L15-21)
+        OrderCreateRequest:
+          memberId:
+            type: Long
+            constraint: "@NotNull"
+          items:
+            type: "List<OrderItemRequest>"
+            constraint: "@Valid"
+          recipientName:
+            type: String
+            constraint: ""
+          phone:
+            type: String
+            constraint: ""
+          deliveryAddress:
+            type: Address
+            constraint: "@Valid"
+        # 소스: .sample/.../order/dto/OrderCreateRequest.java (내부 record OrderItemRequest, L26-29)
+        OrderItemRequest:
+          productId:
+            type: Long
+            constraint: "@NotNull"
+          quantity:
+            type: int
+            constraint: "@Min(1)"
+        # 소스: .sample/.../member/entity/Address.java (class, L11-15)
+        Address:
+          street:
+            type: String
+            constraint: ""
+          city:
+            type: String
+            constraint: ""
+          zipCode:
+            type: String
+            constraint: ""
+        # 소스: .sample/.../order/dto/OrderResponse.java (record, L15-20)
+        OrderResponse:
+          id:
+            type: Long
+            constraint: ""
+          memberEmail:
+            type: String
+            constraint: ""
+          status:
+            type: OrderStatus
+            constraint: ""
+          items:
+            type: "List<OrderItemResponse>"
+            constraint: ""
+          totalAmount:
+            type: BigDecimal
+            constraint: ""
+        # 소스: .sample/.../order/dto/OrderResponse.java (내부 record OrderItemResponse, L26-31)
+        OrderItemResponse:
+          productName:
+            type: String
+            constraint: ""
+          quantity:
+            type: int
+            constraint: ""
+          unitPrice:
+            type: BigDecimal
+            constraint: ""
+          subtotal:
+            type: BigDecimal
+            constraint: ""
+        # 소스: .sample/.../common/ApiResponse.java (class, L17-22)
+        ApiResponse:
+          code:
+            type: ApiResponseCode
+            constraint: ""
+          message:
+            type: String
+            constraint: ""
+          data:
+            type: T
+            constraint: ""
+          meta:
+            type: Meta
+            constraint: ""
+        # 소스: .sample/.../common/ApiResponse.java (내부 static class Meta, L77-98)
+        Meta:
+          timestamp:
+            type: long
+            constraint: ""
+          traceId:
+            type: String
+            constraint: ""
+        # 소스: .sample/.../common/ApiResponseCode.java (enum, L21-22)
+        ApiResponseCode:
+          code:
+            type: String
+            constraint: ""
+          message:
+            type: String
+            constraint: ""
 
     # GET /api/orders/{id} — 주문 단건 조회
     getOrder:
@@ -1045,7 +2102,7 @@ endpoints:
         # ── 2depth: getOrder 내부 ──
         - from                            # OrderResponse.from
         # ── 2depth: success 내부 ──
-        - now                             # Meta.now
+        - Meta.now                        # Meta.now
         - getMessage                      # ApiResponseCode.getMessage
         # ── 3depth: OrderResponse.from 내부 ──
         - getId                           # BaseEntity.getId — 수동 getter
@@ -1074,11 +2131,74 @@ endpoints:
         - multiply                        # BigDecimal.multiply
         - valueOf                         # BigDecimal.valueOf
         # ── 2depth+: now (Meta.now) 내부 ──
-        - now                             # Instant.now()
+        - Instant.now                     # Instant.now()
         - randomUUID                      # UUID.randomUUID()
         - substring                       # String.substring
         - toEpochMilli                    # Instant.toEpochMilli
         - toString                        # Object.toString
+      # getOrder: return ResponseEntity<ApiResponse<OrderResponse>>
+      related_types:
+        # 소스: .sample/.../order/dto/OrderResponse.java (record, L15-20)
+        OrderResponse:
+          id:
+            type: Long
+            constraint: ""
+          memberEmail:
+            type: String
+            constraint: ""
+          status:
+            type: OrderStatus
+            constraint: ""
+          items:
+            type: "List<OrderItemResponse>"
+            constraint: ""
+          totalAmount:
+            type: BigDecimal
+            constraint: ""
+        # 소스: .sample/.../order/dto/OrderResponse.java (내부 record OrderItemResponse, L26-31)
+        OrderItemResponse:
+          productName:
+            type: String
+            constraint: ""
+          quantity:
+            type: int
+            constraint: ""
+          unitPrice:
+            type: BigDecimal
+            constraint: ""
+          subtotal:
+            type: BigDecimal
+            constraint: ""
+        # 소스: .sample/.../common/ApiResponse.java (class, L17-22)
+        ApiResponse:
+          code:
+            type: ApiResponseCode
+            constraint: ""
+          message:
+            type: String
+            constraint: ""
+          data:
+            type: T
+            constraint: ""
+          meta:
+            type: Meta
+            constraint: ""
+        # 소스: .sample/.../common/ApiResponse.java (내부 static class Meta, L77-98)
+        Meta:
+          timestamp:
+            type: long
+            constraint: ""
+          traceId:
+            type: String
+            constraint: ""
+        # 소스: .sample/.../common/ApiResponseCode.java (enum, L21-22)
+        ApiResponseCode:
+          code:
+            type: String
+            constraint: ""
+          message:
+            type: String
+            constraint: ""
 
     # PATCH /api/orders/{id}/status — 주문 상태 변경
     updateStatus:
@@ -1100,7 +2220,7 @@ endpoints:
         - changeStatus                    # Order.changeStatus — 수동 메서드 (상태 전이 검증)
         - from                            # OrderResponse.from
         # ── 2depth: success 내부 ──
-        - now                             # Meta.now
+        - Meta.now                        # Meta.now
         - getMessage                      # ApiResponseCode.getMessage
         # ── 3depth: changeStatus 내부 ──
         - canTransitionTo                 # OrderStatus.canTransitionTo — 수동 메서드
@@ -1131,11 +2251,74 @@ endpoints:
         - multiply                        # BigDecimal.multiply
         - valueOf                         # BigDecimal.valueOf
         # ── 2depth+: now (Meta.now) 내부 ──
-        - now                             # Instant.now()
+        - Instant.now                     # Instant.now()
         - randomUUID                      # UUID.randomUUID()
         - substring                       # String.substring
         - toEpochMilli                    # Instant.toEpochMilli
         - toString                        # Object.toString
+      # updateStatus: return ResponseEntity<ApiResponse<OrderResponse>>
+      related_types:
+        # 소스: .sample/.../order/dto/OrderResponse.java (record, L15-20)
+        OrderResponse:
+          id:
+            type: Long
+            constraint: ""
+          memberEmail:
+            type: String
+            constraint: ""
+          status:
+            type: OrderStatus
+            constraint: ""
+          items:
+            type: "List<OrderItemResponse>"
+            constraint: ""
+          totalAmount:
+            type: BigDecimal
+            constraint: ""
+        # 소스: .sample/.../order/dto/OrderResponse.java (내부 record OrderItemResponse, L26-31)
+        OrderItemResponse:
+          productName:
+            type: String
+            constraint: ""
+          quantity:
+            type: int
+            constraint: ""
+          unitPrice:
+            type: BigDecimal
+            constraint: ""
+          subtotal:
+            type: BigDecimal
+            constraint: ""
+        # 소스: .sample/.../common/ApiResponse.java (class, L17-22)
+        ApiResponse:
+          code:
+            type: ApiResponseCode
+            constraint: ""
+          message:
+            type: String
+            constraint: ""
+          data:
+            type: T
+            constraint: ""
+          meta:
+            type: Meta
+            constraint: ""
+        # 소스: .sample/.../common/ApiResponse.java (내부 static class Meta, L77-98)
+        Meta:
+          timestamp:
+            type: long
+            constraint: ""
+          traceId:
+            type: String
+            constraint: ""
+        # 소스: .sample/.../common/ApiResponseCode.java (enum, L21-22)
+        ApiResponseCode:
+          code:
+            type: String
+            constraint: ""
+          message:
+            type: String
+            constraint: ""
 
     # GET /api/orders/reactive/{id} — 주문 리액티브 조회 (Mono)
     getOrderReactive:
@@ -1154,7 +2337,7 @@ endpoints:
         # ── 2depth: getOrder 내부 ──
         - from                            # OrderResponse.from
         # ── 2depth: success 내부 ──
-        - now                             # Meta.now
+        - Meta.now                        # Meta.now
         - getMessage                      # ApiResponseCode.getMessage
         # ── 3depth: OrderResponse.from 내부 ──
         - getId                           # BaseEntity.getId — 수동 getter
@@ -1184,11 +2367,74 @@ endpoints:
         - multiply                        # BigDecimal.multiply
         - valueOf                         # BigDecimal.valueOf
         # ── 2depth+: now (Meta.now) 내부 ──
-        - now                             # Instant.now()
+        - Instant.now                     # Instant.now()
         - randomUUID                      # UUID.randomUUID()
         - substring                       # String.substring
         - toEpochMilli                    # Instant.toEpochMilli
         - toString                        # Object.toString
+      # getOrderReactive: return Mono<ResponseEntity<ApiResponse<OrderResponse>>>
+      related_types:
+        # 소스: .sample/.../order/dto/OrderResponse.java (record, L15-20)
+        OrderResponse:
+          id:
+            type: Long
+            constraint: ""
+          memberEmail:
+            type: String
+            constraint: ""
+          status:
+            type: OrderStatus
+            constraint: ""
+          items:
+            type: "List<OrderItemResponse>"
+            constraint: ""
+          totalAmount:
+            type: BigDecimal
+            constraint: ""
+        # 소스: .sample/.../order/dto/OrderResponse.java (내부 record OrderItemResponse, L26-31)
+        OrderItemResponse:
+          productName:
+            type: String
+            constraint: ""
+          quantity:
+            type: int
+            constraint: ""
+          unitPrice:
+            type: BigDecimal
+            constraint: ""
+          subtotal:
+            type: BigDecimal
+            constraint: ""
+        # 소스: .sample/.../common/ApiResponse.java (class, L17-22)
+        ApiResponse:
+          code:
+            type: ApiResponseCode
+            constraint: ""
+          message:
+            type: String
+            constraint: ""
+          data:
+            type: T
+            constraint: ""
+          meta:
+            type: Meta
+            constraint: ""
+        # 소스: .sample/.../common/ApiResponse.java (내부 static class Meta, L77-98)
+        Meta:
+          timestamp:
+            type: long
+            constraint: ""
+          traceId:
+            type: String
+            constraint: ""
+        # 소스: .sample/.../common/ApiResponseCode.java (enum, L21-22)
+        ApiResponseCode:
+          code:
+            type: String
+            constraint: ""
+          message:
+            type: String
+            constraint: ""
 
     # GET /api/orders/stream — 최근 주문 스트림 (SSE)
     streamOrders:
@@ -1231,6 +2477,39 @@ endpoints:
         # ── 5depth: getSubtotal 내부 ──
         - multiply                        # BigDecimal.multiply
         - valueOf                         # BigDecimal.valueOf
+      # streamOrders: return Flux<OrderResponse> — ApiResponse 미사용
+      related_types:
+        # 소스: .sample/.../order/dto/OrderResponse.java (record, L15-20)
+        OrderResponse:
+          id:
+            type: Long
+            constraint: ""
+          memberEmail:
+            type: String
+            constraint: ""
+          status:
+            type: OrderStatus
+            constraint: ""
+          items:
+            type: "List<OrderItemResponse>"
+            constraint: ""
+          totalAmount:
+            type: BigDecimal
+            constraint: ""
+        # 소스: .sample/.../order/dto/OrderResponse.java (내부 record OrderItemResponse, L26-31)
+        OrderItemResponse:
+          productName:
+            type: String
+            constraint: ""
+          quantity:
+            type: int
+            constraint: ""
+          unitPrice:
+            type: BigDecimal
+            constraint: ""
+          subtotal:
+            type: BigDecimal
+            constraint: ""
 
     # GET /api/orders/my — 내 주문 목록 (커스텀 어노테이션)
     getMyOrders:
@@ -1251,7 +2530,7 @@ endpoints:
         - findByMemberId                  # OrderRepository.findByMemberId — 사용자 정의 쿼리
         - from                            # OrderResponse::from — 메서드 레퍼런스
         # ── 2depth: success 내부 ──
-        - now                             # Meta.now
+        - Meta.now                        # Meta.now
         - getMessage                      # ApiResponseCode.getMessage
         # ── 3depth: OrderResponse.from 내부 ──
         - getId                           # BaseEntity.getId — 수동 getter
@@ -1278,11 +2557,74 @@ endpoints:
         - multiply                        # BigDecimal.multiply
         - valueOf                         # BigDecimal.valueOf
         # ── 2depth+: now (Meta.now) 내부 ──
-        - now                             # Instant.now()
+        - Instant.now                     # Instant.now()
         - randomUUID                      # UUID.randomUUID()
         - substring                       # String.substring
         - toEpochMilli                    # Instant.toEpochMilli
         - toString                        # Object.toString
+      # getMyOrders: return ResponseEntity<ApiResponse<List<OrderResponse>>>
+      related_types:
+        # 소스: .sample/.../order/dto/OrderResponse.java (record, L15-20)
+        OrderResponse:
+          id:
+            type: Long
+            constraint: ""
+          memberEmail:
+            type: String
+            constraint: ""
+          status:
+            type: OrderStatus
+            constraint: ""
+          items:
+            type: "List<OrderItemResponse>"
+            constraint: ""
+          totalAmount:
+            type: BigDecimal
+            constraint: ""
+        # 소스: .sample/.../order/dto/OrderResponse.java (내부 record OrderItemResponse, L26-31)
+        OrderItemResponse:
+          productName:
+            type: String
+            constraint: ""
+          quantity:
+            type: int
+            constraint: ""
+          unitPrice:
+            type: BigDecimal
+            constraint: ""
+          subtotal:
+            type: BigDecimal
+            constraint: ""
+        # 소스: .sample/.../common/ApiResponse.java (class, L17-22)
+        ApiResponse:
+          code:
+            type: ApiResponseCode
+            constraint: ""
+          message:
+            type: String
+            constraint: ""
+          data:
+            type: T
+            constraint: ""
+          meta:
+            type: Meta
+            constraint: ""
+        # 소스: .sample/.../common/ApiResponse.java (내부 static class Meta, L77-98)
+        Meta:
+          timestamp:
+            type: long
+            constraint: ""
+          traceId:
+            type: String
+            constraint: ""
+        # 소스: .sample/.../common/ApiResponseCode.java (enum, L21-22)
+        ApiResponseCode:
+          code:
+            type: String
+            constraint: ""
+          message:
+            type: String
+            constraint: ""
 
     # GET /api/orders/{id}/invoice — 주문서 다운로드 (바이너리)
     downloadInvoice:
@@ -1307,6 +2649,7 @@ endpoints:
         - orElseThrow                     # Optional.orElseThrow
         - getTotalAmount                  # Order Lombok @Getter
         - getBytes                        # String.getBytes
+      related_types: {}                    # ResponseEntity<byte[]> — DTO 사용 없음
 
 
   # ----------------------------------------------------------------
@@ -1316,7 +2659,7 @@ endpoints:
   NotificationController:
     class_level:
       fields:
-        - notificationService             # NotificationService — 알림 비즈니스 로직
+        notificationService: NotificationService  # 알림 비즈니스 로직
 
     # GET /api/notifications/subscribe — SSE 구독
     subscribe:
@@ -1335,6 +2678,7 @@ endpoints:
         - onCompletion                    # SseEmitter.onCompletion — 완료 콜백
         - onTimeout                       # SseEmitter.onTimeout — 타임아웃 콜백
         - remove                          # Map.remove — 콜백 내부 emitter 제거
+      related_types: {}                    # SseEmitter 리턴 — DTO 사용 없음
 
     # POST /api/notifications/send — 벌크 알림 발송
     sendNotification:
@@ -1364,215 +2708,13 @@ endpoints:
         - data                            # SseEmitter.EventBuilder.data
         - remove                          # Map.remove — emitter 제거
         - warn                            # log.warn — 발송 실패 로깅
-
-
-# ============================================================
-#  DTO / VO 필드 기대값
-# ============================================================
-#
-#  각 DTO의 필드명, 타입, 제약조건(@Validation 어노테이션)을 정의합니다.
-#  constraint가 빈 문자열("")이면 검증 어노테이션이 없는 필드입니다.
-# ============================================================
-dto_fields:
-
-  # ---- Auth 관련 DTO ----
-
-  # 로그인 요청
-  LoginRequest:
-    email:
-      type: String
-      constraint: "@NotBlank @Email"      # 빈값 불가 + 이메일 형식
-    password:
-      type: String
-      constraint: "@NotBlank"
-
-  # JWT 토큰 응답
-  TokenResponse:
-    accessToken:
-      type: String
-      constraint: ""
-    tokenType:
-      type: String
-      constraint: ""
-    expiresIn:
-      type: long                          # primitive long
-      constraint: ""
-
-  # ---- Member 관련 DTO ----
-
-  # 회원 생성 요청
-  MemberCreateRequest:
-    email:
-      type: String
-      constraint: "@NotBlank @Email"
-    firstName:
-      type: String
-      constraint: "@NotBlank"
-    lastName:
-      type: String
-      constraint: "@NotBlank"
-    password:
-      type: String
-      constraint: ""
-    addresses:
-      type: "List<Address>"              # 중첩 VO 리스트
-      constraint: "@Valid"               # 리스트 내 각 Address도 검증
-
-  # 회원 응답
-  MemberResponse:
-    id:
-      type: Long                          # wrapper Long
-      constraint: ""
-    email:
-      type: String
-      constraint: ""
-    fullName:
-      type: String
-      constraint: ""
-    grade:
-      type: MemberGrade                   # Enum 타입
-      constraint: ""
-    tags:
-      type: "List<String>"
-      constraint: ""
-    active:
-      type: boolean                       # primitive boolean
-      constraint: ""
-
-  # 주소 VO (Value Object)
-  Address:
-    street:
-      type: String
-      constraint: ""
-    city:
-      type: String
-      constraint: ""
-    zipCode:
-      type: String
-      constraint: ""
-
-  # ---- Product 관련 DTO ----
-
-  # 상품 생성 요청 (ProductDto.Create 내부 클래스)
-  Create:
-    name:
-      type: String
-      constraint: "@NotBlank"
-    price:
-      type: BigDecimal
-      constraint: "@NotNull"
-    description:
-      type: String
-      constraint: ""
-    categoryId:
-      type: Long
-      constraint: ""
-    stockQuantity:
-      type: int                           # primitive int
-      constraint: ""
-
-  # 상품 수정 요청 (ProductDto.Update 내부 클래스)
-  Update:
-    name:
-      type: String
-      constraint: ""
-    price:
-      type: BigDecimal
-      constraint: ""
-
-  # 상품 응답 (ProductDto.Response 내부 클래스)
-  Response:
-    id:
-      type: Long
-      constraint: ""
-    name:
-      type: String
-      constraint: ""
-    price:
-      type: BigDecimal
-      constraint: ""
-    description:
-      type: String
-      constraint: ""
-    categoryName:
-      type: String
-      constraint: ""
-    stockQuantity:
-      type: int
-      constraint: ""
-    active:
-      type: boolean
-      constraint: ""
-
-  # ---- Order 관련 DTO ----
-
-  # 주문 생성 요청
-  OrderCreateRequest:
-    memberId:
-      type: Long
-      constraint: "@NotNull"
-    items:
-      type: "List<OrderItemRequest>"
-      constraint: "@Valid"               # 리스트 내 각 항목도 검증
-    recipientName:
-      type: String
-      constraint: ""
-    phone:
-      type: String
-      constraint: ""
-    deliveryAddress:
-      type: Address
-      constraint: "@Valid"               # 중첩 VO 검증
-
-  # 주문 항목 요청
-  OrderItemRequest:
-    productId:
-      type: Long
-      constraint: "@NotNull"
-    quantity:
-      type: int
-      constraint: "@Min(1)"             # 최소 1개
-
-  # 주문 응답
-  OrderResponse:
-    id:
-      type: Long
-      constraint: ""
-    memberEmail:
-      type: String
-      constraint: ""
-    status:
-      type: OrderStatus                   # Enum 타입
-      constraint: ""
-    items:
-      type: "List<OrderItemResponse>"
-      constraint: ""
-    totalAmount:
-      type: BigDecimal
-      constraint: ""
-
-  # 주문 항목 응답
-  OrderItemResponse:
-    productName:
-      type: String
-      constraint: ""
-    quantity:
-      type: int
-      constraint: ""
-    unitPrice:
-      type: BigDecimal
-      constraint: ""
-    subtotal:
-      type: BigDecimal
-      constraint: ""
-
-  # ---- Notification 관련 DTO ----
-
-  # 알림 발송 요청
-  NotificationRequest:
-    memberIds:
-      type: "List<Long>"
-      constraint: ""
-    message:
-      type: String
-      constraint: ""
+      # sendNotification: param NotificationRequest, return ResponseEntity<Void>
+      related_types:
+        # 소스: .sample/.../notification/dto/NotificationRequest.java (record, L8-11)
+        NotificationRequest:
+          memberIds:
+            type: "List<Long>"
+            constraint: ""
+          message:
+            type: String
+            constraint: ""
