@@ -127,10 +127,11 @@ class ParsedFileResult:
 @dataclass
 class ResolvedEdges:
     """EdgeLinker가 해석한 엣지 배치. GraphWriter가 DB에 기록합니다."""
-    params: list[dict] = field(default_factory=list)            # HAS_PARAMETER 배치
-    returns: list[dict] = field(default_factory=list)           # RETURNS 배치
-    internal_calls: list[dict] = field(default_factory=list)    # 내부 CALLS 배치
-    external_calls: list[dict] = field(default_factory=list)    # 외부 CALLS 배치
+    has_parameter_edges:    list[dict] = field(default_factory=list)            # HAS_PARAMETER 배치
+    returns_edges:          list[dict] = field(default_factory=list)           # RETURNS 배치
+    internal_calls_edges:   list[dict] = field(default_factory=list)    # 내부 CALLS 배치
+    external_calls_edges:   list[dict] = field(default_factory=list)    # 외부 CALLS 배치
+    contains_edges:         list[dict] = field(default_factory=list)       # FIELD→CONTAINS→TYPE 배치
 
 
 @dataclass

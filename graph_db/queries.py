@@ -230,9 +230,6 @@ class CypherQueries:
         t.kind = row.kind,
         t.constants = row.constants,
         t.supertypes = row.supertypes
-    WITH t, row
-    MATCH (f:FILE {path: row.file_path})
-    MERGE (f)-[:CONTAINS]->(t)
     """
 
     # [FIELD 노드 일괄 Upsert]
@@ -244,9 +241,6 @@ class CypherQueries:
     SET f.name = row.name,
         f.type = row.type,
         f.constraint = row.constraint
-    WITH f, row
-    MATCH (t:TYPE {qualname: row.type_qualname})
-    MERGE (t)-[:CONTAINS]->(f)
     """
 
     # [METHOD 노드 일괄 Upsert]
@@ -270,10 +264,48 @@ class CypherQueries:
         m.endpoint_uri = row.endpoint_uri,
         m.http_method = row.http_method,
         m.last_scan_id = row.last_scan_id
-    WITH m, row
+    """
+
+    # --- CONTAINS 구조 엣지 (graph_writer.py) ---
+
+    # [FILE→CONTAINS→TYPE 엣지 일괄 생성]
+    # Usage: core/analysis/store/graph_writer.py
+    BATCH_UPSERT_FILE_CONTAINS_TYPE = """
+    UNWIND $batch AS row
+    MATCH (f:FILE {path: row.file_path})
+    MATCH (t:TYPE {qualname: row.qualname})
+    MERGE (f)-[:CONTAINS]->(t)
+    """
+
+    # [TYPE→CONTAINS→FIELD 엣지 일괄 생성]
+    # Usage: core/analysis/store/graph_writer.py
+    BATCH_UPSERT_TYPE_CONTAINS_FIELD = """
+    UNWIND $batch AS row
+    MATCH (t:TYPE {qualname: row.type_qualname})
+    MATCH (f:FIELD {qualname: row.qualname})
+    MERGE (t)-[:CONTAINS]->(f)
+    """
+
+    # [TYPE→CONTAINS→METHOD 엣지 일괄 생성]
+    # Usage: core/analysis/store/graph_writer.py
+    BATCH_UPSERT_TYPE_CONTAINS_METHOD = """
+    UNWIND $batch AS row
     MATCH (t:TYPE {qualname: row.class_qualname})
+    MATCH (m:METHOD {qualname: row.qualname})
     MERGE (t)-[:CONTAINS]->(m)
     """
+
+    # [FIELD→CONTAINS→TYPE 엣지 일괄 생성]
+    # 필드가 참조하는 타입과의 관계 (예: UserService 필드 → UserService 타입)
+    # Usage: core/analysis/store/graph_writer.py
+    BATCH_UPSERT_FIELD_CONTAINS_TYPE = """
+    UNWIND $batch AS row
+    MATCH (f:FIELD {qualname: row.field_qualname})
+    MATCH (t:TYPE {qualname: row.type_qualname})
+    MERGE (f)-[:CONTAINS]->(t)
+    """
+
+    # --- 의미 엣지 (graph_writer.py) ---
 
     # [HAS_PARAMETER 엣지 일괄 생성]
     # 메서드 → 파라미터 타입 관계를 일괄 기록합니다.
