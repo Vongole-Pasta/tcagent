@@ -173,6 +173,18 @@ class EdgeLinker:
                 obj_name = call.object_name
                 if obj_name.startswith("this."):
                     obj_name = obj_name[5:]  # "this.addresses" → "addresses"
+
+                # 체이닝 호출: 체인을 부분 해석하여 최종 타입명을 obj_name으로 사용
+                #   예: product.getCategory().getName() → Category.getName
+                if not obj_name and call.receiver_chain:
+                    caller_method = self._registry.methods.get(call.caller_qualname)
+                    caller_type = self._registry.types.get(caller_method.class_qualname) if caller_method else None
+                    caller_file = caller_type.file_path if caller_type else None
+                    chain_type_q = self._resolve_chain_final_type(call, caller_method, caller_file)
+                    if chain_type_q:
+                        chain_type = self._registry.types.get(chain_type_q)
+                        obj_name = chain_type.name if chain_type else chain_type_q.rsplit(".", 1)[-1]
+
                 ext_qualname = (
                     f"{obj_name}.{call.target_method_name}"
                     if obj_name
@@ -416,6 +428,46 @@ class EdgeLinker:
 
         # 3단계: 최종 리턴 타입에서 target_method 탐색
         return self._follow_return_type(current_qualname, call.target_method_name, caller_file, call.arg_count)
+
+    def _resolve_chain_final_type(self, call: ParsedCallEdge, caller_method, caller_file) -> str | None:
+        """
+        체이닝 호출의 최종 타입(target_method를 호출하는 주체 타입)을 해석합니다.
+        _resolve_chained_call()과 동일한 로직이지만, 마지막 target_method 탐색은 하지 않고
+        체인을 모두 소비한 시점의 리턴 타입만 반환합니다.
+
+        용도: 체이닝 호출이 내부 해석에 실패했을 때, EXTERNAL_CALL qualname에
+              타입 정보를 포함시키기 위함 (예: "getName" → "Category.getName")
+        """
+        chain = call.receiver_chain
+        if not chain:
+            return None
+
+        # 1단계: 체인의 첫 번째 메서드를 해석
+        first_call = ParsedCallEdge(
+            caller_qualname=call.caller_qualname,
+            target_method_name=chain[0],
+            object_name=call.receiver_object,
+        )
+        current_qualname = (self._resolve_with_object(first_call, caller_method, caller_file)
+                            if call.receiver_object
+                            else self._resolve_sibling_call(first_call, caller_method))
+        if not current_qualname:
+            return None
+
+        # 2단계: 나머지 체인 메서드를 순회하며 리턴 타입 추적
+        for chain_method in chain[1:]:
+            current_qualname = self._follow_return_type(current_qualname, chain_method, caller_file)
+            if not current_qualname:
+                return None
+
+        # 3단계: 최종 체인 메서드의 리턴 타입을 반환 (target_method 탐색 없이)
+        method = self._registry.methods.get(current_qualname)
+        if not method or not method.return_type or not method.return_type.get("layout"):
+            return None
+
+        return_type_name = method.return_type["layout"][0]
+        return (self._resolve_type_in_file(return_type_name, caller_file)
+                if caller_file else self._resolve_type_name_global(return_type_name))
 
     def _follow_return_type(
         self, method_qualname: str, next_method: str, caller_file: str | None, arg_count: int = -1,
