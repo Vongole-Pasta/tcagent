@@ -169,9 +169,13 @@ class EdgeLinker:
                     "callee_qualname": target_qualname,
                 })
             else:
+                # 외부 호출 qualname 생성 (this. 접두사 제거)
+                obj_name = call.object_name
+                if obj_name.startswith("this."):
+                    obj_name = obj_name[5:]  # "this.addresses" → "addresses"
                 ext_qualname = (
-                    f"{call.object_name}.{call.target_method_name}"
-                    if call.object_name
+                    f"{obj_name}.{call.target_method_name}"
+                    if obj_name
                     else call.target_method_name
                 )
                 call.callee_qualname = ext_qualname
@@ -291,14 +295,15 @@ class EdgeLinker:
         #   예2: Outer.Inner.foo() → obj="Outer.Inner"
         #        → "Outer" 타입의 내부 클래스 "Outer$Inner" → 해당 내부 클래스에서 foo 탐색
         if "." in obj:
-            result = self._resolve_dotted_object(obj, call.target_method_name, call.arg_count, caller_file)
+            result = self._resolve_dotted_object(obj, call.target_method_name, call.arg_count, caller_file, caller_method)
             if result:
                 return result
 
         return None
 
     def _resolve_dotted_object(
-        self, obj: str, target_method: str, arg_count: int, caller_file: str | None,
+        self, obj: str, target_method: str, arg_count: int,
+        caller_file: str | None, caller_method: ParsedMethod | None = None,
     ) -> str | None:
         """
         '.'이 포함된 복합 객체명을 반복적으로 해석합니다. 뎁스 제한 없음.
@@ -306,23 +311,31 @@ class EdgeLinker:
         해석 전략 (파트를 하나씩 소비하며 반복):
           1. obj를 '.' 기준으로 분리 → [part0, part1, part2, ...]
           2. part0을 타입으로 해석 → current_q
+             - "this" → caller의 소속 클래스
+             - 그 외 → 타입명으로 해석
           3. 나머지 파트를 순회하며:
              a. current_q가 ENUM이고 해당 파트가 상수명 → 현재 타입에서 메서드 탐색 (탐색 종료)
              b. current_q$파트 가 내부 클래스로 존재 → current_q를 내부 클래스로 갱신 (다음 파트 계속)
-             c. 둘 다 아니면 → 해석 실패
+             c. 해당 파트가 필드명 → 필드 타입으로 current_q 갱신 (다음 파트 계속)
+             d. 어느 패턴에도 매칭되지 않으면 → 해석 실패
           4. 모든 파트를 소비하면 최종 current_q에서 메서드 탐색
 
-        예: Outer.Inner.Inner2.foo()
-          → parts = ["Outer", "Inner", "Inner2"]
+        예1: Outer.Inner.Inner2.foo()
           → Outer → Outer$Inner → Outer$Inner$Inner2 → foo() 탐색
+        예2: this.addresses.clear()
+          → this → Member → addresses 필드(List) → 외부 타입 → None
         """
         parts = obj.split(".")
         if len(parts) < 2:
             return None
 
         # 첫 번째 파트를 타입으로 해석
-        current_q = (self._resolve_type_in_file(parts[0], caller_file)
-                     if caller_file else self._resolve_type_name_global(parts[0]))
+        #   "this" → caller의 소속 클래스 qualname
+        if parts[0] == "this" and caller_method:
+            current_q = caller_method.class_qualname
+        else:
+            current_q = (self._resolve_type_in_file(parts[0], caller_file)
+                         if caller_file else self._resolve_type_name_global(parts[0]))
         if not current_q:
             return None
 
@@ -344,6 +357,19 @@ class EdgeLinker:
             if inner_qualname in self._registry.types:
                 current_q = inner_qualname
                 continue
+
+            # 필드 접근 → 필드 타입으로 current_q 갱신 후 다음 파트로 계속
+            #   예: this.addresses.clear() → addresses 필드의 타입(List)으로 이동
+            field = self._fields_by_class.get(current_q, {}).get(part)
+            if field and field.field_type.get("layout"):
+                field_type_name = field.field_type["layout"][0]
+                field_type_q = (self._resolve_type_in_file(field_type_name, caller_file)
+                                if caller_file else self._resolve_type_name_global(field_type_name))
+                if field_type_q:
+                    current_q = field_type_q
+                    continue
+                # 필드 타입이 외부 타입(List 등) → 해석 불가
+                return None
 
             return None  # 어느 패턴에도 매칭되지 않음
 
