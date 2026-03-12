@@ -16,7 +16,7 @@ class HappyCaseQueries:
     WITH DISTINCT t
     WHERE t IS NOT NULL
     MATCH (t)-[:CONTAINS]->(f:FIELD)
-    RETURN t.fullName as type_name, f.name as field_name, f.type as field_type
+    RETURN t.name as type_name, f.name as field_name, f.type as field_type
     """
 
     # 반환(Response) DTO 구조 조회
@@ -28,5 +28,5 @@ class HappyCaseQueries:
     WITH DISTINCT t
     WHERE t IS NOT NULL
     MATCH (t)-[:CONTAINS]->(f:FIELD)
-    RETURN t.fullName as type_name, f.name as field_name, f.type as field_type
+    RETURN t.name as type_name, f.name as field_name, f.type as field_type
     """
