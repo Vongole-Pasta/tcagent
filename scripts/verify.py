@@ -117,24 +117,89 @@ def _load_expected() -> dict:
 EXPECTED = _load_expected()
 
 
+def _load_call_comments() -> dict[str, dict[str, dict[str, dict[str, str]]]]:
+    """YAML 파일에서 internal_calls/external_calls 항목의 인라인 주석을 추출.
+
+    Returns:
+        {controller: {method: {"internal_calls"|"external_calls": {value: comment}}}}
+    """
+    yaml_path = Path(__file__).parent / "expected.yaml"
+    comments: dict = {}
+    ctrl = method = section = None
+
+    with open(yaml_path, "r", encoding="utf-8") as f:
+        for line in f:
+            stripped = line.rstrip()
+            if not stripped:
+                continue
+            indent = len(line) - len(line.lstrip())
+            content = stripped.lstrip()
+
+            # 전체 주석 줄은 건너뜀 (단, 섹션 변경 시 section 리셋 안 함)
+            if content.startswith("#"):
+                continue
+
+            # Controller (indent 2)
+            if indent == 2 and ":" in content and not content.startswith("-"):
+                ctrl = content.split(":")[0].strip()
+                method = section = None
+            # Method (indent 4)
+            elif indent == 4 and ":" in content and not content.startswith("-"):
+                method = content.split(":")[0].strip()
+                section = None
+            # Section (indent 6)
+            elif indent == 6 and ":" in content and not content.startswith("-"):
+                key = content.split(":")[0].strip()
+                section = key if key in ("internal_calls", "external_calls") else None
+            # List item (indent 8)
+            elif indent == 8 and content.startswith("- ") and section and ctrl and method:
+                item = content[2:]
+                if "#" in item:
+                    value, comment = item.split("#", 1)
+                    value = value.strip()
+                    comment = comment.strip()
+                    if value and comment:
+                        (comments.setdefault(ctrl, {})
+                                 .setdefault(method, {})
+                                 .setdefault(section, {}))[value] = comment
+            # 다른 indent 레벨 → section 리셋
+            elif indent >= 10 or (indent == 8 and not content.startswith("-")):
+                pass  # sub-items, section 유지
+
+    return comments
+
+
+CALL_COMMENTS = _load_call_comments()
+
+
 # ============================================================
 #  유틸리티
 # ============================================================
 
-def _match_call(expected_name: str, actual_names: set[str], actual_qualnames: set[str]) -> bool:
+def _match_call(expected_name: str, actual_names: set[str], actual_qualnames: set[str]) -> tuple[bool, str | None]:
     """기대값 이름이 DB 실측값에 존재하는지 판별.
 
-    - 단순 이름(`.` 미포함): name 필드 exact match
+    - 단순 이름(`.` 미포함): name 필드 exact match → 매칭된 qualname 반환
     - qualified name(`.` 포함): qualname 필드 endswith match (괄호 제거 후)
+
+    Returns:
+        (매칭 여부, 매칭된 qualname 또는 None)
     """
     if "." not in expected_name:
-        return expected_name in actual_names
+        if expected_name in actual_names:
+            # 매칭된 이름에 해당하는 qualname 탐색
+            for qn in actual_qualnames:
+                clean_qn = qn.split("(")[0] if "(" in qn else qn
+                if clean_qn.endswith("." + expected_name) or clean_qn == expected_name:
+                    return True, qn
+            return True, None
+        return False, None
     for qn in actual_qualnames:
         # METHOD qualname에는 파라미터 괄호가 있으므로 제거 후 비교
         clean_qn = qn.split("(")[0] if "(" in qn else qn
         if clean_qn.endswith(expected_name):
-            return True
-    return False
+            return True, qn
+    return False, None
 
 
 def _reverse_match(db_name: str, db_qualname: str, expected_set: set[str]) -> bool:
@@ -248,17 +313,24 @@ def _format_expected_text(ctrl: str, method: str) -> str:
 
     # ── 내부 호출 ──
     internal = exp.get("internal_calls", [])
+    ctrl_comments = CALL_COMMENTS.get(ctrl, {}).get(method, {})
     if internal:
         lines.append(f"\n  내부 호출 ({len(internal)}건) — 사용자 작성 코드:")
+        int_comments = ctrl_comments.get("internal_calls", {})
         for i, call in enumerate(internal, 1):
-            lines.append(f"    {i:>3}. {call}")
+            comment = int_comments.get(call, "")
+            c_str = f"  # {comment}" if comment else ""
+            lines.append(f"    {i:>3}. {call}{c_str}")
 
     # ── 외부 호출 ──
     external = exp.get("external_calls", [])
     if external:
         lines.append(f"\n  외부 호출 ({len(external)}건) — 프레임워크/라이브러리:")
+        ext_comments = ctrl_comments.get("external_calls", {})
         for i, call in enumerate(external, 1):
-            lines.append(f"    {i:>3}. {call}")
+            comment = ext_comments.get(call, "")
+            c_str = f"  # {comment}" if comment else ""
+            lines.append(f"    {i:>3}. {call}{c_str}")
 
     # ── 관련 타입 필드 (endpoint별 직접 명시) ──
     if related_types:
@@ -803,10 +875,19 @@ def step6_internal_calls(db, report, ctrl, method, expected_internal):
     actual_names = set(x for x in (records[0]["calls"] if records else []) if x)
     actual_qualnames = set(x for x in (records[0]["qualnames"] if records else []) if x)
     for call in expected_internal:
-        found = _match_call(call, actual_names, actual_qualnames)
-        report.add("6", f"내부 호출 → {call}",
-                   "도달 가능", "도달 가능" if found else "도달 불가",
-                   OK if found else MISSING)
+        found, matched_qn = _match_call(call, actual_names, actual_qualnames)
+        verdict = OK if found else MISSING
+        # qualname 코멘트 생성
+        qn_comment = f"  {c.DIM}# {matched_qn}{c.RESET}" if matched_qn else ""
+        # 직접 출력 (qualname 코멘트 포함)
+        report.results.append(("6", f"내부 호출 → {call}", "도달 가능",
+                               "도달 가능" if found else "도달 불가", verdict))
+        if verdict == OK:
+            report._print(f"  {c.GREEN}✓{c.RESET} 내부 호출 → {call}: {c.GREEN}{verdict}{c.RESET}{qn_comment}")
+        else:
+            report._print(f"  {c.RED}✗{c.RESET} 내부 호출 → {call}: {c.RED}{verdict}{c.RESET}{qn_comment}")
+            report._print(f"       {c.DIM}기대: 도달 가능{c.RESET}")
+            report._print(f"       {c.DIM}실제: 도달 불가{c.RESET}")
 
 
 def step7_external_calls(db, report, ctrl, method, expected_external):
@@ -838,10 +919,19 @@ def step7_external_calls(db, report, ctrl, method, expected_external):
     actual_names = set(x for x in (records[0]["calls"] if records else []) if x)
     actual_qualnames = set(x for x in (records[0]["qualnames"] if records else []) if x)
     for call in expected_external:
-        found = _match_call(call, actual_names, actual_qualnames)
-        report.add("7", f"외부 호출 → {call}",
-                   "도달 가능", "도달 가능" if found else "도달 불가",
-                   OK if found else MISSING)
+        found, matched_qn = _match_call(call, actual_names, actual_qualnames)
+        verdict = OK if found else MISSING
+        # qualname 코멘트 생성
+        qn_comment = f"  {c.DIM}# {matched_qn}{c.RESET}" if matched_qn else ""
+        # 직접 출력 (qualname 코멘트 포함)
+        report.results.append(("7", f"외부 호출 → {call}", "도달 가능",
+                               "도달 가능" if found else "도달 불가", verdict))
+        if verdict == OK:
+            report._print(f"  {c.GREEN}✓{c.RESET} 외부 호출 → {call}: {c.GREEN}{verdict}{c.RESET}{qn_comment}")
+        else:
+            report._print(f"  {c.RED}✗{c.RESET} 외부 호출 → {call}: {c.RED}{verdict}{c.RESET}{qn_comment}")
+            report._print(f"       {c.DIM}기대: 도달 가능{c.RESET}")
+            report._print(f"       {c.DIM}실제: 도달 불가{c.RESET}")
 
 
 # ============================================================
@@ -1051,7 +1141,7 @@ def cross_check(db, report, ctrl, method, all_expected_calls):
         all_qualnames = set(
             x for x in (all_captured_records[0]["all_qualnames"] if all_captured_records else []) if x
         )
-        missing = [c for c in all_expected_calls if not _match_call(c, all_names, all_qualnames)]
+        missing = [c for c in all_expected_calls if not _match_call(c, all_names, all_qualnames)[0]]
 
     # 3. qualname 불완전 — receiver가 해석되지 않은 EXTERNAL_CALL
     incomplete = db.execute_query("""
