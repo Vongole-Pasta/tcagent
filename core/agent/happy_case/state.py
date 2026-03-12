@@ -7,7 +7,7 @@ class ImpactGroup(TypedDict):
     url: str
     http_method: str
     name: str
-    endpoint_signatures: List[str]  # 엔드포인트 메서드 시그니처 목록
+    endpoint_qualnames: List[str]  # 엔드포인트 메서드 qualname 목록
     source_methods: List[str]     # 영향을 준 소스 메서드 ID 목록
 
 class HappyCaseState(TypedDict):

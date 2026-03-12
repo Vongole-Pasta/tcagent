@@ -46,16 +46,16 @@ class HappyCaseAgentNodes:
                 if group_key not in impact_groups:
                     impact_groups[group_key] = {
                         "url": endpoint,"http_method": http_method,"name": row["endpoint_method_name"],
-                        "endpoint_signatures": [],"source_methods": []
+                        "endpoint_qualnames": [],"source_methods": []
                     }
                 
-                # DB에서 전달받은 최종 엔드포인트 메서드의 시그니처만 바로 사용합니다.
+                # DB에서 전달받은 최종 엔드포인트 메서드의 qualname만 바로 사용합니다.
                 # DB 단에서부터 불필요한 중간 경로를 생략하여 네트워크 및 메모리 낭비를 줄입니다.
-                endpoint_signature = row.get("signature")
+                endpoint_qualname = row.get("qualname")
                 
-                # 이미 추가된 시그니처는 건너뛰어 같은 메서드가 여러 경로로 발견돼도 중복 등록하지 않습니다.
-                if endpoint_signature and endpoint_signature not in impact_groups[group_key]["endpoint_signatures"]:
-                    impact_groups[group_key]["endpoint_signatures"].append(endpoint_signature)
+                # 이미 추가된 qualname은 건너뛰어 같은 메서드가 여러 경로로 발견돼도 중복 등록하지 않습니다.
+                if endpoint_qualname and endpoint_qualname not in impact_groups[group_key]["endpoint_qualnames"]:
+                    impact_groups[group_key]["endpoint_qualnames"].append(endpoint_qualname)
                 
                 if m_id not in impact_groups[group_key]["source_methods"]:
                     impact_groups[group_key]["source_methods"].append(m_id)
@@ -87,13 +87,14 @@ class HappyCaseAgentNodes:
         """
         group = state["group"]
         methods_context = []
-        all_dtos = {}
+        request_dtos = {}
+        response_dtos = {}
 
-        for sig in group["endpoint_signatures"]:
+        for qual in group["endpoint_qualnames"]:
 
             method_res = self.db_client.execute_query(
-                "MATCH (m:METHOD {signature: $signature}) RETURN m",
-                {"signature": sig}
+                "MATCH (m:METHOD {qualname: $qualname}) RETURN m",
+                {"qualname": qual}
             )
             if not method_res: continue
             method_node = method_res[0]["m"]
@@ -106,16 +107,21 @@ class HappyCaseAgentNodes:
 
             methods_context.append({
                 "name": method_node.get("name"),
-                "signature": sig,
                 "source": method_node.get("source"),
                 "params": params_info,
                 "returnType": method_node.get("return_type")
             })
             # _collect_dto_info를 통해 파라미터/반환 타입 및 중첩 DTO들의 필드 구조를 수집합니다.
-            self._collect_dto_info(sig, all_dtos)
+            self._collect_dto_info(qual, request_dtos, response_dtos)
 
         return {
-            "context": {"methods": methods_context, "dto_context": all_dtos}
+            "context": {
+                "methods": methods_context, 
+                "dto_context": {
+                    "request": request_dtos,
+                    "response": response_dtos
+                }
+            }
         }
 
     def generator_worker_node(self, state: WorkerState):
@@ -165,13 +171,20 @@ class HappyCaseAgentNodes:
         
         return {"scenarios": scenarios}
 
-    def _collect_dto_info(self, method_signature, dtos_context):
+    def _collect_dto_info(self, method_qualname, request_dtos, response_dtos):
         """
-        특정 메서드의 파라미터/반환 타입 및 중첩 DTO의 필드 구조를 수집합니다.
+        특정 메서드의 파라미터(Request) 및 반환 타입(Response) 중첩 DTO의 필드 구조를 분리하여 수집합니다.
         Cypher 홉(Hop) 수 10은 'TYPE-FIELD-TYPE' 구조를 고려할 때 최대 5단계의 중첩을 의미합니다.
-        결과는 dtos_context 딕셔너리에 {타입명: [{name, type}, ...]} 형태로 누적됩니다.
         """
-        results = self.db_client.execute_query(HappyCaseQueries.RETRIEVER_NODE_GET_DTO_STRUCTURE, {"signature": method_signature})
+        # Request DTO 조회
+        req_results = self.db_client.execute_query(HappyCaseQueries.RETRIEVER_NODE_GET_REQUEST_DTO_STRUCTURE, {"qualname": method_qualname})
+        self._populate_dtos(req_results, request_dtos)
+
+        # Response DTO 조회
+        res_results = self.db_client.execute_query(HappyCaseQueries.RETRIEVER_NODE_GET_RESPONSE_DTO_STRUCTURE, {"qualname": method_qualname})
+        self._populate_dtos(res_results, response_dtos)
+
+    def _populate_dtos(self, results, dtos_context):
         for row in results:
             t_name = row["type_name"]
             if t_name not in dtos_context:

@@ -25,7 +25,9 @@ GENERATOR_NODE_PROMPT = """
    - "OOO 기능을 보장하기 위해 유효한 데이터를 전송함"과 같이 해당 API의 기능 위주로 한국어로 설명하세요.
 
 2. **input_data**: 
-   - **컨텍스트 분석 및 데이터 추출**: `<BUSINESS_LOGIC>`을 분석하여 인증 토큰(`Authorization` 헤더 등), `@PathVariable`, `@RequestParam` 등 필수 파라미터를 식별합니다.
+   - **컨텍스트 분석 및 데이터 추출**: `<BUSINESS_LOGIC>` 및 `<DTO_SCHEMA>`를 분석하여 필수 파라미터(`@PathVariable`, `@RequestParam` 등)와 헤더를 식별합니다. 
+   - **주의(구조 혼동 방지)**: `<DTO_SCHEMA>` 내의 `request`와 `response` 스키마 구분을 엄격히 준수하세요. 요청 데이터(`input_data`)를 구성할 때는 **반드시** `request` 하위의 스키마만 참고해야 하며, `response` 스키마 구조를 `input_data`에 포함시키는 오류를 절대 피하십시오.
+   - **주의**: `Authorization` 등의 인증 관련 헤더는 제공된 컨텍스트 상에서 명시적으로 요구된다고 명확히 확인할 수 있는 경우에만 포함하세요. 정보가 부족하거나 확신할 수 없는 경우 함부로 유추하여 포함하지 마십시오.
    - 식별된 파라미터들과 요청 바디(POST/PUT/PATCH 등일 경우)를 바탕으로, `input_data` 항목을 **반드시** 아래의 텍스트 형식(구조화된 텍스트)으로 작성합니다.
    - Headers 내 Content-Type는 생략합니다.
 
@@ -44,7 +46,7 @@ GENERATOR_NODE_PROMPT = """
 
    예시:
    - Headers 
-     - Authorization: <TOKEN> , login: <TOKEN>
+     - X-Custom-Header: value , login: <TOKEN>
    - Request Params 
      - ?lang=java&type=src
    - Path Variables

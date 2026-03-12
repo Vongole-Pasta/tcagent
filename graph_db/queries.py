@@ -127,9 +127,9 @@ class CypherQueries:
     RETURN path, metadata
     """
     
-    # [특정 메서드에서 엔드포인트까지의 경로 조회]
+    # 특정 메서드에서 엔드포인트까지의 경로 조회]
     # 특정 메서드($method_id)로부터 호출 가능한 모든 API 엔드포인트를 조회합니다.
-    # Happy Case 에이전트의 영향도 분석(Planner)에 사용되며, 중간 경로(path)는 가져오지 않고 엔드포인트의 시그니처만 반환합니다.
+    # Happy Case 에이전트의 영향도 분석(Planner)에 사용되며, 중간 경로(path)는 가져오지 않고 엔드포인트의 qualname만 반환합니다.
     # Usage: core/agent/happy_case_agent.py:39
     GET_PATHS_TO_ENDPOINTS = """
     MATCH (endpoint_m:METHOD)-[:CALLS*0..]->(target:METHOD)
@@ -138,7 +138,7 @@ class CypherQueries:
     RETURN endpoint_m.endpoint_uri as endpoint,
            endpoint_m.http_method as http_method,
            endpoint_m.name as endpoint_method_name,
-           endpoint_m.signature as signature
+           endpoint_m.qualname as qualname
     """
 
     # --- AS-IS Node Loading Queries (증분 분석 최적화) ---
