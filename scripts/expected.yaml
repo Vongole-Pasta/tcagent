@@ -1045,17 +1045,17 @@ endpoints:
         - success                         # ApiResponse.success
         # ── 2depth: createProduct 내부 (ProductDto.Create getter — 직접 작성) ──
         - getCategoryId                   # Create.getCategoryId
-        - getName                         # Create.getName (+ Builder.name)
+        - getName                         # Create.getName (+ Product.Builder.name)
         - getPrice                        # Create.getPrice
         - getDescription                  # Create.getDescription
         - getStockQuantity                # Create.getStockQuantity
-        # ── 2depth: createProduct 내부 (Builder 메서드 — 직접 작성) ──
-        - name                            # Builder.name — 빌더 setter
-        - price                           # Builder.price
-        - description                     # Builder.description
-        - category                        # Builder.category
-        - stockQuantity                   # Builder.stockQuantity
-        - build                           # Builder.build
+        # ── 2depth: createProduct 내부 (Product.Builder 메서드 — 직접 작성) ──
+        - name                            # Product.Builder.name — 빌더 setter
+        - price                           # Product.Builder.price
+        - description                     # Product.Builder.description
+        - category                        # Product.Builder.category
+        - stockQuantity                   # Product.Builder.stockQuantity
+        - build                           # Product.Builder.build
         - from                            # ProductDto.Response.from — Entity→DTO 변환
         # ── 2depth: success 내부 ──
         - Meta.now                        # Meta.now
@@ -2716,5 +2716,371 @@ endpoints:
             type: "List<Long>"
             constraint: ""
           message:
+            type: String
+            constraint: ""
+
+
+  # ================================================================
+  #  sample2 프로젝트 — 최소 샘플 (.sample2/)
+  # ================================================================
+
+  # ----------------------------------------------------------------
+  #  ItemController — 상품 관리
+  #     클래스: @RestController @RequestMapping("/api/items")
+  # ----------------------------------------------------------------
+  ItemController:
+    class_level:
+      fields:
+        itemService: ItemService
+
+    # POST /api/items/ — 상품 생성
+    createItem:
+      http_method: POST
+      endpoint_uri: /api/items/
+      params:
+        request: "ItemDto.CreateRequest"
+      param_annotations:
+        request: "@Valid @RequestBody"
+      return_types:
+        - Response
+      param_types:
+        - CreateRequest
+      internal_calls:
+        - createItem                       # ItemService.createItem — 직접 호출
+        - from                             # 2depth: ItemService.createItem → Response.from
+        - getDescription                   # 3depth: Response.from → ItemStatus.getDescription
+      external_calls:
+        # ── 직접 호출 (createItem에서 직접) ──
+        - status                           # ResponseEntity.status(HttpStatus.CREATED)
+        - body                             # ResponseEntity.body
+        # ── 2depth: ItemService.createItem 내부 ──
+        - builder                          # Item.builder (Lombok) / Response.builder (Lombok)
+        - name                             # Lombok builder setter / Enum.name()
+        - price                            # Lombok builder setter
+        - build                            # Lombok builder build
+        - getName                          # Lombok getter (CreateRequest.getName / Item.getName)
+        - getPrice                         # Lombok getter (CreateRequest.getPrice / Item.getPrice)
+        - save                             # JpaRepository.save
+        # ── 3depth: Response.from 내부 ──
+        - id                               # Lombok builder setter
+        - getId                            # Lombok getter (Item.getId)
+        - statusDescription                # Lombok builder setter
+        - getStatus                        # Lombok getter (Item.getStatus)
+      related_types:
+        # 소스: .sample2/.../domain/ItemDto.java (static class CreateRequest, L11-19)
+        CreateRequest:
+          name:
+            type: String
+            constraint: "@NotBlank"
+          price:
+            type: int
+            constraint: "@Min(0)"
+          status:
+            type: String
+            constraint: ""
+        # 소스: .sample2/.../domain/ItemDto.java (static class Response, L23-28)
+        Response:
+          id:
+            type: Long
+            constraint: ""
+          name:
+            type: String
+            constraint: ""
+          price:
+            type: int
+            constraint: ""
+          status:
+            type: String
+            constraint: ""
+          statusDescription:
+            type: String
+            constraint: ""
+
+    # GET /api/items/{id} — 상품 단건 조회
+    getItem:
+      http_method: GET
+      endpoint_uri: /api/items/{id}
+      params:
+        id: Long
+      param_annotations:
+        id: "@PathVariable"
+      return_types:
+        - Response
+      param_types: []
+      internal_calls:
+        - getItem                          # ItemService.getItem — 직접 호출
+        - from                             # 2depth: ItemService.getItem → Response.from
+        - getDescription                   # 3depth: Response.from → ItemStatus.getDescription
+      external_calls:
+        # ── 직접 호출 ──
+        - ok                               # ResponseEntity.ok
+        # ── 2depth: ItemService.getItem 내부 ──
+        - findById                         # JpaRepository.findById
+        - orElseThrow                      # Optional.orElseThrow
+        # ── 3depth: Response.from 내부 ──
+        - builder                          # Lombok builder
+        - id                               # Lombok builder setter
+        - name                             # Lombok builder setter
+        - price                            # Lombok builder setter
+        - status                           # Lombok builder setter
+        - statusDescription                # Lombok builder setter
+        - build                            # Lombok builder build
+        - getId                            # Lombok getter
+        - getName                          # Lombok getter
+        - getPrice                         # Lombok getter
+        - getStatus                        # Lombok getter
+      related_types:
+        Response:
+          id:
+            type: Long
+            constraint: ""
+          name:
+            type: String
+            constraint: ""
+          price:
+            type: int
+            constraint: ""
+          status:
+            type: String
+            constraint: ""
+          statusDescription:
+            type: String
+            constraint: ""
+
+    # GET /api/items/active — 활성 상품 목록 조회
+    getActiveItems:
+      http_method: GET
+      endpoint_uri: /api/items/active
+      params: {}
+      return_types:
+        - Response
+      param_types: []
+      internal_calls:
+        - getActiveItems                   # ItemService.getActiveItems — 직접 호출
+        - findByStatus                     # 2depth: ItemRepository.findByStatus (사용자 정의 쿼리 메서드)
+        - from                             # 2depth: Response::from (메서드 참조)
+        - getDescription                   # 3depth: Response.from → ItemStatus.getDescription
+      external_calls:
+        # ── 직접 호출 ──
+        - ok                               # ResponseEntity.ok
+        # ── 2depth: ItemService.getActiveItems 내부 ──
+        - stream                           # Collection.stream
+        - map                              # Stream.map
+        - collect                          # Stream.collect
+        - toList                           # Collectors.toList
+        # ── 3depth: Response.from 내부 ──
+        - builder                          # Lombok builder
+        - id                               # Lombok builder setter
+        - name                             # Lombok builder setter
+        - price                            # Lombok builder setter
+        - status                           # Lombok builder setter
+        - statusDescription                # Lombok builder setter
+        - build                            # Lombok builder build
+        - getId                            # Lombok getter
+        - getName                          # Lombok getter
+        - getPrice                         # Lombok getter
+        - getStatus                        # Lombok getter
+      related_types:
+        Response:
+          id:
+            type: Long
+            constraint: ""
+          name:
+            type: String
+            constraint: ""
+          price:
+            type: int
+            constraint: ""
+          status:
+            type: String
+            constraint: ""
+          statusDescription:
+            type: String
+            constraint: ""
+
+    # PATCH /api/items/{id}/deactivate — 상품 비활성화
+    deactivateItem:
+      http_method: PATCH
+      endpoint_uri: /api/items/{id}/deactivate
+      params:
+        id: Long
+      param_annotations:
+        id: "@PathVariable"
+      return_types:
+        - Response
+      param_types: []
+      internal_calls:
+        - deactivateItem                   # ItemService.deactivateItem — 직접 호출
+        - changeStatus                     # 2depth: Item.changeStatus (사용자 정의 메서드)
+        - from                             # 2depth: Response.from
+        - getDescription                   # 3depth: Response.from → ItemStatus.getDescription
+      external_calls:
+        # ── 직접 호출 ──
+        - ok                               # ResponseEntity.ok
+        # ── 2depth: ItemService.deactivateItem 내부 ──
+        - findById                         # JpaRepository.findById
+        - orElseThrow                      # Optional.orElseThrow
+        # ── 3depth: Response.from 내부 ──
+        - builder                          # Lombok builder
+        - id                               # Lombok builder setter
+        - name                             # Lombok builder setter
+        - price                            # Lombok builder setter
+        - status                           # Lombok builder setter
+        - statusDescription                # Lombok builder setter
+        - build                            # Lombok builder build
+        - getId                            # Lombok getter
+        - getName                          # Lombok getter
+        - getPrice                         # Lombok getter
+        - getStatus                        # Lombok getter
+      related_types:
+        Response:
+          id:
+            type: Long
+            constraint: ""
+          name:
+            type: String
+            constraint: ""
+          price:
+            type: int
+            constraint: ""
+          status:
+            type: String
+            constraint: ""
+          statusDescription:
+            type: String
+            constraint: ""
+
+  # ----------------------------------------------------------------
+  #  OrderController — 주문 관리 (깊은 depth 호출 체인 검증용)
+  #     클래스: @RestController @RequestMapping("/api/orders")
+  #
+  #  호출 깊이 설계:
+  #    createOrder: Controller(1) → Service(2) → PriceCalculator(3) → Item(4) → ItemStatus(5)
+  #    getOrder:    Controller(1) → Service(2) → OrderResponse.from(3) → ItemStatus(4)
+  # ----------------------------------------------------------------
+  OrderController:
+    class_level:
+      fields:
+        orderService: OrderService
+
+    # POST /api/orders/ — 주문 생성 (5depth 호출 체인)
+    createOrder:
+      http_method: POST
+      endpoint_uri: /api/orders/
+      params:
+        request: "OrderDto.OrderCreateRequest"
+      param_annotations:
+        request: "@Valid @RequestBody"
+      return_types:
+        - OrderResponse
+      param_types:
+        - OrderCreateRequest
+      internal_calls:
+        - createOrder                       # 1depth: OrderService.createOrder
+        - calculateTotal                    # 2depth: PriceCalculator.calculateTotal
+        - from                              # 2depth: OrderDto.OrderResponse.from (내부클래스 정적 메서드)
+        - getFinalPrice                     # 3depth: Item.getFinalPrice (파라미터 타입 Item으로 추적)
+        - applyTax                          # 3depth: PriceCalculator.applyTax (같은 클래스 this 호출)
+        - applyDiscount                     # 4depth: ItemStatus.applyDiscount (필드 타입 체이닝)
+        - getDescription                    # 4depth: ItemStatus.getDescription (OrderResponse.from 경로)
+      external_calls:
+        # ── 직접 호출 (1depth) ──
+        - status                            # ResponseEntity.status(HttpStatus.CREATED)
+        - body                              # ResponseEntity.body
+        # ── 2depth: OrderService.createOrder 내부 ──
+        - findById                          # JpaRepository.findById (itemRepository)
+        - orElseThrow                       # Optional.orElseThrow
+        - getItemId                         # Lombok getter (OrderCreateRequest)
+        - getQuantity                       # Lombok getter (OrderCreateRequest / Order)
+        - builder                           # Lombok builder (Order / OrderResponse)
+        - itemName                          # Lombok builder setter
+        - quantity                          # Lombok builder setter
+        - totalPrice                        # Lombok builder setter
+        - build                             # Lombok builder build
+        - getName                           # Lombok getter (Item)
+        - getStatus                         # Lombok getter (Item / Order)
+        - save                              # JpaRepository.save (orderRepository)
+        # ── 3depth: OrderResponse.from 내부 ──
+        - id                                # Lombok builder setter
+        - getId                             # Lombok getter (Order)
+        - getItemName                       # Lombok getter (Order)
+        - getTotalPrice                     # Lombok getter (Order)
+        - statusDescription                 # Lombok builder setter
+      related_types:
+        # 소스: .sample2/.../domain/OrderDto.java (static class OrderCreateRequest, L11-17)
+        OrderCreateRequest:
+          itemId:
+            type: Long
+            constraint: "@NotNull"
+          quantity:
+            type: int
+            constraint: "@Min(1)"
+        # 소스: .sample2/.../domain/OrderDto.java (static class OrderResponse, L21-26)
+        OrderResponse:
+          id:
+            type: Long
+            constraint: ""
+          itemName:
+            type: String
+            constraint: ""
+          quantity:
+            type: int
+            constraint: ""
+          totalPrice:
+            type: int
+            constraint: ""
+          statusDescription:
+            type: String
+            constraint: ""
+
+    # GET /api/orders/{id} — 주문 단건 조회 (4depth 호출 체인)
+    getOrder:
+      http_method: GET
+      endpoint_uri: /api/orders/{id}
+      params:
+        id: Long
+      param_annotations:
+        id: "@PathVariable"
+      return_types:
+        - OrderResponse
+      param_types: []
+      internal_calls:
+        - getOrder                          # 1depth: OrderService.getOrder
+        - from                              # 2depth: OrderDto.OrderResponse.from (내부클래스 정적 메서드)
+        - getDescription                    # 3depth: ItemStatus.getDescription (OrderResponse.from 경로)
+      external_calls:
+        # ── 직접 호출 (1depth) ──
+        - ok                                # ResponseEntity.ok
+        # ── 2depth: OrderService.getOrder 내부 ──
+        - findById                          # JpaRepository.findById (orderRepository)
+        - orElseThrow                       # Optional.orElseThrow
+        # ── 3depth: OrderResponse.from 내부 ──
+        - builder                           # Lombok builder (OrderResponse)
+        - id                                # Lombok builder setter
+        - getId                             # Lombok getter (Order)
+        - itemName                          # Lombok builder setter
+        - getItemName                       # Lombok getter (Order)
+        - quantity                          # Lombok builder setter
+        - getQuantity                       # Lombok getter (Order)
+        - totalPrice                        # Lombok builder setter
+        - getTotalPrice                     # Lombok getter (Order)
+        - statusDescription                 # Lombok builder setter
+        - getStatus                         # Lombok getter (Order)
+        - build                             # Lombok builder build
+      related_types:
+        OrderResponse:
+          id:
+            type: Long
+            constraint: ""
+          itemName:
+            type: String
+            constraint: ""
+          quantity:
+            type: int
+            constraint: ""
+          totalPrice:
+            type: int
+            constraint: ""
+          statusDescription:
             type: String
             constraint: ""
