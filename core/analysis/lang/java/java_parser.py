@@ -539,14 +539,15 @@ class JavaParser:
         body_node = method_node.child_by_field_name("body")
         if not body_node:
             return
-        calls: list[tuple[str, str, int, list[str], str]] = []
+        calls: list[tuple[str, str, int, list[str], list[str], str]] = []
         self._extract_method_calls(body_node, source_code, calls)
-        for target_name, obj_name, arg_count, recv_chain, recv_object in calls:
+        for target_name, obj_name, arg_count, arg_hints, recv_chain, recv_object in calls:
             result.calls.append(ParsedCallEdge(
                 caller_qualname=qualname,
                 target_method_name=target_name,
                 object_name=obj_name,
                 arg_count=arg_count,
+                arg_hints=arg_hints,
                 receiver_chain=recv_chain,
                 receiver_object=recv_object,
             ))
@@ -604,9 +605,10 @@ class JavaParser:
 
         method_name = source_code[name_node.start_byte:name_node.end_byte].decode("utf-8")
 
-        # 인자 개수 추출
+        # 인자 개수 + 인자 타입 힌트 추출
         args_node = invocation_node.child_by_field_name("arguments")
         arg_count = self._count_arguments(args_node) if args_node else 0
+        arg_hints = self._extract_arg_hints(args_node, source_code) if args_node else []
 
         obj_name = ""
         receiver_chain: list[str] = []
@@ -619,7 +621,7 @@ class JavaParser:
             else:
                 obj_name = source_code[obj_node.start_byte:obj_node.end_byte].decode("utf-8")
 
-        calls.append((method_name, obj_name, arg_count, receiver_chain, receiver_object))
+        calls.append((method_name, obj_name, arg_count, arg_hints, receiver_chain, receiver_object))
 
     def _unwind_chain(self, invocation_node, source_code: bytes) -> tuple[str, list[str]]:
         """
@@ -678,7 +680,7 @@ class JavaParser:
         if obj_text == "this":
             obj_text = ""
 
-        calls.append((method_name, obj_text, 0, [], ""))
+        calls.append((method_name, obj_text, 0, [], [], ""))
 
     def _count_arguments(self, args_node) -> int:
         """argument_list 노드에서 인자 개수를 셉니다."""
@@ -688,6 +690,69 @@ class JavaParser:
             if child.type not in ["(", ")", ","]:
                 count += 1
         return count
+
+    # 리터럴 노드 타입 → Java 타입 매핑
+    _LITERAL_TYPE_MAP = {
+        "string_literal":                    "String",
+        "decimal_integer_literal":           "int",
+        "hex_integer_literal":               "int",
+        "octal_integer_literal":             "int",
+        "binary_integer_literal":            "int",
+        "decimal_floating_point_literal":    "double",
+        "hex_floating_point_literal":        "double",
+        "character_literal":                 "char",
+        "true":                              "boolean",
+        "false":                             "boolean",
+        "null_literal":                      "",       # null은 모든 참조 타입과 호환 → 빈 힌트
+    }
+
+    def _extract_arg_hints(self, args_node, source_code: bytes) -> list[str]:
+        """
+        argument_list의 각 인자에서 타입 힌트를 추출합니다.
+        오버로딩 구분 시 EdgeLinker가 사용합니다.
+
+        힌트 종류:
+          - identifier: 변수명 그대로 (EdgeLinker가 local_vars/params/fields에서 타입 해석)
+          - 리터럴: Java 타입명으로 변환 ("String", "int", "boolean" 등)
+          - new Type(): 타입명 추출
+          - cast (Type) x: 타입명 추출
+          - 그 외 (메서드호출, 이항식 등): "" (해석 불가)
+        """
+        hints: list[str] = []
+        for child in args_node.children:
+            if child.type in ("(", ")", ","):
+                continue
+            hints.append(self._arg_hint_for_node(child, source_code))
+        return hints
+
+    def _arg_hint_for_node(self, node, source_code: bytes) -> str:
+        """단일 인자 노드에서 타입 힌트를 추출합니다."""
+        # 리터럴 → 타입명 직접 매핑
+        if node.type in self._LITERAL_TYPE_MAP:
+            return self._LITERAL_TYPE_MAP[node.type]
+
+        # 식별자 → 변수명 그대로 반환 (EdgeLinker가 타입 해석)
+        if node.type == "identifier":
+            return source_code[node.start_byte:node.end_byte].decode("utf-8")
+
+        # new Type(...) → 타입명 추출
+        if node.type == "object_creation_expression":
+            type_node = node.child_by_field_name("type")
+            if type_node:
+                return source_code[type_node.start_byte:type_node.end_byte].decode("utf-8")
+
+        # (Type) expr → 캐스트 타입명 추출
+        if node.type == "cast_expression":
+            type_node = node.child_by_field_name("type")
+            if type_node:
+                return source_code[type_node.start_byte:type_node.end_byte].decode("utf-8")
+
+        # field_access: this.field 등 → 텍스트 그대로
+        if node.type == "field_access":
+            return source_code[node.start_byte:node.end_byte].decode("utf-8")
+
+        # 그 외 (method_invocation, binary_expression 등) → 해석 불가
+        return ""
 
     # -----------------------------------------------------------------------
     # 파라미터 속성 처리 (METHOD.params)
