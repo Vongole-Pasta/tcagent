@@ -1116,7 +1116,7 @@ def cross_check(db, report, ctrl, method, all_expected_calls):
     3. qualname 불완전: receiver가 해석되지 않은 EXTERNAL_CALL
     """
     # 1. 오분류 상세 — EXTERNAL_CALL인데 동명 내부 METHOD가 존재하는 것
-    misclassified = db.execute_query("""
+    misclassified_raw = db.execute_query("""
         MATCH (c:TYPE {name: $ctrl})-[:CONTAINS]->(m:METHOD {name: $method})
         MATCH (m)-[:CALLS*1..]->(ext:EXTERNAL_CALL)
         WHERE EXISTS { MATCH (:TYPE)-[:CONTAINS]->(im:METHOD) WHERE im.name = ext.name }
@@ -1124,6 +1124,24 @@ def cross_check(db, report, ctrl, method, all_expected_calls):
         RETURN DISTINCT ext.name AS ext_name, ext.qualname AS ext_qn,
                im.qualname AS int_qn, it.name AS owner
     """, {"ctrl": ctrl, "method": method})
+
+    # false positive 필터링: EXTERNAL_CALL qualname의 타입 접두어(대문자 시작)가
+    # 내부 메서드 owner와 다르면 동명이지만 별개 메서드 → 오분류 아님
+    #   예: Instant.now (타입=Instant) vs Meta.now (owner=Meta) → 제외
+    misclassified = []
+    for r in misclassified_raw:
+        ext_qn = r.get("ext_qn") or ""
+        owner = r.get("owner") or ""
+        if "." in ext_qn:
+            # qualname에서 메서드명 직전의 타입 부분 추출
+            ext_type_part = ext_qn.rsplit(".", 1)[0].rsplit(".", 1)[-1]
+            # '$' 포함 시 내부 클래스명만 추출 (예: ApiResponse$Meta → Meta)
+            if "$" in ext_type_part:
+                ext_type_part = ext_type_part.rsplit("$", 1)[-1]
+            # 대문자 시작(타입명) + owner와 불일치 → false positive
+            if ext_type_part and ext_type_part[0].isupper() and ext_type_part != owner:
+                continue
+        misclassified.append(r)
 
     # 2. 완전 누락 — METHOD에도 EXTERNAL_CALL에도 없는 기대 호출
     missing = []

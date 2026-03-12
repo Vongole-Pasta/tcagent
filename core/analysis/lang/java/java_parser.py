@@ -618,6 +618,13 @@ class JavaParser:
             if obj_node.type == "method_invocation":
                 # 체이닝: AST를 루트까지 재귀적으로 언와인딩
                 receiver_object, receiver_chain = self._unwind_chain(obj_node, source_code)
+            elif obj_node.type == "object_creation_expression":
+                # new Product.Builder() → "Product.Builder" (타입명만 추출)
+                type_node = obj_node.child_by_field_name("type")
+                if type_node:
+                    obj_name = source_code[type_node.start_byte:type_node.end_byte].decode("utf-8")
+                else:
+                    obj_name = source_code[obj_node.start_byte:obj_node.end_byte].decode("utf-8")
             else:
                 obj_name = source_code[obj_node.start_byte:obj_node.end_byte].decode("utf-8")
 
@@ -645,10 +652,16 @@ class JavaParser:
                 chain.append(source_code[name_node.start_byte:name_node.end_byte].decode("utf-8"))
             current = current.child_by_field_name("object")
 
-        # current는 체이닝의 루트 (identifier, field_access 등)
+        # current는 체이닝의 루트 (identifier, field_access, object_creation_expression 등)
         root_object = ""
         if current:
-            root_object = source_code[current.start_byte:current.end_byte].decode("utf-8")
+            if current.type == "object_creation_expression":
+                # new Product.Builder() → "Product.Builder" (타입명만 추출)
+                type_node = current.child_by_field_name("type")
+                if type_node:
+                    root_object = source_code[type_node.start_byte:type_node.end_byte].decode("utf-8")
+            else:
+                root_object = source_code[current.start_byte:current.end_byte].decode("utf-8")
 
         # chain은 말단→루트 순으로 수집되었으므로 뒤집어서 루트→말단 순으로
         chain.reverse()

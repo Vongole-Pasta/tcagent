@@ -51,9 +51,9 @@ export function HappyCaseTableView() {
                     <TableHeader className="bg-muted/50">
                         <TableRow>
                             <TableHead className="w-[80px] font-bold text-center">ID</TableHead>
-                            <TableHead className="w-auto font-bold text-center">테스트 케이스</TableHead>
-                            <TableHead className="w-[30%] font-bold text-center">입력 데이터</TableHead>
-                            <TableHead className="w-[30%] font-bold text-center">예상 결과</TableHead>
+                            <TableHead className="w-[25%] font-bold text-center">테스트 케이스</TableHead>
+                            <TableHead className="w-[35%] font-bold text-center">입력 데이터</TableHead>
+                            <TableHead className="w-[35%] font-bold text-center">예상 결과</TableHead>
                         </TableRow>
                     </TableHeader>
                     <TableBody>
