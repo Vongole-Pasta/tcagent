@@ -79,6 +79,7 @@ interface AppState {
     generateHappyCaseScenarios: (methodIds?: string[]) => Promise<void>;
     clearScenarios: () => void;
     toggleMethodSelection: (id: string) => void;
+    setSelectedMethodIds: (ids: string[]) => void;
     setViewMode: (mode: 'dashboard' | 'graph' | 'results') => void;
 
     projects: string[];
@@ -174,6 +175,10 @@ export const useStore = create<AppState>((set, get) => ({
                 ? state.selectedMethodIds.filter(mid => String(mid) !== stringId)
                 : [...state.selectedMethodIds, stringId]
         }));
+    },
+
+    setSelectedMethodIds: (ids: string[]) => {
+        set({ selectedMethodIds: ids.map(String) });
     },
 
     setViewMode: (mode) => set({ viewMode: mode }),
