@@ -288,7 +288,7 @@ class Analyzer:
         content = file_data['content']
 
         # 경로 및 해시 계산
-        file_hash = hashlib.sha256(content).hexdigest()
+        file_hash = hashlib.sha256(content.encode("utf-8")).hexdigest()
         relative_path = rel_path_map[file_path]
         file_name = os.path.basename(file_path)
 
@@ -314,7 +314,8 @@ class Analyzer:
         scan_id = str(uuid.uuid4())
         lang_parser = PARSERS.get(language)
         if lang_parser:
-            result = lang_parser.parse(content, relative_path, scan_id)
+            source_bytes = content.encode("utf-8") if isinstance(content, str) else content
+            result = lang_parser.parse(source_bytes, relative_path, scan_id)
             registry.collect(result)
 
         # FILE 노드 메타데이터 (배치용, scan_id 포함 — prune에서도 사용)

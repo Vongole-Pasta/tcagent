@@ -81,6 +81,7 @@ class EdgeLinker:
         2. 엣지 배치 생성 (DB 기록용 dict 리스트)
         """
         self.resolve_supertype_qualnames()
+        self._resolve_unresolved_vars()
 
         resolved_calls, external_calls = self.resolve_calls(self._registry.calls)
 
@@ -112,6 +113,36 @@ class EdgeLinker:
                     parent_q = self._resolve_type_in_file(parent_name, t.file_path)
                     resolved.append(parent_q or parent_name)   # 해석 실패 시 원본 유지
             t.supertypes = resolved
+
+    def _resolve_unresolved_vars(self):
+        """
+        var 선언 중 메서드 리턴타입 추론이 필요한 변수를 해석합니다.
+        unresolved_vars의 (메서드명, 객체명)으로 가상 호출을 해석하고,
+        해당 메서드의 리턴타입을 local_vars에 추가합니다.
+        CALLS 해석 전에 실행되어야 합니다.
+        """
+        for method in self._registry.methods.values():
+            if not method.unresolved_vars:
+                continue
+
+            for var_name, (target_method, obj_name) in method.unresolved_vars.items():
+                # 가상 ParsedCallEdge를 만들어 기존 해석 로직 재활용
+                virtual_call = ParsedCallEdge(
+                    caller_qualname=method.qualname,
+                    target_method_name=target_method,
+                    object_name=obj_name,
+                )
+                resolved_qualname = self._resolve_call_target(virtual_call)
+                if not resolved_qualname:
+                    continue
+
+                # 해석된 메서드의 리턴타입에서 첫 번째 타입명 추출
+                resolved_method = self._registry.methods.get(resolved_qualname)
+                if not resolved_method or not resolved_method.return_type:
+                    continue
+                layout = resolved_method.return_type.get("layout", [])
+                if layout:
+                    method.local_vars[var_name] = layout[0]
 
     # -----------------------------------------------------------------------
     # CALLS 해석
@@ -163,7 +194,7 @@ class EdgeLinker:
 
         해석 전략 (우선순위 순):
           1. obj_name 있음 → 타입명/필드명으로 해석 + 상속 계층 탐색
-          2. obj_name 없음 + receiver_method 있음 (체이닝) → 수신 메서드 리턴 타입에서 탐색
+          2. obj_name 없음 + receiver_chain 있음 (체이닝) → 체인을 순회하며 리턴 타입 추적
           3. obj_name 없음 → 같은 클래스 + 상속 계층에서 형제 메서드 탐색
           4. 오버로딩: 후보가 여러 개면 arg_count로 필터링
         """
@@ -173,7 +204,7 @@ class EdgeLinker:
 
         if call.object_name:
             return self._resolve_with_object(call, caller_method, caller_file)
-        elif call.receiver_method:
+        elif call.receiver_chain:
             return self._resolve_chained_call(call, caller_method, caller_file)
         else:
             return self._resolve_sibling_call(call, caller_method)
@@ -188,18 +219,21 @@ class EdgeLinker:
         """
         obj = call.object_name
 
+        # 오버로딩 해석용 공통 kwargs (arg_hints 기반 타입 매칭)
+        pick_kwargs = dict(arg_hints=call.arg_hints, caller_method=caller_method, caller_file=caller_file)
+
         # Case 0: this/super 키워드 처리
         #   예: this.validate(id) → 자신의 클래스(UserService) + 상속 계층에서 validate 탐색
         if obj == "this" and caller_method:
             methods = self._find_method_in_hierarchy(caller_method.class_qualname, call.target_method_name)
-            return self._pick_by_arg_count(methods, call.arg_count)
+            return self._pick_by_arg_count(methods, call.arg_count, **pick_kwargs)
         if obj == "super" and caller_method:
             # 예: super.onCreate() → 부모 타입(AppCompatActivity)에서부터 탐색 (자기 자신 스킵)
             parents = self._parent_types.get(caller_method.class_qualname, [])
             for parent_q in parents:
                 methods = self._find_method_in_hierarchy(parent_q, call.target_method_name)
                 if methods:
-                    return self._pick_by_arg_count(methods, call.arg_count)
+                    return self._pick_by_arg_count(methods, call.arg_count, **pick_kwargs)
             return None
 
         # Case 1a: obj_name이 타입명 (정적 호출 또는 타입 참조)
@@ -208,7 +242,7 @@ class EdgeLinker:
                   if caller_file else self._resolve_type_name_global(obj))
         if type_q:
             methods = self._find_method_in_hierarchy(type_q, call.target_method_name)
-            return self._pick_by_arg_count(methods, call.arg_count)
+            return self._pick_by_arg_count(methods, call.arg_count, **pick_kwargs)
 
         # Case 1b: obj_name이 필드명 → 필드의 타입에서 탐색
         #   예: userRepo.findById(id) → obj="userRepo" 필드의 타입(UserRepository)에서 findById 탐색
@@ -220,48 +254,163 @@ class EdgeLinker:
                           if caller_file else self._resolve_type_name_global(field_type_name))
                 if type_q:
                     methods = self._find_method_in_hierarchy(type_q, call.target_method_name)
-                    return self._pick_by_arg_count(methods, call.arg_count)
+                    return self._pick_by_arg_count(methods, call.arg_count, **pick_kwargs)
+
+        # Case 1c: obj_name이 로컬 변수명 → 로컬 변수의 타입에서 탐색
+        #   예: Member member = repo.find(...);
+        #      member.recordLogin()
+        #   → obj="member", local_vars={"member": "Member"} → Member 타입에서 recordLogin 탐색
+        if caller_method and caller_method.local_vars:
+            local_type_name = caller_method.local_vars.get(obj)
+            if local_type_name:
+                type_q = (self._resolve_type_in_file(local_type_name, caller_file)
+                          if caller_file else self._resolve_type_name_global(local_type_name))
+                if type_q:
+                    methods = self._find_method_in_hierarchy(type_q, call.target_method_name)
+                    return self._pick_by_arg_count(methods, call.arg_count, **pick_kwargs)
+
+        # Case 1d: obj_name이 메서드 파라미터명 → 파라미터의 타입에서 탐색
+        #   예: MemberResponse.from(Member member) 내에서 member.getId()
+        #   → obj="member", params=[{name:"member", type:{layout:["Member"]}}] → Member 타입에서 getId 탐색
+        if caller_method and caller_method.params:
+            for param in caller_method.params:
+                if param["name"] == obj and param["type"].get("layout"):
+                    param_type_name = param["type"]["layout"][0]
+                    type_q = (self._resolve_type_in_file(param_type_name, caller_file)
+                              if caller_file else self._resolve_type_name_global(param_type_name))
+                    if type_q:
+                        methods = self._find_method_in_hierarchy(type_q, call.target_method_name)
+                        result = self._pick_by_arg_count(methods, call.arg_count, **pick_kwargs)
+                        if result:
+                            return result
+                    break  # 파라미터명 매칭 후 타입 해석 실패 시 다음 케이스로
+
+        # Case 1e: obj_name에 '.'이 포함된 복합 객체명 해석
+        #   예1: ApiResponseCode.SUCCESS.getMessage() → obj="ApiResponseCode.SUCCESS"
+        #        → "ApiResponseCode" ENUM 타입의 상수 "SUCCESS" → 해당 enum에서 getMessage 탐색
+        #   예2: Outer.Inner.foo() → obj="Outer.Inner"
+        #        → "Outer" 타입의 내부 클래스 "Outer$Inner" → 해당 내부 클래스에서 foo 탐색
+        if "." in obj:
+            result = self._resolve_dotted_object(obj, call.target_method_name, call.arg_count, caller_file)
+            if result:
+                return result
 
         return None
+
+    def _resolve_dotted_object(
+        self, obj: str, target_method: str, arg_count: int, caller_file: str | None,
+    ) -> str | None:
+        """
+        '.'이 포함된 복합 객체명을 반복적으로 해석합니다. 뎁스 제한 없음.
+
+        해석 전략 (파트를 하나씩 소비하며 반복):
+          1. obj를 '.' 기준으로 분리 → [part0, part1, part2, ...]
+          2. part0을 타입으로 해석 → current_q
+          3. 나머지 파트를 순회하며:
+             a. current_q가 ENUM이고 해당 파트가 상수명 → 현재 타입에서 메서드 탐색 (탐색 종료)
+             b. current_q$파트 가 내부 클래스로 존재 → current_q를 내부 클래스로 갱신 (다음 파트 계속)
+             c. 둘 다 아니면 → 해석 실패
+          4. 모든 파트를 소비하면 최종 current_q에서 메서드 탐색
+
+        예: Outer.Inner.Inner2.foo()
+          → parts = ["Outer", "Inner", "Inner2"]
+          → Outer → Outer$Inner → Outer$Inner$Inner2 → foo() 탐색
+        """
+        parts = obj.split(".")
+        if len(parts) < 2:
+            return None
+
+        # 첫 번째 파트를 타입으로 해석
+        current_q = (self._resolve_type_in_file(parts[0], caller_file)
+                     if caller_file else self._resolve_type_name_global(parts[0]))
+        if not current_q:
+            return None
+
+        # 나머지 파트를 순회하며 해석
+        for part in parts[1:]:
+            parsed_type = self._registry.types.get(current_q)
+            if not parsed_type:
+                return None
+
+            # ENUM 상수 접근 → 현재 타입에서 메서드 탐색 (더 이상 깊이 들어갈 수 없으므로 종료)
+            if parsed_type.kind == "ENUM":
+                constant_names = {c["name"] for c in parsed_type.constants} if parsed_type.constants else set()
+                if part in constant_names:
+                    methods = self._find_method_in_hierarchy(current_q, target_method)
+                    return self._pick_by_arg_count(methods, arg_count)
+
+            # 내부 클래스 접근 → qualname 갱신 후 다음 파트로 계속
+            inner_qualname = f"{current_q}${part}"
+            if inner_qualname in self._registry.types:
+                current_q = inner_qualname
+                continue
+
+            return None  # 어느 패턴에도 매칭되지 않음
+
+        # 모든 파트를 소비 → 최종 타입에서 메서드 탐색
+        methods = self._find_method_in_hierarchy(current_q, target_method)
+        return self._pick_by_arg_count(methods, arg_count)
 
     def _resolve_chained_call(self, call: ParsedCallEdge, caller_method, caller_file) -> str | None:
         """
-        체이닝 호출을 해석합니다.
+        체이닝 호출을 반복적으로 해석합니다. 뎁스 제한 없음.
 
-        예: userService.getUser(id).getName()
-          → receiver_object="userService", receiver_method="getUser", target="getName"
-          → 1) userService.getUser() 해석 → UserService.getUser(String)
-          → 2) getUser의 리턴 타입(User)에서 getName 메서드 탐색
+        예: a.getUser().getAddress().getCity()
+          → receiver_chain=["getUser", "getAddress"], receiver_object="a", target="getCity"
+          → 1) a.getUser() 해석 → User 타입
+          → 2) User.getAddress() 해석 → Address 타입
+          → 3) Address.getCity() 탐색
+
+        전략:
+          1. 체인의 첫 번째 메서드를 receiver_object 기반으로 해석
+          2. 리턴 타입을 구한 뒤, 그 타입에서 다음 체인 메서드를 해석 (반복)
+          3. 체인을 모두 소비하면 최종 타입에서 target_method 탐색
         """
-        # 수신 메서드 찾기 (receiver_object.receiver_method())
-        #   예: userService.getUser(id).getName()
-        #   → 먼저 userService.getUser()를 가상 ParsedCallEdge로 만들어 해석
-        recv_call = ParsedCallEdge(
+        chain = call.receiver_chain
+        if not chain:
+            return None
+
+        # 1단계: 체인의 첫 번째 메서드를 해석
+        first_call = ParsedCallEdge(
             caller_qualname=call.caller_qualname,
-            target_method_name=call.receiver_method,
+            target_method_name=chain[0],
             object_name=call.receiver_object,
         )
-        recv_qualname = (self._resolve_with_object(recv_call, caller_method, caller_file)
-                         if call.receiver_object
-                         else self._resolve_sibling_call(recv_call, caller_method))
-
-        if not recv_qualname:
+        current_qualname = (self._resolve_with_object(first_call, caller_method, caller_file)
+                            if call.receiver_object
+                            else self._resolve_sibling_call(first_call, caller_method))
+        if not current_qualname:
             return None
 
-        # 수신 메서드의 리턴 타입 → 그 타입에서 target 메서드 탐색
-        #   예: getUser()의 리턴 타입이 User → User 클래스에서 getName() 탐색
-        recv_method = self._registry.methods.get(recv_qualname)
-        if not recv_method or not recv_method.return_type or not recv_method.return_type.get("layout"):
+        # 2단계: 나머지 체인 메서드를 순회하며 리턴 타입 추적
+        for chain_method in chain[1:]:
+            current_qualname = self._follow_return_type(current_qualname, chain_method, caller_file)
+            if not current_qualname:
+                return None
+
+        # 3단계: 최종 리턴 타입에서 target_method 탐색
+        return self._follow_return_type(current_qualname, call.target_method_name, caller_file, call.arg_count)
+
+    def _follow_return_type(
+        self, method_qualname: str, next_method: str, caller_file: str | None, arg_count: int = -1,
+    ) -> str | None:
+        """
+        메서드의 리턴 타입을 구하고, 그 타입에서 다음 메서드를 탐색합니다.
+
+        예: getUser()의 리턴 타입이 User → User에서 next_method 탐색
+        """
+        method = self._registry.methods.get(method_qualname)
+        if not method or not method.return_type or not method.return_type.get("layout"):
             return None
 
-        return_type_name = recv_method.return_type["layout"][0]
+        return_type_name = method.return_type["layout"][0]
         type_q = (self._resolve_type_in_file(return_type_name, caller_file)
                   if caller_file else self._resolve_type_name_global(return_type_name))
-        if type_q:
-            methods = self._find_method_in_hierarchy(type_q, call.target_method_name)
-            return self._pick_by_arg_count(methods, call.arg_count)
+        if not type_q:
+            return None
 
-        return None
+        methods = self._find_method_in_hierarchy(type_q, next_method)
+        return self._pick_by_arg_count(methods, arg_count)
 
     def _resolve_sibling_call(self, call: ParsedCallEdge, caller_method) -> str | None:
         """
@@ -273,8 +422,13 @@ class EdgeLinker:
         """
         if not caller_method:
             return None
+        caller_type = self._registry.types.get(caller_method.class_qualname)
+        caller_file = caller_type.file_path if caller_type else None
         methods = self._find_method_in_hierarchy(caller_method.class_qualname, call.target_method_name)
-        return self._pick_by_arg_count(methods, call.arg_count)
+        return self._pick_by_arg_count(
+            methods, call.arg_count,
+            arg_hints=call.arg_hints, caller_method=caller_method, caller_file=caller_file,
+        )
 
     # -----------------------------------------------------------------------
     # 파라미터/리턴 엣지 해석
@@ -424,22 +578,160 @@ class EdgeLinker:
 
         return []
 
-    def _pick_by_arg_count(self, methods: list[ParsedMethod], arg_count: int) -> str | None:
+    # Autoboxing 매핑 (primitive ↔ wrapper)
+    _AUTOBOX = {
+        "int": "Integer", "Integer": "int",
+        "long": "Long", "Long": "long",
+        "boolean": "Boolean", "Boolean": "boolean",
+        "double": "Double", "Double": "double",
+        "float": "Float", "Float": "float",
+        "char": "Character", "Character": "char",
+        "byte": "Byte", "Byte": "byte",
+        "short": "Short", "Short": "short",
+    }
+
+    def _pick_by_arg_count(
+        self, methods: list[ParsedMethod], arg_count: int, *,
+        arg_hints: list[str] | None = None,
+        caller_method: ParsedMethod | None = None,
+        caller_file: str | None = None,
+    ) -> str | None:
         """
-        오버로딩된 메서드 목록에서 인자 개수로 필터링합니다.
-        - 후보 0개: None
-        - 후보 1개: 그대로 반환
-        - 후보 여러 개 + arg_count >= 0: 인자 수 일치하는 것 선택
-        - 그래도 여러 개 or arg_count < 0: 첫 번째 반환 (best effort)
+        오버로딩된 메서드 목록에서 최적 후보를 선택합니다.
+
+        해석 순서:
+          1. 후보 0개 → None, 1개 → 그대로 반환
+          2. arg_count로 필터 → 1개면 반환
+          3. 여전히 여럿이면 arg_hints 타입 매칭 (타이브레이커)
+             a. 정확 매칭 (simple name 비교)
+             b. Autoboxing 호환 (int ↔ Integer 등)
+             c. 상속 호환 (_parent_types 체인 탐색)
+          4. 그래도 구분 불가 → 첫 번째 반환 (best effort)
         """
         if not methods:
             return None
         if len(methods) == 1:
             return methods[0].qualname
 
+        # 1단계: 인자 개수 필터
         if arg_count >= 0:
             matched = [m for m in methods if len(m.params) == arg_count]
             if len(matched) == 1:
                 return matched[0].qualname
+            if matched:
+                methods = matched  # 이후 타입 매칭은 개수 일치 후보에서만
+
+        # 2단계: 인자 타입 매칭 (타이브레이커)
+        if arg_hints and caller_method and len(methods) > 1:
+            resolved_hints = self._resolve_arg_hints(arg_hints, caller_method, caller_file)
+            if any(h for h in resolved_hints):  # 해석된 힌트가 하나라도 있으면
+                type_matched = [m for m in methods if self._args_compatible(resolved_hints, m)]
+                if len(type_matched) == 1:
+                    return type_matched[0].qualname
 
         return methods[0].qualname  # fallback
+
+    def _resolve_arg_hints(
+        self, hints: list[str], caller_method: ParsedMethod, caller_file: str | None,
+    ) -> list[str]:
+        """
+        인자 힌트(변수명/리터럴타입/"")를 실제 타입명으로 해석합니다.
+
+        해석 순서: 로컬 변수 → 메서드 파라미터 → 필드 → 타입명 그대로(리터럴 등)
+        """
+        resolved: list[str] = []
+        for hint in hints:
+            if not hint:
+                resolved.append("")
+                continue
+
+            # 이미 타입명인 경우 (리터럴: "int", "String", "boolean" 등, new Type())
+            if hint[0].isupper() or hint in ("int", "long", "boolean", "double", "float", "char", "byte", "short"):
+                resolved.append(hint)
+                continue
+
+            # 로컬 변수에서 조회
+            if caller_method.local_vars:
+                local_type = caller_method.local_vars.get(hint)
+                if local_type:
+                    resolved.append(local_type)
+                    continue
+
+            # 메서드 파라미터에서 조회
+            param_type = None
+            for p in caller_method.params:
+                if p["name"] == hint and p["type"].get("layout"):
+                    param_type = p["type"]["layout"][0]
+                    break
+            if param_type:
+                resolved.append(param_type)
+                continue
+
+            # 필드에서 조회
+            field = self._fields_by_class.get(caller_method.class_qualname, {}).get(hint)
+            if field and field.field_type.get("layout"):
+                resolved.append(field.field_type["layout"][0])
+                continue
+
+            # 해석 불가
+            resolved.append("")
+
+        return resolved
+
+    def _args_compatible(self, resolved_hints: list[str], candidate: ParsedMethod) -> bool:
+        """
+        해석된 인자 타입 힌트가 후보 메서드의 파라미터 타입과 호환되는지 검사합니다.
+        빈 힌트("")는 어떤 타입과도 호환 (스킵).
+        """
+        if len(resolved_hints) != len(candidate.params):
+            return False
+
+        for hint, param in zip(resolved_hints, candidate.params):
+            if not hint:  # 해석 불가 힌트 → 스킵 (어떤 타입과도 호환)
+                continue
+
+            param_layout = param["type"].get("layout", [])
+            if not param_layout:
+                continue
+            param_type = param_layout[0]
+
+            if not self._type_compatible(hint, param_type):
+                return False
+        return True
+
+    def _type_compatible(self, arg_type: str, param_type: str) -> bool:
+        """
+        인자 타입이 파라미터 타입과 호환되는지 검사합니다.
+
+        호환 판정 순서:
+          1. 정확 매칭 (simple name)
+          2. Autoboxing (int ↔ Integer 등)
+          3. 상속 호환 (arg_type의 부모 체인에 param_type 존재)
+        """
+        # 1. 정확 매칭
+        if arg_type == param_type:
+            return True
+
+        # 2. Autoboxing
+        if self._AUTOBOX.get(arg_type) == param_type:
+            return True
+
+        # 3. 상속 호환 — arg_type의 부모 체인에서 param_type 탐색
+        #    qualname으로 변환 후 _parent_types에서 조회
+        arg_qualnames = [q for q, t in self._registry.types.items() if t.name == arg_type]
+        param_qualnames = {q for q, t in self._registry.types.items() if t.name == param_type}
+
+        for arg_q in arg_qualnames:
+            # BFS로 부모 체인 탐색
+            visited = set()
+            queue = [arg_q]
+            while queue:
+                current = queue.pop(0)
+                if current in visited:
+                    continue
+                visited.add(current)
+                if current in param_qualnames:
+                    return True
+                queue.extend(self._parent_types.get(current, []))
+
+        return False

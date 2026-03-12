@@ -68,6 +68,8 @@ class ParsedMethod:
     scan_id: Optional[str] = None
     endpoint_uri: str = ""  # REST 엔드포인트 URL
     http_method: str = ""   # HTTP 메서드
+    local_vars: dict[str, str] = field(default_factory=dict)  # 로컬 변수 타입 맵 (변수명 → 타입명). EdgeLinker 해석용, DB 미저장.
+    unresolved_vars: dict[str, tuple[str, str]] = field(default_factory=dict)  # var 선언 중 메서드 리턴타입 추론 필요 (변수명 → (메서드명, 객체명)). EdgeLinker가 해석.
 
     @classmethod
     def from_db_record(cls, record: dict) -> "ParsedMethod":
@@ -91,8 +93,9 @@ class ParsedCallEdge:
     target_method_name: str         # 호출 대상 메서드 이름 (getUser)
     object_name: str                # 호출 대상 객체/클래스 이름 (userRepo)
     arg_count: int = -1             # 호출 시 전달된 인자 개수 (-1 = 알 수 없음)
-    receiver_method: str = ""       # 체이닝 시 수신 객체를 반환한 메서드명
-    receiver_object: str = ""       # 체이닝 시 원래 수신 객체명
+    arg_hints: list[str] = field(default_factory=list)  # 호출 인자의 타입 힌트 목록 (파서가 추출). 식별자명/리터럴타입/"" 중 하나. EdgeLinker가 해석하여 오버로딩 구분에 사용.
+    receiver_chain: list[str] = field(default_factory=list)  # 체이닝 메서드 목록 (루트→직전 순). 예: a.getUser().getAddress().getCity() → ["getUser", "getAddress"]
+    receiver_object: str = ""       # 체이닝 시 루트 객체명. 예: a.getUser().getName() → "a"
     callee_qualname: str = ""       # EdgeLinker가 해석한 호출 대상의 qualname (해석 전에는 빈 문자열)
 
 
