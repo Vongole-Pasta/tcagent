@@ -810,8 +810,8 @@ endpoints:
         sessionId: String                 # 쿠키에서 추출
         authToken: String                 # 헤더에서 추출
       param_annotations:
-        sessionId: "@CookieValue"         # @CookieValue 어노테이션
-        authToken: "@RequestHeader"       # @RequestHeader 어노테이션
+        sessionId: '@CookieValue(name = "SESSION_ID", required = false)'  # 속성 포함
+        authToken: '@RequestHeader("X-Auth-Token")'                       # 값 속성 포함
       return_types:
         - ApiResponse
         - MemberResponse
@@ -971,6 +971,8 @@ endpoints:
         - substring                       # String.substring
         - toEpochMilli                    # Instant.toEpochMilli
         - toString                        # Object.toString
+        # ── 3depth: from 내부 (Category getter — Lombok @Getter) ──
+        - Category.getName                # Category.getName (Lombok 생성)
       # getProduct: return ResponseEntity<ApiResponse<ProductDto.Response>>
       related_types:
         # 소스: .sample/.../product/dto/ProductDto.java (내부 record Response, L93-101)
@@ -1078,6 +1080,8 @@ endpoints:
         - substring                       # String.substring
         - toEpochMilli                    # Instant.toEpochMilli
         - toString                        # Object.toString
+        # ── 3depth: from 내부 (Category getter — Lombok @Getter) ──
+        - Category.getName                # Category.getName (Lombok 생성)
       # createProduct: param ProductDto.Create, return ResponseEntity<ApiResponse<ProductDto.Response>>
       related_types:
         # 소스: .sample/.../product/dto/ProductDto.java (내부 static class Create, L21-62)
@@ -1194,6 +1198,8 @@ endpoints:
         - substring                       # String.substring
         - toEpochMilli                    # Instant.toEpochMilli
         - toString                        # Object.toString
+        # ── 3depth: from 내부 (Category getter — Lombok @Getter) ──
+        - Category.getName                # Category.getName (Lombok 생성)
       # updateProduct: param ProductDto.Update, return ResponseEntity<ApiResponse<ProductDto.Response>>
       related_types:
         # 소스: .sample/.../product/dto/ProductDto.java (내부 static class Update, L67-86)
@@ -1311,6 +1317,8 @@ endpoints:
         - substring                       # String.substring
         - toEpochMilli                    # Instant.toEpochMilli
         - toString                        # Object.toString
+        # ── 3depth: from 내부 (Category getter — Lombok @Getter) ──
+        - Category.getName                # Category.getName (Lombok 생성)
       # filterProducts: return ResponseEntity<ApiResponse<List<ProductDto.Response>>>
       related_types:
         # 소스: .sample/.../product/dto/ProductDto.java (내부 record Response, L93-101)
@@ -1408,6 +1416,8 @@ endpoints:
         - substring                       # String.substring
         - toEpochMilli                    # Instant.toEpochMilli
         - toString                        # Object.toString
+        # ── 3depth: from 내부 (Category getter — Lombok @Getter) ──
+        - Category.getName                # Category.getName (Lombok 생성)
       # getProductAsync: return CompletableFuture<ResponseEntity<ApiResponse<ProductDto.Response>>>
       related_types:
         # 소스: .sample/.../product/dto/ProductDto.java (내부 record Response, L93-101)
@@ -1509,6 +1519,8 @@ endpoints:
         - substring                       # String.substring
         - toEpochMilli                    # Instant.toEpochMilli
         - toString                        # Object.toString
+        # ── 3depth: from 내부 (Category getter — Lombok @Getter) ──
+        - Category.getName                # Category.getName (Lombok 생성)
       # getProductDeferred: return DeferredResult<ResponseEntity<ApiResponse<ProductDto.Response>>>
       related_types:
         # 소스: .sample/.../product/dto/ProductDto.java (내부 record Response, L93-101)
