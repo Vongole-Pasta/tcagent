@@ -897,8 +897,11 @@ class JavaParser:
                     key_text = source_code[key.start_byte:key.end_byte].decode("utf-8")
                     if key_text == "method":
                         value_text = source_code[value.start_byte:value.end_byte].decode("utf-8")
-                        # RequestMethod.GET → GET
-                        return value_text.split(".")[-1] if "." in value_text else value_text
+                        # {RequestMethod.GET, RequestMethod.POST} 또는 RequestMethod.GET
+                        # 중괄호·공백 제거 후 각 항목에서 '.' 뒤 메서드명만 추출
+                        raw = value_text.strip("{} ")
+                        parts = [p.strip().split(".")[-1] for p in raw.split(",") if p.strip()]
+                        return ",".join(parts)
         return "ALL"
     
     # 클래스에 있는 URI 추출

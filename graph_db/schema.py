@@ -68,7 +68,7 @@ NODE_SCHEMA = {
         "params":       list[ParamInfo],# 파라미터 정보(JSON 배열)
         "return_type":  TypeInfo,       # 리턴타입 정보(JSON)
         "endpoint_uri": str,            # API 엔드포인트 URL (Controller인 경우)
-        "http_method":  str,            # HTTP 메서드: [GET, POST, PUT, DELETE, PATCH, '']
+        "http_method":  str,            # HTTP 메서드: [GET, POST, PUT, DELETE, PATCH, ''] — 복수 메서드는 쉼표 구분 (예: "GET,POST")
         "source":       str,            # 함수 스코프 소스 코드 본문
         "last_scan_id": str,            # 마지막 분석 스캔 ID
         "status":       str             # 상태 변경: [NEW, MODIFIED, AS-IS, DELETED]
