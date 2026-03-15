@@ -112,6 +112,18 @@ class CypherQueries:
     RETURN path, metadata
     """
 
+    # [FE 전용 상위 호출 흐름 조회]
+    # EXTERNAL_CALL 노드를 포함하여 상위 호출 경로를 조회합니다.
+    GET_UPSTREAM_IMPACT_FOR_FE = """
+    MATCH path = (source)-[:CALLS*0..]->(target:METHOD)
+    WHERE (elementId(target) = $method_id OR target.id = $method_id)
+    WITH path LIMIT 100
+    UNWIND nodes(path) as m
+    OPTIONAL MATCH (c:TYPE)-[:CONTAINS]->(m)
+    WITH path, collect({id: elementId(m), className: c.name}) as metadata
+    RETURN path, metadata
+    """
+
     # [하위 호출 흐름 조회]
     # 특정 메서드가 '누구를 호출하는지(Callees)' 추적하여 전체 경로를 가져옵니다. (Downstream Analysis)
     # 핵심 로직: 화살표의 출발지(source)가 '나($method_id)'인 경우를 찾습니다. (Me -> Target)
@@ -119,6 +131,18 @@ class CypherQueries:
     # Usage: api/routers/graph.py:136
     GET_DOWNSTREAM_FLOW = """
     MATCH path = (source:METHOD)-[:CALLS*0..]->(target:METHOD)
+    WHERE (elementId(source) = $method_id OR source.id = $method_id)
+    WITH path LIMIT 100
+    UNWIND nodes(path) as m
+    OPTIONAL MATCH (c:TYPE)-[:CONTAINS]->(m)
+    WITH path, collect({id: elementId(m), className: c.name}) as metadata
+    RETURN path, metadata
+    """
+
+    # [FE 전용 하위 호출 흐름 조회]
+    # EXTERNAL_CALL 노드를 포함하여 하위 호출 경로를 조회합니다.
+    GET_DOWNSTREAM_FLOW_FOR_FE = """
+    MATCH path = (source:METHOD)-[:CALLS*0..]->(target)
     WHERE (elementId(source) = $method_id OR source.id = $method_id)
     WITH path LIMIT 100
     UNWIND nodes(path) as m
