@@ -10,7 +10,7 @@ class HappyCaseQueries:
     WITH DISTINCT root WHERE root IS NOT NULL
     OPTIONAL MATCH path = (root)-[:CONTAINS*0..10]->(t:TYPE)
     WITH DISTINCT t
-    WHERE t IS NOT NULL
+    WHERE t IS NOT NULL AND coalesce(t.kind, '') <> 'ENUM'
     MATCH (t)-[:CONTAINS]->(f:FIELD)
     RETURN t.name as type_name, f.name as field_name, f.type as field_type
     """
@@ -22,7 +22,7 @@ class HappyCaseQueries:
     WITH DISTINCT root WHERE root IS NOT NULL
     OPTIONAL MATCH path = (root)-[:CONTAINS*0..10]->(t:TYPE)
     WITH DISTINCT t
-    WHERE t IS NOT NULL
+    WHERE t IS NOT NULL AND coalesce(t.kind, '') <> 'ENUM'
     MATCH (t)-[:CONTAINS]->(f:FIELD)
     RETURN t.name as type_name, f.name as field_name, f.type as field_type
     """
