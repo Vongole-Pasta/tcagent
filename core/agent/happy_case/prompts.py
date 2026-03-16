@@ -26,10 +26,12 @@ GENERATOR_NODE_PROMPT = """
 
 2. **input_data**: 
    - **컨텍스트 분석 및 데이터 추출**: `<BUSINESS_LOGIC>` 및 `<DTO_SCHEMA>`를 분석하여 필수 파라미터(`@PathVariable`, `@RequestParam` 등)와 헤더를 식별합니다. 
-   - **주의(구조 혼동 방지)**: `<DTO_SCHEMA>` 내의 `request`와 `response` 스키마 구분을 엄격히 준수하세요. 요청 데이터(`input_data`)를 구성할 때는 **반드시** `request` 하위의 스키마만 참고해야 하며, `response` 스키마 구조를 `input_data`에 포함시키는 오류를 절대 피하십시오.
+   - **주의(구조 혼동 방지)**: `<DTO_SCHEMA>` 내의 `request`와 `response` 스키마 구분을 엄격히 준수하세요. 요청 데이터(`input_data`)를 구성할 때는 원칙적으로 **반드시** `request` 하위의 스키마만 참고해야 하며, `response` 스키마 구조를 `input_data` 바디에 포함시키는 오류를 절대 피하십시오. (단, `Pageable`의 `sort` 파라미터 값 지정 등 정렬 조건을 구성해야 하는 경우에는 예외적으로 `response` 스키마의 필드명을 참고하여 작성하세요.)
    - **주의**: `Authorization` 등의 인증 관련 헤더는 제공된 컨텍스트 상에서 명시적으로 요구된다고 명확히 확인할 수 있는 경우에만 포함하세요. 정보가 부족하거나 확신할 수 없는 경우 함부로 유추하여 포함하지 마십시오.
    - 식별된 파라미터들과 요청 바디(POST/PUT/PATCH 등일 경우)를 바탕으로, `input_data` 항목을 **반드시** 아래의 텍스트 형식(구조화된 텍스트)으로 작성합니다.
    - Headers 내 Content-Type은 항상 명시합니다 (예: application/json 등).
+   - Query Parameter(Request Params) 구성 시, optional(선택적)인 파라미터가 있다면 생략하지 말고 모두 포함하여 작성하세요.
+     - 특히 프레임워크에서 지원하는 객체(예: Spring의 `Pageable` 등)가 사용되는 경우, 해당 객체에 은닉된/내포된 파라미터(예: `page`, `size`, `sort`)를 반드시 모두 명시하세요. (예: `?page=0&size=10&sort=createdAt`) `sort` 파라미터의 기준 필드는 프레임워크나 비즈니스상 정렬 대상이 되는 엔티티, 혹은 그 결과인 `response` 스키마의 필드명 중 하나를 적절히 선택하여 사용하세요.
 
    작성 형식 (들여쓰기를 유지하세요):
    - Headers 
