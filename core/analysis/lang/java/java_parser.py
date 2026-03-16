@@ -482,6 +482,16 @@ class JavaParser:
                         if name_node:
                             var_name = source_code[name_node.start_byte:name_node.end_byte].decode("utf-8")
                             local_vars[var_name] = simple_type
+            elif child.type == "enhanced_for_statement":
+                # for (OrderItem item : collection) — 루프 변수 타입 수집
+                type_node = child.child_by_field_name("type")
+                name_node = child.child_by_field_name("name")
+                if type_node and name_node:
+                    type_str = source_code[type_node.start_byte:type_node.end_byte].decode("utf-8")
+                    var_name = source_code[name_node.start_byte:name_node.end_byte].decode("utf-8")
+                    local_vars[var_name] = self.generic_pattern.sub("", type_str)
+                # body 블록 내부도 재귀 탐색
+                self._scan_local_vars(child, source_code, local_vars, unresolved_vars)
             # 내부 클래스/람다 선언은 일단 진입하지 않음
             elif child.type not in ("class_declaration", "lambda_expression"):
                 self._scan_local_vars(child, source_code, local_vars, unresolved_vars)
