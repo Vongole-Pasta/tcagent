@@ -987,8 +987,13 @@ class JavaParser:
     def _extract_enum_constants(self, class_body_node, source_code: bytes) -> list[ConstantInfo]:
         """
         Enum 상수를 ConstantInfo 리스트로 추출합니다.
-        예) SUCCESS("S2000", "성공") → [ConstantInfo(name="SUCCESS", value="S2000")]
+        생성자 파라미터명과 인자값을 위치 기반으로 매핑합니다.
+        예) SUCCESS("S2000", "성공") + 생성자(String code, String message)
+            → ConstantInfo(name="SUCCESS", values={"code": "S2000", "message": "성공"})
         """
+        # 생성자 파라미터명 추출 (enum_body_declarations 안에 위치)
+        param_names = self._extract_enum_constructor_param_names(class_body_node, source_code)
+
         constants: list[ConstantInfo] = []
         for child in class_body_node.children:
             if child.type == "enum_constant":
@@ -997,16 +1002,46 @@ class JavaParser:
                     continue
                 const_name = source_code[name_node.start_byte:name_node.end_byte].decode("utf-8")
 
-                const_value = const_name
+                # 인자값 추출
+                arg_values = []
                 args_node = child.child_by_field_name("arguments")
                 if args_node:
                     for arg in args_node.children:
+                        if arg.type in ("(", ")", ","):
+                            continue
+                        raw = source_code[arg.start_byte:arg.end_byte].decode("utf-8")
                         if arg.type == "string_literal":
-                            const_value = source_code[arg.start_byte:arg.end_byte].decode("utf-8").strip('"')
-                            break
-                constants.append(ConstantInfo(name=const_name, value=const_value))
+                            raw = raw.strip('"')
+                        arg_values.append(raw)
+
+                # 파라미터명과 인자값을 위치 기반 매핑
+                values: dict[str, str] = {}
+                for i, val in enumerate(arg_values):
+                    key = param_names[i] if i < len(param_names) else f"arg{i}"
+                    values[key] = val
+
+                constants.append(ConstantInfo(name=const_name, values=values))
 
         return constants
+
+    def _extract_enum_constructor_param_names(self, class_body_node, source_code: bytes) -> list[str]:
+        """Enum 생성자의 파라미터명을 순서대로 추출합니다."""
+        # constructor_declaration은 enum_body_declarations 안에 위치
+        for child in class_body_node.children:
+            if child.type == "enum_body_declarations":
+                for decl in child.children:
+                    if decl.type == "constructor_declaration":
+                        params_node = decl.child_by_field_name("parameters")
+                        if not params_node:
+                            continue
+                        names = []
+                        for param in params_node.children:
+                            if param.type == "formal_parameter":
+                                name_node = param.child_by_field_name("name")
+                                if name_node:
+                                    names.append(source_code[name_node.start_byte:name_node.end_byte].decode("utf-8"))
+                        return names
+        return []
 
     # -----------------------------------------------------------------------
     # TypeInfo 생성 관련

@@ -174,22 +174,29 @@ class HappyCaseAgentNodes:
     def _collect_dto_info(self, method_qualname, request_dtos, response_dtos):
         """
         특정 메서드의 파라미터(Request) 및 반환 타입(Response) 중첩 DTO의 필드 구조를 분리하여 수집합니다.
+        Enum TYPE은 FIELD 대신 constants(유효값 목록)로 전달하여 LLM 환각을 방지합니다.
         Cypher 홉(Hop) 수 10은 'TYPE-FIELD-TYPE' 구조를 고려할 때 최대 5단계의 중첩을 의미합니다.
         """
-        # Request DTO 조회
+        # Request DTO 조회 (Enum 제외)
         req_results = self.db_client.execute_query(HappyCaseQueries.RETRIEVER_NODE_GET_REQUEST_DTO_STRUCTURE, {"qualname": method_qualname})
         self._populate_dtos(req_results, request_dtos)
+        # Request Enum constants 조회
+        req_enum_results = self.db_client.execute_query(HappyCaseQueries.RETRIEVER_NODE_GET_REQUEST_ENUM_CONSTANTS, {"qualname": method_qualname})
+        self._populate_enum_constants(req_enum_results, request_dtos)
 
-        # Response DTO 조회
+        # Response DTO 조회 (Enum 제외)
         res_results = self.db_client.execute_query(HappyCaseQueries.RETRIEVER_NODE_GET_RESPONSE_DTO_STRUCTURE, {"qualname": method_qualname})
         self._populate_dtos(res_results, response_dtos)
+        # Response Enum constants 조회
+        res_enum_results = self.db_client.execute_query(HappyCaseQueries.RETRIEVER_NODE_GET_RESPONSE_ENUM_CONSTANTS, {"qualname": method_qualname})
+        self._populate_enum_constants(res_enum_results, response_dtos)
 
     def _populate_dtos(self, results, dtos_context):
         for row in results:
             t_name = row["type_name"]
             if t_name not in dtos_context:
                 dtos_context[t_name] = []
-            
+
             if row["field_name"] and not any(f["name"] == row["field_name"] for f in dtos_context[t_name]):
                 # TypeInfo 객체(dict)인 경우 "given" 키에서 실제 타입 문자열을 꺼냅니다.
                 f_type_obj = row["field_type"]
@@ -198,3 +205,26 @@ class HappyCaseAgentNodes:
                     except: pass
                 f_type = f_type_obj.get("given") if isinstance(f_type_obj, dict) else f_type_obj
                 dtos_context[t_name].append({"name": row["field_name"], "type": f_type})
+
+    def _populate_enum_constants(self, results, dtos_context):
+        """Enum TYPE의 constants를 필드 매핑 포함한 유효값 목록으로 변환하여 dto_context에 추가합니다."""
+        for row in results:
+            t_name = f"{row['type_name']} (enum)"
+            if t_name in dtos_context:
+                continue
+            constants_raw = row["constants"]
+            if isinstance(constants_raw, str):
+                try: constants_raw = json.loads(constants_raw)
+                except: continue
+            # name을 주체로, fields는 괄호 안 참고 정보로 포맷팅
+            # 예: ["SUCCESS (code=\"S2000\", message=\"성공\")", ...]
+            enum_values = []
+            for c in constants_raw:
+                if "name" not in c:
+                    continue
+                if c.get("values"):
+                    detail = ", ".join(f'{k}="{v}"' for k, v in c["values"].items())
+                    enum_values.append(f"{c['name']} ({detail})")
+                else:
+                    enum_values.append(c["name"])
+            dtos_context[t_name] = enum_values

@@ -24,8 +24,8 @@ class ParamInfo(TypedDict):
 
 class ConstantInfo(TypedDict):
     """Enum 상수 정보. TYPE.constants의 원소로 사용됩니다."""
-    name: str               # 상수 이름
-    value: str              # 상수 값
+    name: str                   # 상수 이름 (예: "SUCCESS")
+    values: dict[str, str]      # 생성자 파라미터명 → 인자값 매핑 (예: {"code": "S2000", "message": "성공"})
 
 NODE_SCHEMA = {
     # [FILE] (파일 노드)
