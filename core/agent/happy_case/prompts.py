@@ -28,6 +28,7 @@ GENERATOR_NODE_PROMPT = """
    - **컨텍스트 분석 및 데이터 추출**: `<BUSINESS_LOGIC>` 및 `<DTO_SCHEMA>`를 분석하여 필수 파라미터(`@PathVariable`, `@RequestParam` 등)와 헤더를 식별합니다. 
    - **주의(구조 혼동 방지)**: `<DTO_SCHEMA>` 내의 `request`와 `response` 스키마 구분을 엄격히 준수하세요. 요청 데이터(`input_data`)를 구성할 때는 원칙적으로 **반드시** `request` 하위의 스키마만 참고해야 하며, `response` 스키마 구조를 `input_data` 바디에 포함시키는 오류를 절대 피하십시오. (단, `Pageable`의 `sort` 파라미터 값 지정 등 정렬 조건을 구성해야 하는 경우에는 예외적으로 `response` 스키마의 필드명을 참고하여 작성하세요.)
    - **주의**: `Authorization` 등의 인증 관련 헤더는 제공된 컨텍스트 상에서 명시적으로 요구된다고 명확히 확인할 수 있는 경우에만 포함하세요. 정보가 부족하거나 확신할 수 없는 경우 함부로 유추하여 포함하지 마십시오.
+   - **주의**: `@CookieValue` 애노테이션 등으로 식별된 쿠키 관련 파라미터는 반드시 `Headers` 항목에 포함시키되, `Cookie: [쿠키명]=[값]` 형태로 작성하세요. 여러 개의 쿠키 파라미터가 있다면 `Cookie: [쿠키1]=[값1]; [쿠키2]=[값2]` 형태로 하나의 `Cookie` 헤더 문자열로 묶어서 표기해야 합니다.
    - 식별된 파라미터들과 요청 바디(POST/PUT/PATCH 등일 경우)를 바탕으로, `input_data` 항목을 **반드시** 아래의 텍스트 형식(구조화된 텍스트)으로 작성합니다.
    - Headers 내 Content-Type은 항상 명시합니다 (예: application/json 등).
    - Query Parameter(Request Params) 구성 시, optional(선택적)인 파라미터가 있다면 생략하지 말고 모두 포함하여 작성하세요.
@@ -35,11 +36,13 @@ GENERATOR_NODE_PROMPT = """
 
    작성 형식 (들여쓰기를 유지하세요):
    - Headers 
-     - [헤더명]: [값] , [헤더명]: [값]
+     - [헤더명]: [값]
+     - [헤더명]: [값]
    - Request Params 
      - ?[파라미터명]=[값]&[파라미터명]=[값]
    - Path Variables
-     - [변수명]: [값] , [변수명]: [값]
+     - [변수명]: [값]
+     - [변수명]: [값]
    - Request Body
      {{
        "필드명": "값",
@@ -48,18 +51,21 @@ GENERATOR_NODE_PROMPT = """
 
    예시:
    - Headers 
-     - Content-Type: application/json , X-Custom-Header: value , login: <TOKEN>
+     - Content-Type: application/json
+     - X-Custom-Header: value
+     - Authorization: <TOKEN>
    - Request Params 
      - ?lang=java&type=src
    - Path Variables
-     - noteId: 123 , abd: 456
+     - noteId: 123
+     - abd: 456
    - Request Body
      {{
        "sourceCode": "...",
        ...
      }}
      
-   (주의: 항목이 여러 개인 경우 반드시 쉼표( , )로 구분해 주세요. 특히 Path Variables의 경우 등호(=)나 세미콜론(;)을 사용하지 말고 반드시 `변수명: 값 , 변수명: 값` 형태로 작성하세요. 파라미터가 없거나 바디가 없는 항목일 경우 `None` 으로 표기할 것)
+   (주의: Path Variables의 경우 등호(=)나 세미콜론(;)을 사용하지 말고 반드시 `변수명: 값` 형태로 작성하세요. 파라미터가 없거나 바디가 없는 항목일 경우 `- None` 으로 표기할 것)
 
 3. **expected_result**: 
    - 성공 시 예상되는 응답 데이터를 작성하세요.
