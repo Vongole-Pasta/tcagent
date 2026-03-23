@@ -26,15 +26,23 @@ def process_path_result(results):
             # element_id is the new standard ID in Neo4j 5
             node_id = node.element_id
             if node_id not in nodes:
+                # Determine type based on labels
+                labels = list(node.labels)
+                node_type = "METHOD"
+                if "EXTERNAL_CALL" in labels:
+                    node_type = "EXTERNAL_CALL"
+                elif node.get('endpoint_uri'):
+                    node_type = "ENDPOINT"
+
                 # Basic info
                 node_data = {
                     "id": node_id,
-                    "labels": list(node.labels),
+                    "labels": labels,
                     "name": node.get('name', 'Unknown'),
                     "signature": node.get('signature', ''),
                     "endpoint": node.get('endpoint_uri'),
                     "http_method": node.get('http_method'),
-                    "type": "ENDPOINT" if node.get('endpoint_uri') else "METHOD",
+                    "type": node_type,
                     "className": metadata_map.get(node_id) # Add className
                 }
                 nodes[node_id] = node_data
@@ -69,14 +77,21 @@ def process_single_node(results):
         return {"nodes": [], "edges": []}
         
     node_id = node.element_id
+    labels = list(node.labels)
+    node_type = "METHOD"
+    if "EXTERNAL_CALL" in labels:
+        node_type = "EXTERNAL_CALL"
+    elif node.get('endpoint_uri'):
+        node_type = "ENDPOINT"
+
     node_data = {
         "id": node_id,
-        "labels": list(node.labels),
+        "labels": labels,
         "name": node.get('name', 'Unknown'),
         "signature": node.get('signature', ''),
         "endpoint": node.get('endpoint_uri'),
         "http_method": node.get('http_method'),
-        "type": "ENDPOINT" if node.get('endpoint_uri') else "METHOD",
+        "type": node_type,
         "className": class_name
     }
     
@@ -96,7 +111,7 @@ async def get_upstream_graph(method_id: str, request: Request):
 
     try:
         results = analyzer.connector.execute_query(
-            CypherQueries.GET_UPSTREAM_IMPACT, 
+            CypherQueries.GET_UPSTREAM_IMPACT_FOR_FE, 
             {"method_id": method_id}
         )
         return process_path_result(results)
@@ -114,7 +129,7 @@ async def get_downstream_graph(method_id: str, request: Request):
 
     try:
         results = analyzer.connector.execute_query(
-            CypherQueries.GET_DOWNSTREAM_FLOW, 
+            CypherQueries.GET_DOWNSTREAM_FLOW_FOR_FE, 
             {"method_id": method_id}
         )
         return process_path_result(results)

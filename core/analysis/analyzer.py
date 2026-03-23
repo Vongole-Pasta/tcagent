@@ -3,8 +3,10 @@ import os
 import hashlib
 import uuid
 from graph_db.client import DBClient
-from core.analysis.lang import PARSERS
-from core.analysis.persistence.store import GraphWriter
+from core.analysis.lang import PARSERS, collect_root_patterns
+from core.analysis.store.models import ParsedRegistry, ParsedType, ParsedField, ParsedMethod
+from core.analysis.store.edge_linker import EdgeLinker
+from core.analysis.store.graph_writer import GraphWriter
 from config import Config
 from graph_db.queries import CypherQueries
 
@@ -13,14 +15,18 @@ logger = logging.getLogger(__name__)
 
 class Analyzer:
     """
-    [분석 조정자 (Orchestrator)]
+    [분석 파이프라인 (Orchestrator)]
     전체 파일 분석 프로세스를 관리하고 조정하는 핵심 클래스입니다.
 
     파일의 변경 사항(생성, 수정, 삭제)을 감지하고,
     적절한 파서(Parser)를 호출하여 그래프 DB를 업데이트합니다.
 
-    분석 파이프라인 (analyze 메서드 참조):
-        cleanup → snapshot → find_root → parse → detect_deletions → flush
+    분석 파이프라인 개요:
+        cleanup → snapshot → map rel paths    (전처리)
+        parse → restore → resolve             (파싱)    
+        write → prune → detect deletions      (후처리)
+
+    파이프라인 상세는 analyze() docstring 참조
     """
 
     def __init__(self, connector: DBClient):
@@ -33,53 +39,67 @@ class Analyzer:
 
     def analyze(self, files_data: list[dict], project: str | None = None) -> list[str]:
         """
-        [메인 분석 파이프라인]
+        [분석 실행]
         사용자가 업로드한 파일 목록(files_data)을 받아 전체 분석을 수행합니다.
 
         파이프라인 단계:
-            1. cleanup          — 이전 분석에서 DELETED로 마킹된 유령 노드를 DB에서 영구 삭제
-            2. snapshot         — 현재 DB에 저장된 파일 해시를 조회하여 비교 기준점 확보
-            3. find_root        — 업로드 파일들의 공통 루트 경로 계산 (상대경로 산출용)
-            4. parse            — 각 파일의 변경 상태를 판별하고, 파서로 분석 후 메모리에 축적
-            5. detect_deletions — 업로드 목록에 없는 기존 파일을 DELETED로 마킹
-            6. flush            — 메모리에 축적된 분석 결과를 일괄 DB 기록 + 호출 관계 해석
+            1. cleanup old deletions  — 지난 분석에서 삭제 표시된 노드 청소
+            2. snapshot (prev hash)   — DB에서 이전 스캔파일 해시들을 조회 (변경 비교용)
+            3. map rel-paths          — DB 저장용 상대경로로 변환 - 매핑
+            4. parse changed          — 각 파일을 읽어 변경된 파일만 파싱
+            5. restore registry       — 변경 없는 파일의 노드를 DB에서 읽어 인메모리 인덱스 복원 
+            6. resolve edges          — 복원된 인메모리 인덱스를 사용해 엣지 보강
+            7. write to DB            — DB에 일괄로 저장
+            8. prune methods          — 소스에서 삭제된 메서드를 DB에서 격리
+            9. detect deletions       — 업로드에서 빠진 파일의 메서드를 격리하고 구조 노드를 삭제
 
         Args:
             files_data: [{'path': str, 'content': bytes}, ...] 형태의 파일 목록
             project: 프로젝트 식별자 (기본값: "default")
 
         Returns:
-            업데이트된 파일들의 경로 목록 (Frontend 갱신용)
+            처리된 파일들의 경로 목록 (Frontend 갱신용)
         """
         project = project or "default"
+        registry = ParsedRegistry() # 메모리 저장소
 
         # 1. 이전 DELETED 노드 정리
-        self._cleanup(project)
+        self._clean_old_deleted_nodes(project)
 
         # 2. DB 스냅샷: {상대경로 → 해시} 매핑
-        existing = self._snapshot(project)
+        oldfile_hashes = self._snapshot_old_scan(project)
 
-        # 3. 업로드 파일들의 공통 루트 계산
-        root = self._find_root(files_data)
+        # 3. 소스 루트 마커 기반 상대경로 계산
+        relative_paths = self._map_to_relative_paths(files_data)
 
-        # 4. 파일별 파싱 + 메모리 축적
-        updated, processed = self._parse(files_data, existing, root, project)
+        # 4. 변경 감지 + 변경 파일 파싱 → registry 축적
+        unchanged, changed = self._parse(files_data, oldfile_hashes, relative_paths, project, registry)
 
-        # 5. 삭제된 파일 감지 + DELETED 마킹
-        deleted = self._detect_deletions(existing, processed, project)
+        # 5. 변경 없는 파일의 노드를 DB에서 복원 (EdgeLinker 인덱스용)
+        self._restore_registry(unchanged, project, registry)
 
-        # 6. 결과 일괄 기록
-        if updated or deleted:
-            logger.info("Flushing analysis results to DB...")
-            self.writer.flush()
+        # 6. 호출 관계 해석
+        registry.resolved = EdgeLinker(registry).resolve()
 
-        return updated + deleted
+        # 7. 분석 결과 DB 일괄 저장 (AS-IS status → FILE → 노드 → 엣지)
+        self.writer.write(registry, changed, unchanged, project)
+
+        # 8. 삭제된 메서드 정리 (write 후 실행하여 기존 CALLS 보존)
+        self.writer.prune_removed_methods(
+            [{"file_path": f["path"], "scan_id": f["scan_id"]} for f in changed]
+        )
+
+        # 9. 삭제된 파일 감지 + DELETED 마킹
+        uploaded = set(relative_paths.values())
+        deleted = self._detect_deletions(oldfile_hashes, uploaded, project)
+
+        return list(uploaded) + deleted
 
     # ──────────────────────────────────────────────
     #  Pipeline Stages
     # ──────────────────────────────────────────────
 
-    def _cleanup(self, project: str):
+    def _clean_old_deleted_nodes(self, project: str):
         """
         [1단계: 유령 노드 정리]
         이전 분석 사이클에서 'DELETED'로 마킹된 노드들을 DB에서 영구 삭제합니다.
@@ -94,7 +114,7 @@ class Analyzer:
             {"project": project}
         )
 
-    def _snapshot(self, project: str) -> dict[str, str]:
+    def _snapshot_old_scan(self, project: str) -> dict[str, str]:
         """
         [2단계: DB 스냅샷]
         현재 DB에 저장된 파일 목록과 해시값을 조회합니다.
@@ -109,208 +129,262 @@ class Analyzer:
         )
         return {row['path']: row['hash'] for row in rows}
 
-    def _find_root(self, files_data: list[dict]) -> str:
+    def _map_to_relative_paths(self, files_data: list[dict]) -> dict[str, str]:
         """
-        [3단계: 공통 루트 경로 계산]
-        업로드된 파일들의 경로에서 공통 상위 디렉토리를 찾습니다.
-        이 루트를 기준으로 상대 경로를 계산하여 DB에 저장합니다.
+        [3단계: 상대경로 계산]
+        각 파일의 원본 경로를 DB 저장용 상대경로로 변환합니다.
+
+        소스 루트 패턴(src/main/java/ 등)을 탐지하여:
+          - 패턴 앞: 마지막 세그먼트를 모듈명으로 보존
+          - 패턴 뒤: 패키지/소스 경로를 전체 보존
+          - 결과: {모듈명}/{패키지경로}
+
+        패턴이 없는 파일은 공통 prefix 제거 fallback을 사용합니다.
 
         예시:
-            입력: ['src/main/A.java', 'src/main/B.java', 'src/test/C.java']
-            공통 루트: 'src'
-            상대경로: 'main/A.java', 'main/B.java', 'test/C.java'
+          backend/user-service/src/main/java/com/ex/A.java
+          → user-service/com/ex/A.java
 
-        NOTE: 단일 모듈에서 패키지 구조가 과도하게 잘릴 수 있는 문제가 있습니다.
-              추후 uploads.py로 이동하거나 로직 개선이 필요합니다.
+        Returns:
+            {원본경로: 상대경로} 매핑
         """
-        if not files_data:
-            return ""
+        patterns = collect_root_patterns()
+        rel_path_map = {}
+        unresolved = []
 
-        paths = [f['path'] for f in files_data]
-
-        # 파일이 1개면 해당 파일의 디렉토리가 루트
-        if len(paths) == 1:
-            return os.path.dirname(paths[0])
-
-        # 여러 파일이면 공통 경로 세그먼트를 앞에서부터 비교
-        common_parts = []
-        first_parts = paths[0].split('/')
-        for i, part in enumerate(first_parts):
-            if all(
-                i < len(p.split('/')) and p.split('/')[i] == part
-                for p in paths
-            ):
-                common_parts.append(part)
+        for file_data in files_data:
+            original = file_data['path']
+            relative = self._resolve_by_pattern(original, patterns)
+            if relative is not None:
+                rel_path_map[original] = relative
             else:
-                break
+                unresolved.append(original)
 
-        return '/'.join(common_parts) if common_parts else ''
+        # 패턴 미발견 파일: 공통 prefix 제거 fallback
+        if unresolved:
+            fallback = self._common_prefix_fallback(unresolved)
+            rel_path_map.update(fallback)
 
-    def _parse(self, files_data: list[dict], existing: dict[str, str], root: str, project: str) -> tuple[list[str], set[str]]:
+        return rel_path_map
+
+    def _resolve_by_pattern(self, path: str, patterns: list[str]) -> str | None:
         """
-        [4단계: 파일별 파싱 + 메모리 축적]
-        업로드된 파일들을 순회하며 각각의 변경 상태를 판별하고,
-        언어별 파서로 분석한 결과를 GraphWriter 메모리에 축적합니다.
+        소스 루트 패턴으로 상대경로를 계산합니다.
 
-        Memory-First 설계:
-            호출 관계(CALLS) 해석은 모든 타입/메서드가 메모리에 있어야 정확합니다.
-            따라서 AS-IS(변경 없음) 파일도 파싱하여 메모리 인덱스를 완성합니다.
-            DB 기록은 flush()에서 일괄 수행됩니다.
+        패턴 기준으로 경로를 분할:
+          - 패턴 앞 마지막 세그먼트 = 모듈명 (없으면 생략)
+          - 패턴 뒤 = 패키지/소스 경로
+
+        Args:
+            path: 원본 파일 경로
+            patterns: 소스 루트 패턴 목록 (우선순위 순)
+
+        Returns:
+            상대경로 (패턴 발견 시), None (패턴 미발견 시)
+        """
+        for marker in patterns:
+            idx = path.find(marker)
+            if idx < 0:
+                continue
+
+            # 마커 뒤 = 패키지 경로
+            package_path = path[idx + len(marker):]
+
+            # 마커 앞에서 마지막 세그먼트 = 모듈명
+            prefix = path[:idx].rstrip('/')
+            module_name = prefix.rsplit('/', 1)[-1] if prefix else ""
+
+            if module_name:
+                return f"{module_name}/{package_path}"
+            return package_path
+
+        return None
+
+    def _common_prefix_fallback(self, paths: list[str]) -> dict[str, str]:
+        """
+        소스 루트 마커가 없는 파일들의 fallback 상대경로 계산.
+        공통 경로 세그먼트를 앞에서부터 비교하여 제거합니다.
+        """
+        if len(paths) == 1:
+            root = os.path.dirname(paths[0])
+        else:
+            parts_list = [p.split('/') for p in paths]
+            common_parts = []
+            for i, part in enumerate(parts_list[0]):
+                if all(
+                    i < len(parts) and parts[i] == part
+                    for parts in parts_list
+                ):
+                    common_parts.append(part)
+                else:
+                    break
+            root = '/'.join(common_parts) if common_parts else ''
+
+        return {
+            p: os.path.relpath(p, root) if root else p
+            for p in paths
+        }
+
+    def _parse(self, files_data: list[dict], hash_map: dict[str, str], rel_path_map: dict[str, str], project: str, registry: ParsedRegistry) -> tuple[list[str], list[dict]]:
+        """
+        [4단계: 변경 감지 + 변경 파일 파싱]
+        업로드된 파일들을 순회하며 각각의 변경 상태를 판별하고,
+        NEW/MODIFIED 파일만 언어별 파서로 분석하여 ParsedRegistry에 축적합니다.
+        AS-IS 파일은 경로만 수집합니다 (DB 복원은 analyze()에서 별도 수행).
+
+        DB 접근 없음 — 순수 파싱 + 분류만 수행합니다.
 
         Args:
             files_data: 업로드 파일 목록
-            existing: DB 스냅샷 (변경 감지 기준)
-            root: 공통 루트 경로
+            hash_map: DB 스냅샷 (변경 감지 기준)
+            rel_path_map: {원본경로: 상대경로} 매핑 (_map_to_relative_paths 결과)
             project: 프로젝트 식별자
+            registry: 파싱 결과를 축적할 인메모리 등록소
 
         Returns:
-            (updated_files, processed_paths) 튜플
-            - updated_files: 처리된 파일 경로 목록
-            - processed_paths: 처리된 상대경로 집합 (삭제 감지용)
+            (unchanged, changed) 튜플
+            - unchanged: 변경 없는 파일 경로 목록 (DB 복원 대상)
+            - changed: FILE 노드 메타데이터 + scan_id (upsert/prune 겸용)
         """
-        updated_files = []
-        processed_paths = set()
+        unchanged = []
+        changed = []
 
-        # 파일별 처리
         for file_data in files_data:
             try:
-                result = self._process_file(file_data, existing, root, project)
-                if result:
-                    path, _ = result
-                    updated_files.append(path)
-                    processed_paths.add(path)
+                path, file_row = self._process_file(file_data, hash_map, rel_path_map, project, registry)
+
+                if file_row is not None:                             # NEW/MODIFIED
+                    changed.append(file_row)
+                else:                                                # AS-IS
+                    unchanged.append(path)
             except Exception as e:
                 logger.error(f"Failed to process {file_data['path']}: {e}")
 
-        return updated_files, processed_paths
+        return unchanged, changed
 
-    def _process_file(self, file_data: dict, existing: dict[str, str], root: str, project: str) -> tuple[str, str] | None:
+    def _process_file(self, file_data: dict, hash_map: dict[str, str], rel_path_map: dict[str, str], project: str, registry: ParsedRegistry) -> tuple[str, dict | None]:
         """
-        [단일 파일 처리]
+        [단일 파일 처리 — DB 접근 없음]
         하나의 파일에 대해 다음을 수행합니다:
             1. SHA-256 해시 계산 → 변경 상태 판별 (NEW / MODIFIED / AS-IS)
-            2. FILE 노드 MERGE (DB에 파일 메타데이터 기록)
-            3. 언어 파서로 소스 코드 파싱 → 결과를 writer에 축적
-            4. prune: 이번 스캔에서 발견되지 않은 메서드를 DELETED 처리
+            2. AS-IS → 파싱 건너뛰기 (DB 복원은 _restore_registry()에서 일괄 처리)
+            3. NEW/MODIFIED → FILE 메타데이터 구성 + 언어 파서 호출 → registry에 축적
+
+        DB 기록은 analyze()에서 배치로 일괄 수행됩니다.
 
         Args:
             file_data: {'path': str, 'content': bytes}
-            existing: DB 스냅샷
-            root: 공통 루트 경로
+            hash_map: DB 스냅샷
+            rel_path_map: {원본경로: 상대경로} 매핑
             project: 프로젝트 식별자
+            registry: 파싱 결과를 축적할 인메모리 등록소
 
         Returns:
-            (relative_path, status) 또는 None (처리 실패 시)
+            (relative_path, file_row) 튜플
+            - AS-IS: file_row=None (파싱 불필요)
+            - NEW/MODIFIED: file_row=FILE 메타데이터 + scan_id
         """
         file_path = file_data['path']
         content = file_data['content']
 
         # 경로 및 해시 계산
         file_hash = hashlib.sha256(content).hexdigest()
-        relative_path = os.path.relpath(file_path, root) if root else file_path
+        relative_path = rel_path_map[file_path]
         file_name = os.path.basename(file_path)
 
-        # 언어 판별
-        ext = os.path.splitext(file_name)[1]
-        language = Config.ALLOWED_EXTENSIONS.get(ext, "UNKNOWN")
-
         # 변경 상태 판별: DB 해시와 비교
-        if relative_path not in existing:
+        if relative_path not in hash_map:
             status = "NEW"
-        elif existing[relative_path] != file_hash:
+        elif hash_map[relative_path] != file_hash:
             status = "MODIFIED"
         else:
             status = "AS-IS"
 
         logger.info(f"Processing {relative_path}: {status}")
 
-        # FILE 노드 upsert
-        query = """
-        MERGE (f:FILE {path: $path, project: $project})
-        SET f.name = $name,
-        f.hash = $hash,
-        f.language = $language
-        """
-        self.connector.execute_query(query, {
-            "path": relative_path,
-            "name": file_name,
-            "hash": file_hash,
-            "language": language,
-            "project": project
-        })
+        # AS-IS: 파싱 건너뛰기 (DB 복원으로 대체)
+        if status == "AS-IS":
+            return relative_path, None
 
-        # 파싱 + 메모리 축적
-        # AS-IS도 파싱하는 이유: Memory-First에서는 flush 후 메모리가 초기화되므로,
-        # 매 분석 사이클마다 전체 타입/메서드 인덱스를 다시 구축해야 합니다.
+        # NEW/MODIFIED: 언어 판별 + 파싱 + 메모리 축적
+        ext = os.path.splitext(file_name)[1]
+        language = Config.ALLOWED_EXTENSIONS.get(ext, "UNKNOWN")
+
+        # 파싱 + 메모리 축적 (dirty 자동 추적)
         scan_id = str(uuid.uuid4())
         lang_parser = PARSERS.get(language)
         if lang_parser:
             result = lang_parser.parse(content, relative_path, scan_id)
-            self.writer.collect(result)
+            registry.collect(result)
 
-        # 이번 스캔에서 발견되지 않은 메서드 정리
-        self._prune(relative_path, scan_id)
+        # FILE 노드 메타데이터 (배치용, scan_id 포함 — prune에서도 사용)
+        file_row = {
+            "path": relative_path,
+            "name": file_name,
+            "hash": file_hash,
+            "language": language,
+            "project": project,
+            "scan_id": scan_id,
+        }
 
-        return relative_path, status
+        return relative_path, file_row
 
-    def _detect_deletions(self, existing: dict[str, str], processed: set[str], project: str) -> list[str]:
+    def _restore_registry(self, unchanged: list[str], project: str, registry: ParsedRegistry):
         """
-        [5단계: 삭제 파일 감지]
-        DB 스냅샷(existing)에는 있지만 이번 업로드(processed)에는 없는 파일을
-        찾아 DELETED로 마킹하고, 다른 노드와의 관계를 끊어 그래프에서 격리합니다.
+        [5단계: registry 복원 — 증분 분석 최적화]
+        변경 없는 파일의 TYPE/FIELD/METHOD 노드를 DB에서 복원하여
+        registry에 추가합니다 (dirty 미포함 → write 대상 아님).
 
-        즉시 삭제하지 않는 이유:
-        → 다음 사이클의 _cleanup()에서 영구 삭제됩니다. (1사이클 유예)
+        목적:
+            EdgeLinker가 호출 관계를 해석할 때, 변경 없는 타입/메서드도
+            인메모리 인덱스에 포함되어야 정확한 해석이 가능합니다.
+            tree-sitter 파싱 대신 DB에서 이전 사이클의 결과를 재활용합니다.
         """
-        deleted_paths = set(existing.keys()) - processed
-        deleted_files = []
+        if not unchanged:
+            return
 
-        for path in deleted_paths:
-            logger.info(f"Marking {path} as DELETED")
-            self.connector.execute_query(
-                CypherQueries.MARK_FILE_DELETED_AND_ISOLATE,
-                {"path": path, "project": project}
-            )
-            deleted_files.append(path)
+        params = {"paths": unchanged, "project": project}
 
-        return deleted_files
+        for row in self.connector.execute_query(CypherQueries.LOAD_ASIS_TYPES, params):
+            registry.types[row["qualname"]] = ParsedType.from_db_record(row)
 
-    # ──────────────────────────────────────────────
-    #  Internal Helpers
-    # ──────────────────────────────────────────────
+        for row in self.connector.execute_query(CypherQueries.LOAD_ASIS_FIELDS, params):
+            registry.fields[row["qualname"]] = ParsedField.from_db_record(row)
 
-    def _prune(self, file_path: str, scan_id: str):
+        for row in self.connector.execute_query(CypherQueries.LOAD_ASIS_METHODS, params):
+            registry.methods[row["qualname"]] = ParsedMethod.from_db_record(row)
+
+        logger.info(f"Restored {len(unchanged)} unchanged files from DB "
+                     f"({len(registry.types)} types, {len(registry.fields)} fields, "
+                     f"{len(registry.methods)} methods total)")
+
+    def _detect_deletions(self, hash_map: dict[str, str], uploaded: set[str], project: str) -> list[str]:
         """
-        [메서드 가지치기 (Pruning)]
-        이번 스캔(scan_id)에서 발견되지 않은 메서드는
-        소스 코드에서 삭제된 것으로 간주합니다.
+        [9단계: 삭제 파일 감지 — 2-Phase Mixed Strategy]
+        DB 스냅샷(hash_map)에는 있지만 이번 업로드(uploaded)에는 없는 파일을 감지합니다.
 
-        해당 메서드를 'DELETED'로 마킹하고,
-        다른 메서드와의 호출 관계(CALLS)를 끊어 분석 결과 오염을 방지합니다.
+        Phase 1: METHOD를 DELETED로 마킹하고 CALLS를 끊어 격리 (이력 보존)
+        Phase 2: FILE, TYPE, FIELD 등 구조적 노드를 DB에서 영구 삭제
 
-        활용 시나리오:
-            - 파일 내 메서드가 삭제/리네임된 경우
-            - 증분 분석 시 이전 사이클의 잔여 메서드 정리
+        METHOD를 즉시 삭제하지 않는 이유:
+        → 파일이 삭제되어도 메서드의 존재 이력이나 ID 기반 조회가 가능하도록 보존합니다.
+          다음 사이클의 _clean_old_deleted_nodes()에서 영구 삭제됩니다. (1사이클 유예)
         """
-        query = """
-        MATCH (f:FILE {path: $file_path})
-        MATCH (f)-[:CONTAINS*1..3]->(m:METHOD)
+        deleted_paths = set(hash_map.keys()) - uploaded
+        if not deleted_paths:
+            return []
 
-        WHERE m.last_scan_id <> $scan_id
+        batch = [{"path": p, "project": project} for p in deleted_paths]
+        logger.info(f"Marking {len(batch)} file(s) as DELETED")
 
-        // Mark as DELETED
-        SET m.status = 'DELETED'
+        # Phase 1: METHOD 격리 (DELETED 마킹 + CALLS 끊기)
+        self.connector.execute_query(
+            CypherQueries.BATCH_ISOLATE_DELETED_FILE_METHODS, {"batch": batch}
+        )
 
-        WITH m
-        // [격리] 다른 메서드와의 호출 관계 제거 (분석 방해 방지)
-        OPTIONAL MATCH (m)-[r:CALLS]-()
-        DELETE r
-        """
-        try:
-            self.connector.execute_query(
-                query,
-                {"file_path": file_path, "scan_id": scan_id}
-            )
-            logger.info(f"Pruned stale methods for {file_path} (scan: {scan_id[:8]})")
-        except Exception as e:
-            logger.error(f"Pruning error ({file_path}): {e}")
+        # Phase 2: FILE/TYPE/FIELD 구조적 노드 영구 삭제
+        self.connector.execute_query(
+            CypherQueries.BATCH_DELETE_FILE_STRUCTURES, {"batch": batch}
+        )
+
+        return list(deleted_paths)

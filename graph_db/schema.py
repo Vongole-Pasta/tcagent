@@ -24,8 +24,8 @@ class ParamInfo(TypedDict):
 
 class ConstantInfo(TypedDict):
     """Enum 상수 정보. TYPE.constants의 원소로 사용됩니다."""
-    name: str               # 상수 이름
-    value: str              # 상수 값
+    name: str                   # 상수 이름 (예: "SUCCESS")
+    values: dict[str, str]      # 생성자 파라미터명 → 인자값 매핑 (예: {"code": "S2000", "message": "성공"})
 
 NODE_SCHEMA = {
     # [FILE] (파일 노드)
@@ -45,7 +45,8 @@ NODE_SCHEMA = {
         "qualname":     str,                # 고유 식별자: com.example.service.UserService
         "name":         str,                # 단순이름: UserService
         "kind":         str,                # 타입 종류: [CLASS, INTERFACE, ENUM, RECORD 등]
-        "constants":    list[ConstantInfo], # 상수값 리스트 (JSON 배열) (ENUM인 경우)    
+        "constants":    list[ConstantInfo], # 상수값 리스트 (JSON 배열) (ENUM인 경우)
+        "supertypes":   list[str],          # 상위 타입 qualname 목록 (extends + implements 통합)
     },
     
     # [FIELD] (필드 노드): 클래스/객체의 멤버 변수, Enum 상수,
@@ -67,7 +68,7 @@ NODE_SCHEMA = {
         "params":       list[ParamInfo],# 파라미터 정보(JSON 배열)
         "return_type":  TypeInfo,       # 리턴타입 정보(JSON)
         "endpoint_uri": str,            # API 엔드포인트 URL (Controller인 경우)
-        "http_method":  str,            # HTTP 메서드: [GET, POST, PUT, DELETE, PATCH, '']
+        "http_method":  str,            # HTTP 메서드: [GET, POST, PUT, DELETE, PATCH, ''] — 복수 메서드는 쉼표 구분 (예: "GET,POST")
         "source":       str,            # 함수 스코프 소스 코드 본문
         "last_scan_id": str,            # 마지막 분석 스캔 ID
         "status":       str             # 상태 변경: [NEW, MODIFIED, AS-IS, DELETED]

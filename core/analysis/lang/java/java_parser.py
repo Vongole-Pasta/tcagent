@@ -1,7 +1,7 @@
 """
 순수 Java AST 파싱 모듈.
 tree-sitter를 사용하여 Java 소스 코드에서 타입, 메서드, 필드, 호출 관계를 추출합니다.
-DB 의존성 없음 — 파싱 결과는 persistence/models.py의 dataclass로 반환됩니다.
+DB 의존성 없음 — 파싱 결과는 store/models.py의 dataclass로 반환됩니다.
 """
 import hashlib
 import logging
@@ -9,7 +9,7 @@ import re
 
 from tree_sitter_language_pack import get_parser
 
-from core.analysis.persistence.models import (
+from core.analysis.store.models import (
     TypeInfo, ParamInfo, ConstantInfo,
     ParsedType, ParsedField, ParsedMethod, ParsedFileResult,
     ParsedCallEdge, ParsedParameterEdge, ParsedReturnEdge,
@@ -35,6 +35,15 @@ class JavaParser:
     Tree-sitter 파싱 트리를 순회하며 구조와 호출 관계를 추출합니다.
     Side effect 없음 — 결과는 ParsedFileResult로 반환됩니다.
     """
+
+    # 소스 루트 탐지 패턴 (우선순위 순)
+    # 패턴 앞의 마지막 세그먼트 = 모듈명, 패턴 뒤 = 패키지/소스 경로
+    # 예: backend/user-service/src/main/java/com/ex/A.java
+    #     → 모듈명: user-service, 패키지 경로: com/ex/A.java
+    ROOT_PATTERNS: list[str] = [
+        "src/main/java/",
+        "src/",
+    ]
 
     _ts_parser = get_parser("java")
 
@@ -63,6 +72,13 @@ class JavaParser:
         root_node = tree.root_node
 
         package_name = self._get_package_name(root_node, source_code)
+        imports, wildcard_imports = self._extract_imports(root_node, source_code)
+
+        # 파일 레벨 컨텍스트 저장 (EdgeLinker가 타입 해석 시 참조)
+        result.package_name = package_name
+        result.imports = imports
+        result.wildcard_imports = wildcard_imports
+
         self._traverse_types(root_node, source_code, file_path, package_name, result, scan_id=scan_id)
 
         return result
@@ -78,6 +94,49 @@ class JavaParser:
                     if grandchild.type in ["scoped_identifier", "identifier"]:
                         return source_code[grandchild.start_byte:grandchild.end_byte].decode("utf-8")
         return ""
+
+    # -----------------------------------------------------------------------
+    # import 추출
+    # -----------------------------------------------------------------------
+    def _extract_imports(self, root_node, source_code: bytes) -> tuple[list[str], list[str]]:
+        """
+        import 선언을 추출합니다.
+
+        Returns:
+            (imports, wildcard_imports) 튜플
+            - imports: 정규 import 목록 (예: ["com.example.model.User"])
+            - wildcard_imports: 와일드카드 import의 패키지명 (예: ["com.example.util"])
+                → "com.example.util.*" 에서 ".*" 제거한 패키지명
+        """
+        imports = []
+        wildcard_imports = []
+
+        for child in root_node.children:
+            if child.type != "import_declaration":
+                continue
+
+            # static import는 메서드 import이므로 스킵
+            has_static = any(c.type == "static" for c in child.children)
+            if has_static:
+                continue
+
+            # asterisk(*) 존재 여부로 와일드카드 판별
+            has_asterisk = any(
+                c.type == "asterisk" or source_code[c.start_byte:c.end_byte] == b"*"
+                for c in child.children
+            )
+
+            # scoped_identifier 또는 identifier에서 패키지/클래스명 추출
+            for gc in child.children:
+                if gc.type in ["scoped_identifier", "identifier"]:
+                    import_path = source_code[gc.start_byte:gc.end_byte].decode("utf-8")
+                    if has_asterisk:
+                        wildcard_imports.append(import_path)
+                    else:
+                        imports.append(import_path)
+                    break
+
+        return imports, wildcard_imports
 
     # -----------------------------------------------------------------------
     # 타입 처리
@@ -121,6 +180,9 @@ class JavaParser:
             if body_for_enum:
                 constants = self._extract_enum_constants(body_for_enum, source_code)
 
+        # TYPE.supertypes 추출 (extends + implements 통합)
+        supertypes = self._extract_supertypes(node, source_code)
+
         # ParsedType으로 result.types에 추가
         result.types.append(ParsedType(
             qualname=qualname,
@@ -128,6 +190,7 @@ class JavaParser:
             kind=kind,
             file_path=file_path,
             constants=constants,
+            supertypes=supertypes,
         ))
 
         # 클래스 body 부분 탐색
@@ -156,11 +219,24 @@ class JavaParser:
                                 result, qualname, scan_id)
 
     # -----------------------------------------------------------------------
+    # 바디 멤버 순회 유틸리티
+    # -----------------------------------------------------------------------
+    def _iter_body_members(self, body_node):
+        """클래스/enum 바디의 멤버 노드를 순회합니다.
+        enum의 경우 필드/메서드/생성자가 enum_body_declarations 안에 있으므로,
+        해당 노드 내부까지 한 레벨 더 탐색합니다."""
+        for child in body_node.children:
+            if child.type == "enum_body_declarations":
+                yield from child.children
+            else:
+                yield child
+
+    # -----------------------------------------------------------------------
     # 필드 처리
     # -----------------------------------------------------------------------
     def _process_field(self, class_body_node, source_code: bytes, type_qualname: str, result: ParsedFileResult):
         """클래스 바디에서 field_declaration 노드를 찾아 ParsedField로 수집합니다."""
-        for child in class_body_node.children:
+        for child in self._iter_body_members(class_body_node):
             if child.type == "field_declaration":
                 # 타입 추출
                 type_node = child.child_by_field_name("type")
@@ -215,11 +291,14 @@ class JavaParser:
                 if name_node and type_node:
                     field_name = source_code[name_node.start_byte:name_node.end_byte].decode("utf-8")
                     field_type_str = source_code[type_node.start_byte:type_node.end_byte].decode("utf-8")
+                    # Record 파라미터의 어노테이션을 constraint로 추출 (예: @NotBlank @Email)
+                    constraint = self._extract_annotations(param, source_code)
                     result.fields.append(ParsedField(
                         qualname=f"{type_qualname}.{field_name}",
                         type_qualname=type_qualname,
                         name=field_name,
                         field_type=self._build_typeinfo(field_type_str),
+                        constraint=constraint,
                     ))
 
     # 애노테이션 처리 (FIELD.constraint, METHOD.params.annotation 등)
@@ -229,6 +308,12 @@ class JavaParser:
         (예: "@NotBlank(message="....")", "@PathVariable(value="xxx")" 등)
         """
         modifiers_node = node.child_by_field_name("modifiers")
+        # formal_parameter 등 일부 노드는 modifiers가 named field가 아니므로 children 순회 fallback
+        if not modifiers_node:
+            for child in node.children:
+                if child.type == "modifiers":
+                    modifiers_node = child
+                    break
         if not modifiers_node:
             return ""
 
@@ -239,14 +324,52 @@ class JavaParser:
                     source_code[child.start_byte:child.end_byte].decode("utf-8")
                 )
 
-        return ", ".join(annotations) if annotations else ""
+        return " ".join(annotations) if annotations else ""
+
+    # 상위 타입 추출 (extends + implements → supertypes 통합)
+    def _extract_supertypes(self, node, source_code: bytes) -> list[str]:
+        """
+        클래스/인터페이스의 상위 타입(extends + implements)을 추출합니다.
+        Java의 extends(단일/다중) + implements를 합쳐 supertypes 리스트로 반환합니다.
+
+        Returns:
+            상위 타입 이름 목록 (제네릭 제거된 단순 이름)
+        """
+        supertypes = []
+
+        # extends 추출 (class → 단일 상속, interface → 다중 extends)
+        superclass_node = node.child_by_field_name("superclass")
+        if superclass_node:
+            self._collect_type_names(superclass_node, source_code, supertypes)
+
+        # implements 추출
+        interfaces_node = node.child_by_field_name("interfaces")
+        if interfaces_node:
+            self._collect_type_names(interfaces_node, source_code, supertypes)
+
+        # 인터페이스의 extends (다른 인터페이스를 extends하는 경우)
+        if node.type == "interface_declaration":
+            extends_node = node.child_by_field_name("extends_interfaces")
+            if extends_node:
+                self._collect_type_names(extends_node, source_code, supertypes)
+
+        return supertypes
+
+    def _collect_type_names(self, node, source_code: bytes, out: list[str]):
+        """AST 노드에서 타입 이름들을 추출하여 out 리스트에 추가합니다."""
+        for child in node.children:
+            if child.type in ["type_identifier", "scoped_type_identifier", "generic_type"]:
+                raw = source_code[child.start_byte:child.end_byte].decode("utf-8")
+                out.append(self.generic_pattern.sub("", raw))
+            elif child.type == "type_list":
+                self._collect_type_names(child, source_code, out)
 
     # -----------------------------------------------------------------------
     # 메서드 처리
     # -----------------------------------------------------------------------
     def _process_method(self, class_body_node, source_code: bytes, class_qualname: str, result: ParsedFileResult, scan_id: str | None, base_uri: str):
         """클래스 바디에서 method_declaration/constructor_declaration을 찾아 처리합니다."""
-        for child in class_body_node.children:
+        for child in self._iter_body_members(class_body_node):
             if child.type in ["method_declaration", "constructor_declaration"]:
                 self._process_each_method(child, source_code, class_qualname, result, scan_id, base_uri)
 
@@ -286,6 +409,9 @@ class JavaParser:
         # METHOD.qualname 조립 (패키지명.클래스명.함수이름(매개변수 타입, ..))
         qualname = f"{class_qualname}.{method_name}({','.join(param_types)})"
 
+        # METHOD.local_vars 추출 (로컬 변수 타입 맵 — EdgeLinker가 호출 해석 시 참조)
+        local_vars, unresolved_vars = self._extract_local_vars(method_node, source_code)
+
         # ParsedMethod로 result.methods에 추가
         result.methods.append(ParsedMethod(
             qualname=qualname,
@@ -299,12 +425,118 @@ class JavaParser:
             scan_id=scan_id,
             endpoint_uri=endpoint_uri,
             http_method=http_method,
+            local_vars=local_vars,
+            unresolved_vars=unresolved_vars,
         ))
 
         # --- 엣지 정보 수집 ---
         self._collect_call_edges(method_node, source_code, qualname, result)
         self._collect_parameter_edges(params, qualname, result)
         self._collect_return_edge(return_type, qualname, result)
+
+    # -----------------------------------------------------------------------
+    # 로컬 변수 타입 맵 추출
+    # -----------------------------------------------------------------------
+
+    def _extract_local_vars(
+        self, method_node, source_code: bytes,
+    ) -> tuple[dict[str, str], dict[str, tuple[str, str]]]:
+        """
+        메서드 바디의 local_variable_declaration에서 로컬 변수 타입 정보를 추출합니다.
+
+        Returns:
+            (local_vars, unresolved_vars) 튜플
+            - local_vars: 타입이 확정된 변수 {변수명 → 타입명}
+            - unresolved_vars: 메서드 리턴타입 추론 필요 {변수명 → (메서드명, 객체명)}
+        """
+        body_node = method_node.child_by_field_name("body")
+        if not body_node:
+            return {}, {}
+
+        local_vars: dict[str, str] = {}
+        unresolved_vars: dict[str, tuple[str, str]] = {}
+        self._scan_local_vars(body_node, source_code, local_vars, unresolved_vars)
+        return local_vars, unresolved_vars
+
+    def _scan_local_vars(
+        self, node, source_code: bytes,
+        local_vars: dict[str, str],
+        unresolved_vars: dict[str, tuple[str, str]],
+    ):
+        """AST를 재귀 순회하며 지역 변수 선언을 수집합니다."""
+        for child in node.children:
+            if child.type == "local_variable_declaration":
+                type_node = child.child_by_field_name("type")
+                if not type_node:
+                    continue
+                type_str = source_code[type_node.start_byte:type_node.end_byte].decode("utf-8")
+                # var 키워드 → 우변 패턴에 따라 타입 추론 시도
+                if type_str == "var":
+                    self._infer_var_types(child, source_code, local_vars, unresolved_vars)
+                    continue
+                # 제네릭 제거한 단순 타입명 (예: List<Member> → List)
+                simple_type = self.generic_pattern.sub("", type_str)
+                for decl in child.children:
+                    if decl.type == "variable_declarator":
+                        name_node = decl.child_by_field_name("name")
+                        if name_node:
+                            var_name = source_code[name_node.start_byte:name_node.end_byte].decode("utf-8")
+                            local_vars[var_name] = simple_type
+            elif child.type == "enhanced_for_statement":
+                # for (OrderItem item : collection) — 루프 변수 타입 수집
+                type_node = child.child_by_field_name("type")
+                name_node = child.child_by_field_name("name")
+                if type_node and name_node:
+                    type_str = source_code[type_node.start_byte:type_node.end_byte].decode("utf-8")
+                    var_name = source_code[name_node.start_byte:name_node.end_byte].decode("utf-8")
+                    local_vars[var_name] = self.generic_pattern.sub("", type_str)
+                # body 블록 내부도 재귀 탐색
+                self._scan_local_vars(child, source_code, local_vars, unresolved_vars)
+            # 내부 클래스/람다 선언은 일단 진입하지 않음
+            elif child.type not in ("class_declaration", "lambda_expression"):
+                self._scan_local_vars(child, source_code, local_vars, unresolved_vars)
+
+    def _infer_var_types(
+        self, decl_node, source_code: bytes,
+        local_vars: dict[str, str],
+        unresolved_vars: dict[str, tuple[str, str]],
+    ):
+        """
+        var 타입으로 된 지역변수의 타입을 추론합니다.
+        1. 가능한 케이스: 
+        인스턴스 구문인 경우 (var a = new Type();) → local_vars에 저장
+        2. 추가작업이 필요한 케이스:
+        함수호출인 경우 (var a = obj.foo();) → unresolved_vars에 저장 
+        (EdgeLinker가 함수 호출의 리턴 타입을 가지고 해석)
+        """
+        for decl in decl_node.children:
+            if decl.type != "variable_declarator":
+                continue
+            name_node = decl.child_by_field_name("name")
+            value_node = decl.child_by_field_name("value")
+            if not name_node or not value_node:
+                continue
+            var_name = source_code[name_node.start_byte:name_node.end_byte].decode("utf-8")
+
+            if value_node.type == "object_creation_expression":
+                # new Type<...>() → 타입 즉시 확정
+                creation_type = value_node.child_by_field_name("type")
+                if not creation_type:
+                    continue
+                type_str = source_code[creation_type.start_byte:creation_type.end_byte].decode("utf-8")
+                local_vars[var_name] = self.generic_pattern.sub("", type_str)
+
+            elif value_node.type == "method_invocation":
+                # obj.method() / method() → EdgeLinker에서 리턴타입 해석 필요
+                method_name_node = value_node.child_by_field_name("name")
+                obj_node = value_node.child_by_field_name("object")
+                if not method_name_node:
+                    continue
+                method_name = source_code[method_name_node.start_byte:method_name_node.end_byte].decode("utf-8")
+                obj_name = ""
+                if obj_node and obj_node.type != "method_invocation":
+                    obj_name = source_code[obj_node.start_byte:obj_node.end_byte].decode("utf-8")
+                unresolved_vars[var_name] = (method_name, obj_name)
 
     # -----------------------------------------------------------------------
     # 엣지 수집
@@ -317,13 +549,17 @@ class JavaParser:
         body_node = method_node.child_by_field_name("body")
         if not body_node:
             return
-        calls: set[tuple[str, str]] = set()
+        calls: list[tuple[str, str, int, list[str], list[str], str]] = []
         self._extract_method_calls(body_node, source_code, calls)
-        for target_name, obj_name in calls:
+        for target_name, obj_name, arg_count, arg_hints, recv_chain, recv_object in calls:
             result.calls.append(ParsedCallEdge(
                 caller_qualname=qualname,
                 target_method_name=target_name,
                 object_name=obj_name,
+                arg_count=arg_count,
+                arg_hints=arg_hints,
+                receiver_chain=recv_chain,
+                receiver_object=recv_object,
             ))
 
     def _collect_parameter_edges(
@@ -352,17 +588,26 @@ class JavaParser:
     # CALLS 엣지 추출 (내부)
     # -----------------------------------------------------------------------
 
-    def _extract_method_calls(self, node, source_code: bytes, calls: set):
-        """AST를 재귀 순회하며 메서드 호출(method_invocation)을 수집합니다."""
+    def _extract_method_calls(self, node, source_code: bytes, calls: list):
+        """AST를 재귀 순회하며 메서드 호출(method_invocation)과 메서드 참조(method_reference)를 수집합니다."""
         for child in node.children:
             if child.type == "method_invocation":
                 self._process_invocation(child, source_code, calls)
+            elif child.type == "method_reference": # :: 로 참조되는 메서드 감지
+                self._process_method_reference(child, source_code, calls)
             # 내부 클래스/메서드 선언은 별도 스코프이므로 진입하지 않음
             if child.type not in ("class_declaration", "interface_declaration", "method_declaration"):
                 self._extract_method_calls(child, source_code, calls)
 
-    def _process_invocation(self, invocation_node, source_code: bytes, calls: set):
-        """하나의 method_invocation 노드에서 호출 정보를 추출합니다."""
+    def _process_invocation(self, invocation_node, source_code: bytes, calls: list):
+        """
+        하나의 method_invocation 노드에서 호출 정보를 추출합니다.
+        체이닝은 AST를 재귀적으로 언와인딩하여 무한 뎁스까지 추적합니다.
+
+        예: a.getUser().getAddress().getCity()
+          AST: method_invocation(method_invocation(method_invocation(a, getUser), getAddress), getCity)
+          → receiver_chain=["getUser", "getAddress"], receiver_object="a", target="getCity"
+        """
         obj_node = invocation_node.child_by_field_name("object")
         name_node = invocation_node.child_by_field_name("name")
         if not name_node:
@@ -370,14 +615,167 @@ class JavaParser:
 
         method_name = source_code[name_node.start_byte:name_node.end_byte].decode("utf-8")
 
+        # 인자 개수 + 인자 타입 힌트 추출
+        args_node = invocation_node.child_by_field_name("arguments")
+        arg_count = self._count_arguments(args_node) if args_node else 0
+        arg_hints = self._extract_arg_hints(args_node, source_code) if args_node else []
+
         obj_name = ""
+        receiver_chain: list[str] = []
+        receiver_object = ""
+
         if obj_node:
             if obj_node.type == "method_invocation":
-                obj_name = ""  # 체이닝 호출: 중간 수신 타입을 알 수 없으므로 빈 문자열
+                # 체이닝: AST를 루트까지 재귀적으로 언와인딩
+                receiver_object, receiver_chain = self._unwind_chain(obj_node, source_code)
+            elif obj_node.type == "object_creation_expression":
+                # new Product.Builder() → "Product.Builder" (타입명만 추출)
+                type_node = obj_node.child_by_field_name("type")
+                if type_node:
+                    obj_name = source_code[type_node.start_byte:type_node.end_byte].decode("utf-8")
+                else:
+                    obj_name = source_code[obj_node.start_byte:obj_node.end_byte].decode("utf-8")
             else:
                 obj_name = source_code[obj_node.start_byte:obj_node.end_byte].decode("utf-8")
 
-        calls.add((method_name, obj_name))
+        calls.append((method_name, obj_name, arg_count, arg_hints, receiver_chain, receiver_object))
+
+    def _unwind_chain(self, invocation_node, source_code: bytes) -> tuple[str, list[str]]:
+        """
+        체이닝된 method_invocation AST를 루트까지 재귀적으로 언와인딩합니다.
+
+        예: a.getUser().getAddress() (이것이 getCity()의 obj_node)
+          → ("a", ["getUser", "getAddress"])
+
+        Returns:
+            (root_object, chain) 튜플
+            - root_object: 체이닝의 루트 객체명 (예: "a")
+            - chain: 메서드 호출 순서 (루트→말단). 예: ["getUser", "getAddress"]
+        """
+        chain: list[str] = []
+        current = invocation_node
+
+        # method_invocation을 따라 올라가며 메서드명 수집
+        while current and current.type == "method_invocation":
+            name_node = current.child_by_field_name("name")
+            if name_node:
+                chain.append(source_code[name_node.start_byte:name_node.end_byte].decode("utf-8"))
+            current = current.child_by_field_name("object")
+
+        # current는 체이닝의 루트 (identifier, field_access, object_creation_expression 등)
+        root_object = ""
+        if current:
+            if current.type == "object_creation_expression":
+                # new Product.Builder() → "Product.Builder" (타입명만 추출)
+                type_node = current.child_by_field_name("type")
+                if type_node:
+                    root_object = source_code[type_node.start_byte:type_node.end_byte].decode("utf-8")
+            else:
+                root_object = source_code[current.start_byte:current.end_byte].decode("utf-8")
+
+        # chain은 말단→루트 순으로 수집되었으므로 뒤집어서 루트→말단 순으로
+        chain.reverse()
+        return root_object, chain
+
+    def _process_method_reference(self, ref_node, source_code: bytes, calls: list):
+        """
+        메서드 참조(::) 노드에서 호출 정보를 추출합니다.
+        예: Member::recordLoginFailure, this::toResponse, ProductDto.Response::from
+        AST 구조: method_reference → identifier(객체) :: identifier(메서드)
+        """
+        # :: 기준 왼쪽(객체/타입)과 오른쪽(메서드명) 추출
+        # tree-sitter에서 method_reference의 children: [object, "::", name]
+        obj_text = ""
+        method_name = ""
+        for child in ref_node.children:
+            if child.type == "::":
+                continue
+            # 마지막 identifier가 메서드명, 그 앞이 객체/타입
+            if not method_name and not obj_text:
+                obj_text = source_code[child.start_byte:child.end_byte].decode("utf-8")
+            elif obj_text and not method_name:
+                method_name = source_code[child.start_byte:child.end_byte].decode("utf-8")
+
+        if not method_name:
+            return
+
+        # this 참조는 obj_name 비워둠 (자기 클래스 내부 호출)
+        if obj_text == "this":
+            obj_text = ""
+
+        calls.append((method_name, obj_text, 0, [], [], ""))
+
+    def _count_arguments(self, args_node) -> int:
+        """argument_list 노드에서 인자 개수를 셉니다."""
+        count = 0
+        for child in args_node.children:
+            # 괄호와 쉼표를 제외한 자식 노드가 인자
+            if child.type not in ["(", ")", ","]:
+                count += 1
+        return count
+
+    # 리터럴 노드 타입 → Java 타입 매핑
+    _LITERAL_TYPE_MAP = {
+        "string_literal":                    "String",
+        "decimal_integer_literal":           "int",
+        "hex_integer_literal":               "int",
+        "octal_integer_literal":             "int",
+        "binary_integer_literal":            "int",
+        "decimal_floating_point_literal":    "double",
+        "hex_floating_point_literal":        "double",
+        "character_literal":                 "char",
+        "true":                              "boolean",
+        "false":                             "boolean",
+        "null_literal":                      "",       # null은 모든 참조 타입과 호환 → 빈 힌트
+    }
+
+    def _extract_arg_hints(self, args_node, source_code: bytes) -> list[str]:
+        """
+        argument_list의 각 인자에서 타입 힌트를 추출합니다.
+        오버로딩 구분 시 EdgeLinker가 사용합니다.
+
+        힌트 종류:
+          - identifier: 변수명 그대로 (EdgeLinker가 local_vars/params/fields에서 타입 해석)
+          - 리터럴: Java 타입명으로 변환 ("String", "int", "boolean" 등)
+          - new Type(): 타입명 추출
+          - cast (Type) x: 타입명 추출
+          - 그 외 (메서드호출, 이항식 등): "" (해석 불가)
+        """
+        hints: list[str] = []
+        for child in args_node.children:
+            if child.type in ("(", ")", ","):
+                continue
+            hints.append(self._arg_hint_for_node(child, source_code))
+        return hints
+
+    def _arg_hint_for_node(self, node, source_code: bytes) -> str:
+        """단일 인자 노드에서 타입 힌트를 추출합니다."""
+        # 리터럴 → 타입명 직접 매핑
+        if node.type in self._LITERAL_TYPE_MAP:
+            return self._LITERAL_TYPE_MAP[node.type]
+
+        # 식별자 → 변수명 그대로 반환 (EdgeLinker가 타입 해석)
+        if node.type == "identifier":
+            return source_code[node.start_byte:node.end_byte].decode("utf-8")
+
+        # new Type(...) → 타입명 추출
+        if node.type == "object_creation_expression":
+            type_node = node.child_by_field_name("type")
+            if type_node:
+                return source_code[type_node.start_byte:type_node.end_byte].decode("utf-8")
+
+        # (Type) expr → 캐스트 타입명 추출
+        if node.type == "cast_expression":
+            type_node = node.child_by_field_name("type")
+            if type_node:
+                return source_code[type_node.start_byte:type_node.end_byte].decode("utf-8")
+
+        # field_access: this.field 등 → 텍스트 그대로
+        if node.type == "field_access":
+            return source_code[node.start_byte:node.end_byte].decode("utf-8")
+
+        # 그 외 (method_invocation, binary_expression 등) → 해석 불가
+        return ""
 
     # -----------------------------------------------------------------------
     # 파라미터 속성 처리 (METHOD.params)
@@ -522,8 +920,11 @@ class JavaParser:
                     key_text = source_code[key.start_byte:key.end_byte].decode("utf-8")
                     if key_text == "method":
                         value_text = source_code[value.start_byte:value.end_byte].decode("utf-8")
-                        # RequestMethod.GET → GET
-                        return value_text.split(".")[-1] if "." in value_text else value_text
+                        # {RequestMethod.GET, RequestMethod.POST} 또는 RequestMethod.GET
+                        # 중괄호·공백 제거 후 각 항목에서 '.' 뒤 메서드명만 추출
+                        raw = value_text.strip("{} ")
+                        parts = [p.strip().split(".")[-1] for p in raw.split(",") if p.strip()]
+                        return ",".join(parts)
         return "ALL"
     
     # 클래스에 있는 URI 추출
@@ -586,8 +987,13 @@ class JavaParser:
     def _extract_enum_constants(self, class_body_node, source_code: bytes) -> list[ConstantInfo]:
         """
         Enum 상수를 ConstantInfo 리스트로 추출합니다.
-        예) SUCCESS("S2000", "성공") → [ConstantInfo(name="SUCCESS", value="S2000")]
+        생성자 파라미터명과 인자값을 위치 기반으로 매핑합니다.
+        예) SUCCESS("S2000", "성공") + 생성자(String code, String message)
+            → ConstantInfo(name="SUCCESS", values={"code": "S2000", "message": "성공"})
         """
+        # 생성자 파라미터명 추출 (enum_body_declarations 안에 위치)
+        param_names = self._extract_enum_constructor_param_names(class_body_node, source_code)
+
         constants: list[ConstantInfo] = []
         for child in class_body_node.children:
             if child.type == "enum_constant":
@@ -596,16 +1002,46 @@ class JavaParser:
                     continue
                 const_name = source_code[name_node.start_byte:name_node.end_byte].decode("utf-8")
 
-                const_value = const_name
+                # 인자값 추출
+                arg_values = []
                 args_node = child.child_by_field_name("arguments")
                 if args_node:
                     for arg in args_node.children:
+                        if arg.type in ("(", ")", ","):
+                            continue
+                        raw = source_code[arg.start_byte:arg.end_byte].decode("utf-8")
                         if arg.type == "string_literal":
-                            const_value = source_code[arg.start_byte:arg.end_byte].decode("utf-8").strip('"')
-                            break
-                constants.append(ConstantInfo(name=const_name, value=const_value))
+                            raw = raw.strip('"')
+                        arg_values.append(raw)
+
+                # 파라미터명과 인자값을 위치 기반 매핑
+                values: dict[str, str] = {}
+                for i, val in enumerate(arg_values):
+                    key = param_names[i] if i < len(param_names) else f"arg{i}"
+                    values[key] = val
+
+                constants.append(ConstantInfo(name=const_name, values=values))
 
         return constants
+
+    def _extract_enum_constructor_param_names(self, class_body_node, source_code: bytes) -> list[str]:
+        """Enum 생성자의 파라미터명을 순서대로 추출합니다."""
+        # constructor_declaration은 enum_body_declarations 안에 위치
+        for child in class_body_node.children:
+            if child.type == "enum_body_declarations":
+                for decl in child.children:
+                    if decl.type == "constructor_declaration":
+                        params_node = decl.child_by_field_name("parameters")
+                        if not params_node:
+                            continue
+                        names = []
+                        for param in params_node.children:
+                            if param.type == "formal_parameter":
+                                name_node = param.child_by_field_name("name")
+                                if name_node:
+                                    names.append(source_code[name_node.start_byte:name_node.end_byte].decode("utf-8"))
+                        return names
+        return []
 
     # -----------------------------------------------------------------------
     # TypeInfo 생성 관련
