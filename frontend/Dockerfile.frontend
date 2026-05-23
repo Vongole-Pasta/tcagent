@@ -1,0 +1,44 @@
+# 1단계: 의존성 패키지 설치
+FROM node:20-alpine AS deps
+RUN apk add --no-cache libc6-compat
+WORKDIR /app
+
+# package.json 및 package-lock.json 복사
+COPY package.json package-lock.json ./
+RUN npm ci
+
+# 2단계: 애플리케이션 빌드
+FROM node:20-alpine AS builder
+WORKDIR /app
+COPY --from=deps /app/node_modules ./node_modules
+COPY . .
+
+# Next.js 빌드 시점에 API 주소 환경변수 전달
+ENV NEXT_PUBLIC_API_URL=http://20.214.104.68/api
+RUN npm run build
+
+# 3단계: 프로덕션 실행 이미지 구성 (Standalone 방식)
+FROM node:20-alpine AS runner
+WORKDIR /app
+
+ENV NODE_ENV=production
+# 컨테이너 내 권한 제한을 위해 system 사용자 지정
+RUN addgroup --system --gid 1001 nodejs
+RUN adduser --system --uid 1001 nextjs
+
+# 빌드 결과물 복사
+COPY --from=builder /app/public ./public
+
+# standalone 빌드 폴더 복사
+COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
+COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
+
+USER nextjs
+
+EXPOSE 3000
+
+ENV PORT=3000
+ENV HOSTNAME="0.0.0.0"
+
+# standalone으로 생성된 server.js 실행
+CMD ["node", "server.js"]

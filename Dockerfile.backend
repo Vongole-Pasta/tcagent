@@ -1,0 +1,34 @@
+# 1단계: uv를 사용하여 의존성 패키지를 빌드합니다.
+FROM astralsh/uv:python3.12-slim AS builder
+WORKDIR /app
+
+# 캐시 마운트를 활용하여 빠른 패키지 다운로드 및 캐싱을 지원합니다.
+RUN --mount=type=cache,target=/root/.cache/uv \
+    --mount=type=bind,source=uv.lock,target=uv.lock \
+    --mount=type=bind,source=pyproject.toml,target=pyproject.toml \
+    uv sync --frozen --no-install-project --no-dev
+
+# 2단계: 런타임 이미지 구성 (Debian slim 기반)
+FROM python:3.12-slim
+WORKDIR /app
+
+# 빌더 스테이지에서 생성된 가상 환경을 복사합니다.
+COPY --from=builder /app/.venv /app/.venv
+
+# 애플리케이션 코드를 복사합니다.
+COPY api/ /app/api/
+COPY core/ /app/core/
+COPY graph_db/ /app/graph_db/
+COPY config.py /app/config.py
+COPY main.py /app/main.py
+
+# 가상 환경 내 패키지를 바로 사용할 수 있도록 PATH에 추가합니다.
+ENV PATH="/app/.venv/bin:$PATH"
+ENV PYTHONUNBUFFERED=1
+ENV APP_ENV=prd
+
+# API 기본 포트 8000을 오픈합니다. (내부 통신용)
+EXPOSE 8000
+
+# FastAPI uvicorn 서버 실행
+CMD ["uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8000"]

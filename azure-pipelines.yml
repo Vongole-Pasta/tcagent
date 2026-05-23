@@ -1,0 +1,47 @@
+# Azure DevOps Hosted Agent 기반 배포 파이프라인
+# Microsoft-hosted Agent가 코드를 체크아웃한 뒤, SSH를 통해 VM으로 전송하고 컨테이너를 빌드 및 기동합니다.
+
+trigger:
+  - develop # 혹은 배포할 기준 브랜치 (예: main) 지정
+
+variables:
+  # Azure DevOps Project Settings -> Service connections에서 생성해야 할 SSH 연결 명칭
+  sshServiceConnection: 'tcagent-vm-ssh'
+  # VM 내부의 소스 코드 및 docker-compose 실행 경로
+  remoteDirectory: '/home/azureuser/tcagent'
+
+pool:
+  vmImage: 'ubuntu-latest'
+
+steps:
+# 1. 소스 코드를 VM의 배포 경로로 복사 (SFTP/SCP 활용)
+# 불필요한 빌드 아티팩트 및 개발 캐시(.git, node_modules 등)는 복사 대상에서 제외합니다.
+- task: CopyFilesOverSSH@0
+  displayName: '소스 코드를 Azure VM으로 안전하게 복사'
+  inputs:
+    sshEndpoint: '$(sshServiceConnection)'
+    sourceFolder: '$(System.DefaultWorkingDirectory)'
+    contents: |
+      **
+      !.git/**
+      !.venv/**
+      !.pytest_cache/**
+      !node_modules/**
+      !frontend/node_modules/**
+      !frontend/.next/**
+    targetFolder: '$(remoteDirectory)'
+    cleanTargetFolder: false # 기존 Neo4j 볼륨 등을 안전하게 유지하기 위해 false 설정
+    overwrite: true
+
+# 2. VM에서 SSH로 접속하여 Docker Compose 빌드 및 기동 명령어 실행
+- task: SSH@2
+  displayName: 'VM 내부에서 Docker Compose 실행'
+  inputs:
+    sshEndpoint: '$(sshServiceConnection)'
+    runOptions: 'inline'
+    inline: |
+      cd $(remoteDirectory)
+      # docker-compose를 사용하여 백그라운드에서 빌드 및 실행합니다.
+      docker-compose up --build -d
+      # 기동 후 컨테이너 상태 모니터링 출력
+      docker ps

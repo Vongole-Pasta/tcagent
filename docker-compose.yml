@@ -1,0 +1,58 @@
+services:
+  # Nginx 역프록시: 사내망 웹 접속(80/443)을 프론트엔드와 백엔드로 중계합니다.
+  nginx:
+    image: nginx:alpine
+    container_name: tcagent-nginx
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+      # SSL 인증서가 준비되면 아래와 같이 마운트하여 사용할 수 있습니다.
+      # - ./ssl:/etc/nginx/ssl:ro
+    depends_on:
+      - frontend
+      - backend
+    restart: always
+
+  # 프론트엔드 서비스 (Next.js)
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.frontend
+    container_name: tcagent-frontend
+    environment:
+      - PORT=3000
+      - HOSTNAME=0.0.0.0
+    restart: always
+
+  # 백엔드 서비스 (FastAPI)
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    container_name: tcagent-backend
+    environment:
+      - APP_ENV=prd
+      - NEO4J_URI=bolt://neo4j:7687
+      - NEO4J_USER=neo4j
+      - NEO4J_PASSWORD=rhkswp!123
+    depends_on:
+      - neo4j
+    restart: always
+
+  # 그래프 데이터베이스 서비스 (Neo4j)
+  # 포트를 외부에 노출하지 않고 컨테이너 네트워크 내부로 격리합니다.
+  neo4j:
+    image: neo4j:5.18.0
+    container_name: tcagent-neo4j
+    environment:
+      - NEO4J_AUTH=neo4j/rhkswp!123
+    volumes:
+      - neo4j_data:/data
+      - neo4j_logs:/logs
+    restart: always
+
+volumes:
+  neo4j_data:
+  neo4j_logs:
