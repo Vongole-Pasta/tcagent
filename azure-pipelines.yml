@@ -34,7 +34,7 @@ steps:
     overwrite: true
 
 # 2. VM에서 SSH로 접속하여 Docker Compose 빌드 및 기동 명령어 실행
-- task: SSH@2
+- task: SSH@0
   displayName: 'VM 내부에서 Docker Compose 실행'
   inputs:
     sshEndpoint: '$(sshServiceConnection)'
