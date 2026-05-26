@@ -2,7 +2,7 @@
 # Microsoft-hosted Agent가 코드를 체크아웃한 뒤, SSH를 통해 VM으로 전송하고 컨테이너를 빌드 및 기동합니다.
 
 trigger:
-  - develop # 혹은 배포할 기준 브랜치 (예: main) 지정
+  - feature/azure-deploy # 혹은 배포할 기준 브랜치 (예: main) 지정
 
 variables:
   # Azure DevOps Project Settings -> Service connections에서 생성해야 할 SSH 연결 명칭
@@ -34,7 +34,7 @@ steps:
     overwrite: true
 
 # 2. VM에서 SSH로 접속하여 Docker Compose 빌드 및 기동 명령어 실행
-- task: SSH@2
+- task: SSH@0
   displayName: 'VM 내부에서 Docker Compose 실행'
   inputs:
     sshEndpoint: '$(sshServiceConnection)'
