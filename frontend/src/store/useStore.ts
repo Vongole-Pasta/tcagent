@@ -91,7 +91,7 @@ interface AppState {
     setUploadSuccess: (v: boolean) => void;
 }
 
-const API_BASE = 'http://localhost:8000'; // Make sure this matches your backend
+const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'; // 빌드/실행 환경에 맞게 백엔드 API 주소를 동적으로 선택합니다.
 
 export const useStore = create<AppState>((set, get) => ({
     projectNodes: [],
