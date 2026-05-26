@@ -1,5 +1,5 @@
 # 1단계: uv를 사용하여 의존성 패키지를 빌드합니다.
-FROM astralsh/uv:python3.12-slim AS builder
+FROM ghcr.io/astral-sh/uv:python3.12-slim AS builder
 WORKDIR /app
 
 # 캐시 마운트를 활용하여 빠른 패키지 다운로드 및 캐싱을 지원합니다.

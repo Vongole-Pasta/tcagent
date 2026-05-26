@@ -48,6 +48,11 @@ services:
     container_name: tcagent-neo4j
     environment:
       - NEO4J_AUTH=neo4j/rhkswp!123
+      # 힙 메모리 크기 제한 (초기 512MB, 최대 1GB)
+      - NEO4J_server_memory_heap_initial__size=512m
+      - NEO4J_server_memory_heap_max__size=1G
+      # 페이지 캐시 크기 제한 (1GB)
+      - NEO4J_server_memory_pagecache_size=1G
     volumes:
       - neo4j_data:/data
       - neo4j_logs:/logs
