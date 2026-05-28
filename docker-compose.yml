@@ -40,15 +40,24 @@ services:
       - NEO4J_URI=bolt://neo4j:7687
       - NEO4J_USER=neo4j
       - NEO4J_PASSWORD=rhkswp!123
+      - POSTGRES_HOST=postgres
+      - POSTGRES_PORT=5432
+      - POSTGRES_DB=tcagent
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=rhkswp!123
     depends_on:
       - neo4j
+      - postgres
     restart: always
 
   # 그래프 데이터베이스 서비스 (Neo4j)
-  # 포트를 외부에 노출하지 않고 컨테이너 네트워크 내부로 격리합니다.
+  # 로컬 PC 관리를 위해 포트를 노출합니다. (배포 시 필요에 따라 격리 가능)
   neo4j:
     image: neo4j:5.18.0
     container_name: tcagent-neo4j
+    ports:
+      - "7474:7474" # Neo4j Browser 웹 콘솔 포트
+      - "7687:7687" # Neo4j Bolt 프로토콜 포트
     environment:
       - NEO4J_AUTH=neo4j/rhkswp!123
       # 힙 메모리 크기 제한 (초기 512MB, 최대 1GB)
@@ -61,6 +70,39 @@ services:
       - neo4j_logs:/logs
     restart: always
 
+  # 관계형 데이터베이스 서비스 (PostgreSQL)
+  # 로컬 PC 관리를 위해 포트를 노출합니다. (배포 시 필요에 따라 격리 가능)
+  postgres:
+    image: postgres:16-alpine
+    container_name: tcagent-postgres
+    ports:
+      - "5432:5432" # PostgreSQL 외부 포트
+    environment:
+      - POSTGRES_DB=tcagent
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=rhkswp!123
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    restart: always
+
+  # PostgreSQL 웹 관리 도구 (pgAdmin 4)
+  # 로컬 PC 관리를 위해 포트를 노출합니다. (배포 시 필요에 따라 격리 가능)
+  pgadmin:
+    image: dpage/pgadmin4
+    container_name: tcagent-pgadmin
+    ports:
+      - "5050:80" # pgAdmin 웹 콘솔 포트
+    environment:
+      - PGADMIN_DEFAULT_EMAIL=admin@tcagent.com
+      - PGADMIN_DEFAULT_PASSWORD=admin
+    volumes:
+      - pgadmin_data:/var/lib/pgadmin
+    depends_on:
+      - postgres
+    restart: always
+
 volumes:
   neo4j_data:
   neo4j_logs:
+  postgres_data:
+  pgadmin_data:

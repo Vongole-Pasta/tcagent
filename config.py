@@ -25,6 +25,13 @@ class Config(BaseSettings):
     NEO4J_USER: str = "neo4j"
     NEO4J_PASSWORD: str = "password"
 
+    # PostgreSQL 연결 정보
+    POSTGRES_HOST: str = "localhost"
+    POSTGRES_PORT: int = 5432
+    POSTGRES_DB: str = "tcagent"
+    POSTGRES_USER: str = "postgres"
+    POSTGRES_PASSWORD: str = "rhkswp!123"
+
     # 작업 대상 디렉토리
     TARGET_DIR: str = "."
 

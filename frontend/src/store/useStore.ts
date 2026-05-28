@@ -48,6 +48,12 @@ interface HappyCaseScenario {
 }
 
 interface AppState {
+    // Auth State
+    user: { id: string; name: string; email: string } | null;
+    token: string | null;
+    isAuthenticated: boolean;
+    authError: string | null;
+
     // Data
     projectNodes: MethodNode[];
     graphData: GraphData;
@@ -89,11 +95,35 @@ interface AppState {
 
     uploadSuccess: boolean;
     setUploadSuccess: (v: boolean) => void;
+
+    // Auth Actions
+    login: (email: string, password: string) => Promise<boolean>;
+    signup: (name: string, email: string, password: string) => Promise<boolean>;
+    logout: () => Promise<void>;
+    checkAuth: () => Promise<void>;
+    clearAuthError: () => void;
 }
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'; // 빌드/실행 환경에 맞게 백엔드 API 주소를 동적으로 선택합니다.
 
+// 인증 토큰을 헤더에 자동으로 주입하는 fetch 래퍼 함수
+const authFetch = async (url: string, options: RequestInit = {}): Promise<Response> => {
+    const token = typeof window !== 'undefined' ? localStorage.getItem('token') : null;
+    const headers = new Headers(options.headers || {});
+    if (token) {
+        headers.set('Authorization', `Bearer ${token}`);
+    }
+    return fetch(url, { ...options, headers });
+};
+
 export const useStore = create<AppState>((set, get) => ({
+    // Auth State
+    user: null,
+    token: null,
+    isAuthenticated: false,
+    authError: null,
+
+    // Data
     projectNodes: [],
     graphData: { nodes: [], edges: [] },
     selectedNodeId: null,
@@ -114,9 +144,104 @@ export const useStore = create<AppState>((set, get) => ({
     projects: [],
     selectedProject: null,
 
+    // Auth Actions
+    clearAuthError: () => set({ authError: null }),
+
+    checkAuth: async () => {
+        const token = typeof window !== 'undefined' ? localStorage.getItem('token') : null;
+        if (!token) {
+            set({ user: null, token: null, isAuthenticated: false });
+            return;
+        }
+        try {
+            const res = await authFetch(`${API_BASE}/auth/me`);
+            if (res.ok) {
+                const data = await res.json();
+                set({ user: data.user, token: token, isAuthenticated: true });
+            } else {
+                localStorage.removeItem('token');
+                set({ user: null, token: null, isAuthenticated: false });
+            }
+        } catch (err) {
+            console.error('인증 확인 오류:', err);
+            localStorage.removeItem('token');
+            set({ user: null, token: null, isAuthenticated: false });
+        }
+    },
+
+    login: async (email, password) => {
+        set({ isLoading: true, authError: null });
+        try {
+            const res = await fetch(`${API_BASE}/auth/login`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ email, password })
+            });
+            if (!res.ok) {
+                const errData = await res.json();
+                throw new Error(errData.detail || '로그인에 실패했습니다.');
+            }
+            const data = await res.json();
+            localStorage.setItem('token', data.token);
+            set({ user: data.user, token: data.token, isAuthenticated: true });
+            return true;
+        } catch (err: any) {
+            set({ authError: err.message });
+            return false;
+        } finally {
+            set({ isLoading: false });
+        }
+    },
+
+    signup: async (name, email, password) => {
+        set({ isLoading: true, authError: null });
+        try {
+            const res = await fetch(`${API_BASE}/auth/signup`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ name, email, password })
+            });
+            if (!res.ok) {
+                const errData = await res.json();
+                throw new Error(errData.detail || '회원가입에 실패했습니다.');
+            }
+            return true;
+        } catch (err: any) {
+            set({ authError: err.message });
+            return false;
+        } finally {
+            set({ isLoading: false });
+        }
+    },
+
+    logout: async () => {
+        const token = get().token;
+        if (token) {
+            try {
+                await authFetch(`${API_BASE}/auth/logout`, {
+                    method: 'POST'
+                });
+            } catch (err) {
+                console.error('로그아웃 처리 중 오류:', err);
+            }
+        }
+        localStorage.removeItem('token');
+        set({ 
+            user: null, 
+            token: null, 
+            isAuthenticated: false, 
+            selectedMethodIds: [], 
+            happyCaseScenarios: [], 
+            integrationScenarios: [],
+            selectedNodeId: null,
+            selectedNodeDetail: null,
+            graphData: { nodes: [], edges: [] }
+        });
+    },
+
     fetchProjects: async () => {
         try {
-            const res = await fetch(`${API_BASE}/projects`);
+            const res = await authFetch(`${API_BASE}/projects`);
             if (res.ok) {
                 const data = await res.json();
                 set({ projects: data.projects });
@@ -128,8 +253,6 @@ export const useStore = create<AppState>((set, get) => ({
 
     selectProject: (projectId) => {
         set({ selectedProject: projectId });
-        // Optionally fetch nodes for this project immediately?
-        // The user might want to click "Search" or similar, but auto-fetch is nice.
         if (projectId) {
             get().fetchProjectNodes(projectId);
         } else {
@@ -140,14 +263,12 @@ export const useStore = create<AppState>((set, get) => ({
     fetchProjectNodes: async (projectId = 'default') => {
         set({ isLoading: true, error: null });
         try {
-            // Fetch both endpoints and methods to merge or just fetch all
-            const res = await fetch(`${API_BASE}/projects/${projectId}/nodes`);
+            const res = await authFetch(`${API_BASE}/projects/${projectId}/nodes`);
             if (!res.ok) throw new Error('Failed to fetch nodes');
             const data = await res.json();
             set({ projectNodes: data.nodes });
 
             // [Diff 기능] 초기 로딩 시 모든 메서드의 소스 코드를 스냅샷에 저장
-            // 이미 저장된 스냅샷은 덮어쓰지 않아 원본 코드를 보존합니다.
             const { codeSnapshots } = get();
             const newSnapshots: Record<string, string> = { ...codeSnapshots };
             let addedCount = 0;
@@ -191,15 +312,10 @@ export const useStore = create<AppState>((set, get) => ({
             integrationScenarios: state.scenarioCache[nodeId] || []
         }));
         try {
-            const res = await fetch(`${API_BASE}/graph/upstream/${nodeId}`);
+            const res = await authFetch(`${API_BASE}/graph/upstream/${nodeId}`);
             if (!res.ok) throw new Error('Failed to fetch upstream graph');
             const data = await res.json();
-
-            // Auto-layout logic can be added here or in visualizer
-            // For now, passing raw data. UI component handles layout (dagre).
             set({ graphData: data, viewMode: 'graph' });
-
-            // Also fetch details
             await get().fetchNodeDetail(nodeId);
         } catch (err: any) {
             set({ error: err.message });
@@ -216,12 +332,10 @@ export const useStore = create<AppState>((set, get) => ({
             integrationScenarios: state.scenarioCache[nodeId] || []
         }));
         try {
-            const res = await fetch(`${API_BASE}/graph/downstream/${nodeId}`);
+            const res = await authFetch(`${API_BASE}/graph/downstream/${nodeId}`);
             if (!res.ok) throw new Error('Failed to fetch downstream graph');
             const data = await res.json();
             set({ graphData: data, viewMode: 'graph' });
-
-            // Also fetch details
             await get().fetchNodeDetail(nodeId);
         } catch (err: any) {
             set({ error: err.message });
@@ -232,12 +346,11 @@ export const useStore = create<AppState>((set, get) => ({
 
     fetchNodeDetail: async (nodeId) => {
         try {
-            const res = await fetch(`${API_BASE}/graph/node/${nodeId}`);
+            const res = await authFetch(`${API_BASE}/graph/node/${nodeId}`);
             if (res.ok) {
                 const data = await res.json();
                 set({ selectedNodeDetail: data });
 
-                // [Diff 기능] 소스 코드를 처음 가져왔을 때 스냅샷에 저장 (이력이 없을 때만)
                 if (data.signature && data.source) {
                     const { codeSnapshots } = get();
                     const currentNode = get().projectNodes.find(n => n.id === nodeId);
@@ -245,7 +358,6 @@ export const useStore = create<AppState>((set, get) => ({
                     const isAlreadyModified = currentNode?.status === 'MODIFIED';
 
                     if (!hasSnapshot && !isAlreadyModified) {
-                        // 저장이 가능한 경우
                         console.log(`%c[Snapshot Saved] %c${data.signature}`, 'color: #4CAF50; font-weight: bold;', 'color: #2196F3;');
                         set({
                             codeSnapshots: {
@@ -253,12 +365,6 @@ export const useStore = create<AppState>((set, get) => ({
                                 [data.signature]: data.source
                             }
                         });
-                    } else if (hasSnapshot) {
-                        // 이미 저장된 경우
-                        console.log(`%c[Snapshot Skipped] %c이미 저장된 스냅샷이 있습니다: ${data.signature}`, 'color: #FFA000; font-weight: bold;', 'color: #999;');
-                    } else if (isAlreadyModified) {
-                        // 이미 MODIFIED 상태라 저장을 안 하는 경우
-                        console.log(`%c[Snapshot Skipped] %c이미 MODIFIED 상태라 원본으로 저장하지 않습니다: ${data.signature}`, 'color: #F44336; font-weight: bold;', 'color: #999;');
                     }
                 }
             }
@@ -267,11 +373,10 @@ export const useStore = create<AppState>((set, get) => ({
         }
     },
 
-    // Agent Actions
     generateIntegrationScenario: async (methodId) => {
         set({ isAgentRunning: true, error: null, integrationScenarios: [] });
         try {
-            const res = await fetch(`${API_BASE}/agent/integration-scenario/${methodId}`);
+            const res = await authFetch(`${API_BASE}/agent/integration-scenario/${methodId}`);
             if (!res.ok) throw new Error('Failed to generate integration scenario');
             const data = await res.json();
             set((state) => ({
@@ -291,7 +396,7 @@ export const useStore = create<AppState>((set, get) => ({
     generateBatchIntegrationScenarios: async () => {
         set({ isAgentRunning: true, error: null, integrationScenarios: [], happyCaseScenarios: [] });
         try {
-            const res = await fetch(`${API_BASE}/agent/integration-scenario/batch/all`);
+            const res = await authFetch(`${API_BASE}/agent/integration-scenario/batch/all`);
             if (!res.ok) throw new Error('Failed to generate batch scenarios');
             const data = await res.json();
             set({ integrationScenarios: data.scenarios });
@@ -310,7 +415,7 @@ export const useStore = create<AppState>((set, get) => ({
                 ? `${API_BASE}/agent/happy-case/batch?method_ids=${ids.join(',')}`
                 : `${API_BASE}/agent/happy-case/batch`;
 
-            const res = await fetch(url);
+            const res = await authFetch(url);
             if (!res.ok) throw new Error('Failed to generate happy-case scenarios');
             const data = await res.json();
             set({ happyCaseScenarios: data.scenarios });
@@ -334,14 +439,13 @@ export const useStore = create<AppState>((set, get) => ({
                 formData.append('project', currentProject);
             }
 
-            const res = await fetch(`${API_BASE}/upload`, {
+            const res = await authFetch(`${API_BASE}/upload`, {
                 method: 'POST',
                 body: formData,
             });
 
             if (!res.ok) throw new Error('Upload failed');
 
-            // Refresh list after upload
             await get().fetchProjectNodes(currentProject || 'default');
             await get().fetchProjects();
             set({ uploadSuccess: true });
@@ -358,7 +462,6 @@ export const useStore = create<AppState>((set, get) => ({
     setUploadSuccess: (v: boolean) => set({ uploadSuccess: v }),
 }));
 
-// [디버깅용] 브라우저 콘솔에서 window.store.getState()로 상태 확인 가능
 if (typeof window !== 'undefined') {
     (window as any).store = useStore;
 }

@@ -20,6 +20,7 @@ COPY --from=builder /app/.venv /app/.venv
 COPY api/ /app/api/
 COPY core/ /app/core/
 COPY graph_db/ /app/graph_db/
+COPY infra/ /app/infra/
 COPY config.py /app/config.py
 COPY main.py /app/main.py
 

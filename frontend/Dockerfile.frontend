@@ -14,7 +14,7 @@ COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 
 # Next.js 빌드 시점에 API 주소 환경변수 전달
-ENV NEXT_PUBLIC_API_URL=http://20.214.104.68/api
+ENV NEXT_PUBLIC_API_URL=/api
 RUN npm run build
 
 # 3단계: 프로덕션 실행 이미지 구성 (Standalone 방식)
